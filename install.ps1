@@ -5,15 +5,15 @@
 
 .DESCRIPTION
     One-liner install for Windows:
-        irm https://raw.githubusercontent.com/YOUR_USER/amxx-builder/main/install.ps1 | iex
+        irm https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/main/install.ps1 | iex
 
     Or with a PAT for private repos:
-        $env:GITHUB_TOKEN="ghp_xxx"; irm https://raw.githubusercontent.com/YOUR_USER/amxx-builder/main/install.ps1 | iex
+        $env:GITHUB_TOKEN="ghp_xxx"; irm https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/main/install.ps1 | iex
 #>
 
 $ErrorActionPreference = 'Stop'
 
-$REPO   = 'YOUR_USER/amxx-builder'   # <-- replace with actual GitHub owner/repo
+$REPO   = 'AmxxModularEcosystem/amxx-builder'   # <-- replace with actual GitHub owner/repo
 $BRANCH = 'main'
 
 function Write-Step { param([string]$msg) Write-Host "[amxx-builder] $msg" -ForegroundColor Cyan }
