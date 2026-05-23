@@ -1,71 +1,78 @@
 const fs   = require('fs');
 const path = require('path');
+const axios = require('axios');
 const simpleGit = require('simple-git');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
 
-function repoCacheKey(repo, ref) {
-  // "owner/name" + ref → "owner__name__ref"
-  return repo.replace('/', '__') + '__' + ref.replace(/[^a-zA-Z0-9._-]/g, '_');
-}
-
 function getRepoCacheDir(repo, ref) {
-  return path.join(getCacheDir(), 'repos', repoCacheKey(repo, ref));
+  const key = repo.replace('/', '__') + '__' + String(ref).replace(/[^a-zA-Z0-9._-]/g, '_');
+  return path.join(getCacheDir(), 'repos', key);
 }
 
 /**
- * Ensure the repo is available locally.
- * Returns the path to the cloned directory.
+ * Resolves "latest" ref to the actual release tag via GitHub API.
+ */
+async function resolveRef(repo, ref, token) {
+  if (ref !== 'latest') return ref;
+
+  logger.dim(`  ${repo}: resolving latest release tag...`);
+  const headers = token ? { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } : {};
+  try {
+    const { data } = await axios.get(
+      `https://api.github.com/repos/${repo}/releases/latest`,
+      { headers }
+    );
+    logger.dim(`  ${repo}: latest = ${data.tag_name}`);
+    return data.tag_name;
+  } catch (err) {
+    throw new Error(`Failed to resolve latest release for ${repo}: ${err.message}`);
+  }
+}
+
+/**
+ * Ensures the repo is cloned locally. Returns the local path.
  */
 async function fetchRepo(repo, ref, token, noFetch) {
-  const resolvedRef = ref || 'HEAD';
-  const cacheDir    = getRepoCacheDir(repo, resolvedRef);
+  const resolvedRef = ref || null;  // null = clone default branch
+  const cacheKey    = resolvedRef || 'HEAD';
+  const cacheDir    = getRepoCacheDir(repo, cacheKey);
 
   if (fs.existsSync(path.join(cacheDir, '.git'))) {
-    if (noFetch) {
-      logger.dim(`  ${repo} @ ${resolvedRef} (cache hit, --no-fetch)`);
-    } else {
-      logger.dim(`  ${repo} @ ${resolvedRef} (cached)`);
-    }
+    logger.dim(`  ${repo} @ ${cacheKey} (cached)`);
     return cacheDir;
   }
 
   if (noFetch) {
     throw new Error(
-      `Repo cache missing for ${repo}@${resolvedRef} and --no-fetch is set.\n` +
-      `Run without --no-fetch first to populate the cache.`
+      `Repo cache missing for ${repo}@${cacheKey} and --no-fetch is set.\n` +
+      `Run without --no-fetch to populate the cache.`
     );
   }
 
-  logger.step(`Cloning ${repo} @ ${resolvedRef} ...`);
+  logger.step(`Cloning ${repo} @ ${cacheKey} ...`);
 
-  const cloneUrl = buildCloneUrl(repo, token);
+  const cloneUrl  = buildCloneUrl(repo, token);
+  const cloneArgs = ['--depth=1'];
+  if (resolvedRef) cloneArgs.push('--branch', resolvedRef);
+
   fs.mkdirSync(cacheDir, { recursive: true });
 
-  const git = simpleGit();
-
-  const cloneArgs = ['--depth=1'];
-  if (resolvedRef !== 'HEAD') {
-    cloneArgs.push('--branch', resolvedRef);
-  }
-
   try {
-    await git.clone(cloneUrl, cacheDir, cloneArgs);
+    await simpleGit().clone(cloneUrl, cacheDir, cloneArgs);
   } catch (err) {
-    // Clean up partial clone
     try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (_) {}
-    throw new Error(`Failed to clone ${repo}@${resolvedRef}: ${err.message}`);
+    throw new Error(`Failed to clone ${repo}@${cacheKey}: ${err.message}`);
   }
 
-  logger.info(`Cloning ${repo} @ ${resolvedRef} ... done`);
+  logger.info(`Cloning ${repo} @ ${cacheKey} ... done`);
   return cacheDir;
 }
 
 function buildCloneUrl(repo, token) {
-  if (token) {
-    return `https://${token}@github.com/${repo}.git`;
-  }
-  return `https://github.com/${repo}.git`;
+  return token
+    ? `https://${token}@github.com/${repo}.git`
+    : `https://github.com/${repo}.git`;
 }
 
-module.exports = { fetchRepo, getRepoCacheDir };
+module.exports = { fetchRepo, resolveRef, getRepoCacheDir };

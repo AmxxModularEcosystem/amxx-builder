@@ -8,70 +8,68 @@ const logger = require('./logger');
 const PREFIX = chalk.bold.white('[amxx-builder]');
 
 /**
- * Compiles all plugins for all repos.
- * Returns an array of { amxxPath, pluginsIniPostfix, ini_comment } objects.
+ * Compiles all .sma files found in <amxmodx_dir>/scripting/ of each repo.
+ * Output .amxx files go to build/amxmodx/plugins/.
+ * Returns array of { amxxName, plugins_ini_postfix, ini_comment, repo, ref } for ini generation.
  */
 async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs, buildDir) {
-  const pluginsDir = path.join(buildDir, 'plugins');
+  const pluginsDir = path.join(buildDir, 'amxmodx', 'plugins');
   fs.mkdirSync(pluginsDir, { recursive: true });
 
   const compiled = [];
 
   for (const repoConfig of manifest.repos) {
-    const repoDir = repoLocalDirs[repoConfig.repo + '@' + (repoConfig.ref || 'HEAD')];
+    const repoDir     = repoLocalDirs[`${repoConfig.repo}@${repoConfig._resolvedRef || repoConfig.ref || 'HEAD'}`];
+    const scriptingDir = path.join(repoDir, repoConfig.amxmodx_dir, 'scripting');
 
-    const pluginList = await resolvePluginList(repoConfig, repoDir);
+    if (!fs.existsSync(scriptingDir)) {
+      logger.dim(`  ${repoConfig.repo}: no scripting/ dir in ${repoConfig.amxmodx_dir}/`);
+      continue;
+    }
 
-    for (const plugin of pluginList) {
-      const srcPath  = path.join(repoDir, repoConfig.scripting_dir, plugin.src);
-      const outName  = path.basename(plugin.src, '.sma') + '.amxx';
-      const outPath  = path.join(pluginsDir, outName);
+    const excludePatterns = repoConfig.exclude.map((e) => `!${e}`);
+    const smaFiles = await glob(['**/*.sma', ...excludePatterns], {
+      cwd: scriptingDir,
+      dot: false,
+    });
 
-      if (!fs.existsSync(srcPath)) {
-        logger.warn(`Compiling ${plugin.src} ... NOT FOUND (skipped)`);
-        continue;
-      }
+    const excluded = await findExcluded(scriptingDir, repoConfig.exclude);
+    for (const ex of excluded) logger.skip(`Skipped (excluded): ${ex}`);
 
-      process.stdout.write(`${PREFIX} Compiling ${plugin.src} `);
+    for (const smaRel of smaFiles) {
+      const srcPath = path.join(scriptingDir, smaRel);
+      const outName = path.basename(smaRel, '.sma') + '.amxx';
+      const outPath = path.join(pluginsDir, outName);
 
-      const localIncDir = path.join(repoDir, repoConfig.local_include_dir);
-      const includeArgs = [];
+      process.stdout.write(`${PREFIX} Compiling ${path.basename(smaRel)} `);
 
-      if (fs.existsSync(localIncDir)) {
-        includeArgs.push(`-i${localIncDir}`);
-      }
-      for (const dir of includeDirs) {
-        includeArgs.push(`-i${dir}`);
-      }
+      // Include dirs: repo's own scripting/include + all dep includes
+      const localIncDir = path.join(scriptingDir, 'include');
+      const allIncludes = [];
+      if (fs.existsSync(localIncDir)) allIncludes.push(`-i${localIncDir}`);
+      for (const d of includeDirs) allIncludes.push(`-i${d}`);
 
-      const args = [
-        srcPath,
-        `-o${outPath}`,
-        ...includeArgs,
-      ];
-
-      const result = spawnSync(compilerPath, args, {
+      const result = spawnSync(compilerPath, [srcPath, `-o${outPath}`, ...allIncludes], {
         encoding: 'utf8',
         windowsHide: true,
       });
 
       if (result.status !== 0) {
         process.stdout.write('\n');
-        logger.error(`Compiling ${plugin.src} ... FAILED`);
+        logger.error(`Compiling ${path.basename(smaRel)} ... FAILED`);
         if (result.stderr) process.stderr.write(result.stderr);
         if (result.stdout) process.stderr.write(result.stdout);
-        throw new Error(`Compilation failed: ${plugin.src}`);
+        throw new Error(`Compilation failed: ${smaRel}`);
       }
 
-      process.stdout.write(`${chalk_dots(plugin.src)} OK\n`);
+      process.stdout.write(dots(path.basename(smaRel)) + chalk.green('OK') + '\n');
 
       compiled.push({
-        amxxPath:           outPath,
         amxxName:           outName,
-        plugins_ini_postfix: plugin.plugins_ini_postfix,
-        ini_comment:        plugin.ini_comment,
+        plugins_ini_postfix: repoConfig.plugins_ini_postfix,
+        ini_comment:        null,
         repo:               repoConfig.repo,
-        ref:                repoConfig.ref || 'HEAD',
+        ref:                repoConfig._resolvedRef || repoConfig.ref || 'HEAD',
       });
     }
   }
@@ -79,57 +77,15 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   return compiled;
 }
 
-async function resolvePluginList(repoConfig, repoDir) {
-  if (repoConfig.plugins) {
-    // Explicit list: use as-is with their individual postfixes
-    return repoConfig.plugins.map((p) => ({
-      src:                p.src,
-      ini_comment:        p.ini_comment,
-      plugins_ini_postfix: p.plugins_ini_postfix,
-    }));
-  }
-
-  // Auto-discover from scripting_dir
-  const scriptingDir = path.join(repoDir, repoConfig.scripting_dir);
-  if (!fs.existsSync(scriptingDir)) {
-    logger.warn(`scripting_dir "${repoConfig.scripting_dir}" not found in ${repoConfig.repo}`);
-    return [];
-  }
-
-  const patterns = ['**/*.sma'];
-  const exclude  = repoConfig.exclude.map((e) => `!${e}`);
-
-  const found = await glob([...patterns, ...exclude], {
-    cwd: scriptingDir,
-    dot: false,
-  });
-
-  const excluded = await getExcluded(scriptingDir, repoConfig.exclude);
-  for (const ex of excluded) {
-    logger.skip(`Skipped (excluded): ${ex}`);
-  }
-
-  return found.map((f) => ({
-    src:                f,
-    ini_comment:        null,
-    plugins_ini_postfix: repoConfig.plugins_ini_postfix,
-  }));
-}
-
-async function getExcluded(scriptingDir, patterns) {
+async function findExcluded(dir, patterns) {
   if (!patterns.length) return [];
-  const all = await glob('**/*.sma', { cwd: scriptingDir });
-  const kept = await glob(['**/*.sma', ...patterns.map((e) => `!${e}`)], { cwd: scriptingDir });
-  const keptSet = new Set(kept);
-  return all.filter((f) => !keptSet.has(f)).map((f) => path.basename(f));
+  const all  = await glob('**/*.sma', { cwd: dir });
+  const kept = new Set(await glob(['**/*.sma', ...patterns.map((e) => `!${e}`)], { cwd: dir }));
+  return all.filter((f) => !kept.has(f)).map((f) => path.basename(f));
 }
 
-function chalk_dots(src) {
-  // Right-pad with dots to align "OK" for readability
-  const maxLen = 40;
-  const base = ` ${path.basename(src)} `;
-  return '.'.repeat(Math.max(1, maxLen - base.length));
+function dots(filename) {
+  return ' ' + '.'.repeat(Math.max(1, 42 - filename.length)) + ' ';
 }
-
 
 module.exports = { compilePlugins };

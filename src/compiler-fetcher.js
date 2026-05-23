@@ -9,20 +9,21 @@ const { getCacheDir } = require('./cache-dir');
 const COMPILER_REPO = 'wopox1337/setup-amxxpawn';
 
 async function fetchCompiler(version, token) {
-  const platform   = getPlatform();
-  const cacheDir   = path.join(getCacheDir(), 'amxxpc', version, platform);
-  const binaryName = platform === 'windows' ? 'amxxpc.exe' : 'amxxpc';
-  const binaryPath = path.join(cacheDir, binaryName);
+  const resolvedVersion = version || await fetchLatestVersion(token);
+  const platform        = getPlatform();
+  const cacheDir        = path.join(getCacheDir(), 'amxxpc', resolvedVersion, platform);
+  const binaryName      = platform === 'windows' ? 'amxxpc.exe' : 'amxxpc';
+  const binaryPath      = path.join(cacheDir, binaryName);
 
   if (fs.existsSync(binaryPath)) {
-    logger.info(`Compiler: amxxpc ${version} (${process.platform}, cached)`);
+    logger.info(`Compiler: amxxpc ${resolvedVersion} (${process.platform}, cached)`);
     return binaryPath;
   }
 
-  logger.info(`Compiler: amxxpc ${version} (${process.platform}, downloading...)`);
+  logger.info(`Compiler: amxxpc ${resolvedVersion} (${process.platform}, downloading...)`);
 
   const headers = buildHeaders(token);
-  const asset   = await findReleaseAsset(version, platform, headers);
+  const asset   = await findReleaseAsset(resolvedVersion, platform, headers);
 
   fs.mkdirSync(cacheDir, { recursive: true });
   const archivePath = path.join(cacheDir, asset.name);
@@ -38,12 +39,26 @@ async function fetchCompiler(version, token) {
     );
   }
 
-  if (platform !== 'windows') {
-    fs.chmodSync(binaryPath, 0o755);
-  }
+  if (platform !== 'windows') fs.chmodSync(binaryPath, 0o755);
 
-  logger.success(`Compiler: amxxpc ${version} ready`);
+  logger.success(`Compiler: amxxpc ${resolvedVersion} ready`);
   return binaryPath;
+}
+
+async function fetchLatestVersion(token) {
+  logger.step('Compiler: resolving latest version...');
+  const headers = buildHeaders(token);
+  try {
+    const { data } = await axios.get(
+      `https://api.github.com/repos/${COMPILER_REPO}/releases/latest`,
+      { headers }
+    );
+    const version = data.tag_name.replace(/^v/, '');
+    logger.dim(`  Latest amxxpc version: ${version}`);
+    return version;
+  } catch (err) {
+    throw new Error(`Failed to fetch latest amxxpc version: ${err.message}`);
+  }
 }
 
 function getPlatform() {
@@ -53,21 +68,22 @@ function getPlatform() {
 }
 
 function buildHeaders(token) {
-  const headers = { Accept: 'application/vnd.github+json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return headers;
+  const h = { Accept: 'application/vnd.github+json' };
+  if (token) h['Authorization'] = `Bearer ${token}`;
+  return h;
 }
 
 async function findReleaseAsset(version, platform, headers) {
-  // Try tag variants: "1.10.5428", "v1.10.5428"
   const tagCandidates = [version, `v${version}`];
   let assets = null;
   let releaseTag = null;
 
   for (const tag of tagCandidates) {
     try {
-      const url = `https://api.github.com/repos/${COMPILER_REPO}/releases/tags/${tag}`;
-      const { data } = await axios.get(url, { headers });
+      const { data } = await axios.get(
+        `https://api.github.com/repos/${COMPILER_REPO}/releases/tags/${tag}`,
+        { headers }
+      );
       assets = data.assets;
       releaseTag = tag;
       break;
@@ -78,44 +94,35 @@ async function findReleaseAsset(version, platform, headers) {
   }
 
   if (!assets) {
-    // Try listing all releases and searching by version substring
-    const url = `https://api.github.com/repos/${COMPILER_REPO}/releases`;
-    const { data } = await axios.get(url, { headers });
+    const { data } = await axios.get(
+      `https://api.github.com/repos/${COMPILER_REPO}/releases`,
+      { headers }
+    );
     const release = data.find((r) =>
       r.tag_name.includes(version) || r.name.includes(version)
     );
     if (!release) {
       throw new Error(
         `No release found for amxxpc version "${version}" in ${COMPILER_REPO}.\n` +
-        `Available tags: ${data.slice(0, 5).map((r) => r.tag_name).join(', ')}`
+        `Available: ${data.slice(0, 5).map((r) => r.tag_name).join(', ')}`
       );
     }
     assets = release.assets;
     releaseTag = release.tag_name;
   }
 
-  const platformKeywords = {
-    windows: ['windows', 'win32', 'win'],
-    linux:   ['linux'],
-    mac:     ['macos', 'mac', 'darwin', 'osx'],
-  };
-
+  const platformKeywords = { windows: ['windows', 'win32', 'win'], linux: ['linux'], mac: ['macos', 'mac', 'darwin', 'osx'] };
   const keywords = platformKeywords[platform];
-  let asset = assets.find((a) =>
-    keywords.some((kw) => a.name.toLowerCase().includes(kw))
-  );
 
-  // Fallback: on windows try any .zip, on others any .tar.gz
+  let asset = assets.find((a) => keywords.some((kw) => a.name.toLowerCase().includes(kw)));
   if (!asset) {
     const ext = platform === 'windows' ? '.zip' : '.tar.gz';
     asset = assets.find((a) => a.name.endsWith(ext));
   }
-
   if (!asset) {
-    const names = assets.map((a) => a.name).join(', ');
     throw new Error(
-      `No suitable asset for platform "${platform}" in release "${releaseTag}".\n` +
-      `Available assets: ${names}`
+      `No asset for platform "${platform}" in release "${releaseTag}".\n` +
+      `Available: ${assets.map((a) => a.name).join(', ')}`
     );
   }
 
@@ -134,32 +141,24 @@ async function downloadFile(url, dest, headers) {
 
 function extractBinary(archivePath, destDir, binaryName) {
   if (archivePath.endsWith('.zip')) {
-    const zip = new AdmZip(archivePath);
-    const entry = zip.getEntries().find((e) =>
-      path.basename(e.entryName) === binaryName
-    );
+    const zip   = new AdmZip(archivePath);
+    const entry = zip.getEntries().find((e) => path.basename(e.entryName) === binaryName);
     if (entry) {
       fs.writeFileSync(path.join(destDir, binaryName), entry.getData());
     } else {
-      // Extract everything; caller checks for binary
       zip.extractAllTo(destDir, true);
     }
   } else {
-    // .tar.gz / .tar.bz2 — use system tar (available on Linux/macOS)
     const flag = archivePath.endsWith('.tar.bz2') ? 'xjf' : 'xzf';
-    execSync(`tar ${flag} "${archivePath}" -C "${destDir}" --strip-components=0`, {
-      stdio: 'pipe',
-    });
-    // Try to find the binary at any depth and move it to destDir root
+    execSync(`tar ${flag} "${archivePath}" -C "${destDir}"`, { stdio: 'pipe' });
     moveBinaryToRoot(destDir, binaryName);
   }
 }
 
 function moveBinaryToRoot(dir, binaryName) {
   const found = findFileRecursive(dir, binaryName);
-  if (found && found !== path.join(dir, binaryName)) {
-    fs.renameSync(found, path.join(dir, binaryName));
-  }
+  const target = path.join(dir, binaryName);
+  if (found && found !== target) fs.renameSync(found, target);
 }
 
 function findFileRecursive(dir, name) {

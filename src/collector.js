@@ -4,55 +4,71 @@ const glob = require('fast-glob');
 const logger = require('./logger');
 
 /**
- * Copies extras from each repo into the build directory.
- * Also copies README.md if store_readme is true.
+ * Copies everything from each repo's amxmodx_dir into build/amxmodx/,
+ * then merges local amxmodx/ and assets/ directories (next to manifest.yml).
+ *
+ * .sma files are NOT copied — they are compiled; .amxx output is already in plugins/.
+ * Everything else (configs, lang, includes, etc.) is copied as-is.
  */
-async function collectExtras(manifest, repoLocalDirs, buildDir) {
+async function collectAll(manifest, repoLocalDirs, buildDir) {
+  const amxmodxBuildDir = path.join(buildDir, 'amxmodx');
+  fs.mkdirSync(amxmodxBuildDir, { recursive: true });
+
+  // Copy from each repo
   for (const repoConfig of manifest.repos) {
-    const repoDir = repoLocalDirs[repoConfig.repo + '@' + (repoConfig.ref || 'HEAD')];
+    const repoDir = repoLocalDirs[`${repoConfig.repo}@${repoConfig._resolvedRef || repoConfig.ref || 'HEAD'}`];
+    const srcDir  = path.join(repoDir, repoConfig.amxmodx_dir);
 
-    for (const extra of repoConfig.extras) {
-      const srcPattern = extra.src.replace(/\\/g, '/');
-      const isDir      = srcPattern.endsWith('/') || !srcPattern.includes('.');
-
-      let files;
-      if (isDir) {
-        // Directory glob: copy all files recursively
-        const baseDir  = path.join(repoDir, srcPattern.replace(/\/$/, ''));
-        if (!fs.existsSync(baseDir)) {
-          logger.warn(`Extras src not found: ${extra.src} in ${repoConfig.repo}`);
-          continue;
-        }
-        files = await glob('**/*', { cwd: baseDir, dot: false, onlyFiles: true });
-        for (const f of files) {
-          const src  = path.join(baseDir, f);
-          const dest = path.join(buildDir, extra.dst, f);
-          fs.mkdirSync(path.dirname(dest), { recursive: true });
-          fs.copyFileSync(src, dest);
-        }
-      } else {
-        // Explicit glob pattern
-        files = await glob(srcPattern, { cwd: repoDir, dot: false, onlyFiles: true });
-        for (const f of files) {
-          const src  = path.join(repoDir, f);
-          const dest = path.join(buildDir, extra.dst, path.basename(f));
-          fs.mkdirSync(path.dirname(dest), { recursive: true });
-          fs.copyFileSync(src, dest);
-        }
-      }
-
-      logger.dim(`  extras: ${repoConfig.repo} ${extra.src} → build/${extra.dst} (${files.length} files)`);
+    if (!fs.existsSync(srcDir)) {
+      logger.warn(`${repoConfig.repo}: amxmodx dir not found: ${repoConfig.amxmodx_dir}/`);
+      continue;
     }
 
-    if (repoConfig.store_readme) {
-      const readmePath = path.join(repoDir, 'README.md');
-      if (fs.existsSync(readmePath)) {
-        const dest = path.join(buildDir, `README-${path.basename(repoConfig.repo)}.md`);
-        fs.copyFileSync(readmePath, dest);
-        logger.dim(`  README.md → ${path.basename(dest)}`);
-      }
+    const files = await glob('**/*', {
+      cwd: srcDir,
+      onlyFiles: true,
+      ignore: ['scripting/**/*.sma'],  // sources are compiled, not deployed
+    });
+
+    for (const f of files) {
+      const dest = path.join(amxmodxBuildDir, f);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(path.join(srcDir, f), dest);
     }
+
+    logger.dim(`  ${repoConfig.repo}: ${files.length} files from ${repoConfig.amxmodx_dir}/`);
+  }
+
+  // Merge local amxmodx/ dir (next to manifest.yml)
+  const manifestDir     = path.dirname(manifest._path);
+  const localAmxmodxDir = path.join(manifestDir, manifest.amxmodx.dir);
+
+  if (fs.existsSync(localAmxmodxDir)) {
+    const files = await glob('**/*', {
+      cwd: localAmxmodxDir,
+      onlyFiles: true,
+      ignore: ['scripting/**/*.sma'],
+    });
+    for (const f of files) {
+      const dest = path.join(amxmodxBuildDir, f);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(path.join(localAmxmodxDir, f), dest);
+    }
+    if (files.length) logger.info(`Local ${manifest.amxmodx.dir}/: ${files.length} files merged`);
+  }
+
+  // Copy local assets/ → build/assets/ (go to archive root)
+  const localAssetsDir = path.join(manifestDir, 'assets');
+  if (fs.existsSync(localAssetsDir)) {
+    const assetsBuildDir = path.join(buildDir, 'assets');
+    const files = await glob('**/*', { cwd: localAssetsDir, onlyFiles: true });
+    for (const f of files) {
+      const dest = path.join(assetsBuildDir, f);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(path.join(localAssetsDir, f), dest);
+    }
+    if (files.length) logger.info(`Local assets/: ${files.length} files → archive root`);
   }
 }
 
-module.exports = { collectExtras };
+module.exports = { collectAll };

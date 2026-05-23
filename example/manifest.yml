@@ -1,68 +1,46 @@
 name: MyServer
 version: "1.0.0"
 
+# ── Компилятор ────────────────────────────────────────────────────────────────
+# version не указан → берётся последний релиз автоматически
+# dir — имя папки в каждом репо, где лежит amxmodx-контент (дефолт: amxmodx)
 amxmodx:
-  # Compiler version from https://github.com/wopox1337/setup-amxxpawn releases
   version: "1.10.5428"
+  dir: amxmodx
 
+# ── GitHub ────────────────────────────────────────────────────────────────────
 github:
-  token_env: GITHUB_TOKEN   # name of the env var holding your PAT
+  token_env: GITHUB_TOKEN   # имя env-переменной с PAT; не нужен для публичных репо
 
-# Global dependencies (merged with per-repo DEPS_LIST; manifest wins on conflict)
+# ── Глобальные зависимости ────────────────────────────────────────────────────
+# Выигрывают над DEPS_LIST из любого репо
 deps:
   - AmxxModularEcosystem/ParamsController@1.4.0
   - Next21Team/AmxxEasyHttp@1.4.0:amxx/scripting/include
 
-# Default ini postfix → plugins-myserver.ini
+# ── Имя ini-файла: plugins-{postfix}.ini ─────────────────────────────────────
 plugins_ini_postfix: myserver
 
+# ── Репозитории ───────────────────────────────────────────────────────────────
 repos:
-  - repo: AmxxModularEcosystem/VipModular
-    ref: main
+  # Краткая форма — берётся default branch, папка amxmodx/
+  - AmxxModularEcosystem/CommandAliases
 
-    # Override DEPS_LIST; if set, the file in the repo is ignored
-    deps_override:
+  # Полная форма
+  - repo: AmxxModularEcosystem/VipModular
+    ref: 5.0.0-rc4f1      # ветка, тег или SHA; "latest" → последний GitHub release
+    amxmodx_dir: amxmodx  # переопределяет amxmodx.dir для этого репо
+    plugins_ini_postfix: vip
+    deps_override:        # если задан — DEPS_LIST из репо игнорируется
       - AmxxModularEcosystem/VipModular@5.0.0-rc4f1
 
-    scripting_dir: scripting
-    local_include_dir: scripting/include
-
-    # This repo's plugins go into plugins-vip.ini
-    plugins_ini_postfix: vip
-
-    exclude:
-      - "*_test.sma"
-      - "test_*.sma"
-
-    # Explicit plugin list (overrides auto-discovery + exclude)
-    plugins:
-      - src: vip_core.sma
-        ini_comment: "VIP Core"
-      - src: vip_module_shop.sma
-        plugins_ini_postfix: shop   # overrides repo-level postfix for this plugin only
-
-    extras:
-      - src: configs/
-        dst: configs/vip/
-      - src: lang/
-        dst: lang/
-
-    store_readme: true
-
   - repo: AmxxModularEcosystem/CustomWeaponsAPI
-    ref: main
-    # DEPS_LIST in the repo root is read automatically (no deps_override)
+    ref: latest           # автоматически берёт тег последнего релиза
     exclude:
-      - "examples/*.sma"
-    extras:
-      - src: configs/
-        dst: configs/cwapi/
+      - "CWAPI-A-Test.sma"
 
+# ── Выходной архив ────────────────────────────────────────────────────────────
 output:
   dir: ./dist
   archive_name: "{name}-{version}.zip"
-  layout:
-    plugins:  addons/amxmodx/plugins/
-    configs:  addons/amxmodx/configs/
-    lang:     addons/amxmodx/lang/
-    includes: addons/amxmodx/scripting/include/
+  amxmodx_path: addons/amxmodx   # куда ложится содержимое amxmodx/ в архиве

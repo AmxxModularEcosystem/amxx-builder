@@ -5,13 +5,14 @@ const { program } = require('commander');
 const fs   = require('fs');
 const path = require('path');
 
-const logger          = require('./src/logger');
-const { parseManifest } = require('./src/manifest');
-const { fetchCompiler } = require('./src/compiler-fetcher');
-const { fetchRepo }     = require('./src/repo-fetcher');
-const { resolveDeps }   = require('./src/deps-resolver');
+
+const logger             = require('./src/logger');
+const { parseManifest }  = require('./src/manifest');
+const { fetchCompiler }  = require('./src/compiler-fetcher');
+const { fetchRepo, resolveRef } = require('./src/repo-fetcher');
+const { resolveDeps }    = require('./src/deps-resolver');
 const { compilePlugins } = require('./src/compiler');
-const { collectExtras }  = require('./src/collector');
+const { collectAll }     = require('./src/collector');
 const { buildIniFiles }  = require('./src/ini-builder');
 const { createArchive }  = require('./src/archiver');
 const { getCacheDir }    = require('./src/cache-dir');
@@ -60,16 +61,20 @@ program.parse(process.argv);
 
 async function runBuild(options) {
   const manifestPath = options.manifest || './manifest.yml';
-  const noFetch      = options.fetch === false;   // commander inverts --no-fetch
+  const noFetch      = options.fetch === false;
   const noArchive    = options.archive === false;
   const dryRun       = options.dryRun || false;
+
+  // Load .env from the manifest's directory (before any token is read)
+  const manifestDir = path.dirname(path.resolve(manifestPath));
+  require('dotenv').config({ path: path.join(manifestDir, '.env') });
 
   // Step 1 — Parse manifest
   const manifest = parseManifest(manifestPath);
   logger.info(`Manifest: ${manifest.name} v${manifest.version}`);
 
   if (dryRun) {
-    printDryRun(manifest, noFetch, noArchive);
+    printDryRun(manifest);
     return;
   }
 
@@ -77,31 +82,31 @@ async function runBuild(options) {
   fs.rmSync(buildDir, { recursive: true, force: true });
   fs.mkdirSync(buildDir, { recursive: true });
 
-  // Step 2 — Fetch compiler
-  const compilerPath = await fetchCompiler(
-    manifest.amxmodx.version,
-    manifest.github.token
-  );
+  // Step 2 — Fetch compiler (resolves latest version if not pinned)
+  const compilerPath = await fetchCompiler(manifest.amxmodx.version, manifest.github.token);
 
-  // Step 3 — Clone all source repos (deduplicated)
+  // Step 3 — Resolve refs and clone all source repos
   const repoLocalDirs = {};
   for (const repoConfig of manifest.repos) {
-    const ref = repoConfig.ref || 'HEAD';
-    const key = `${repoConfig.repo}@${ref}`;
+    // Resolve "latest" → actual tag via GitHub API
+    const resolvedRef = await resolveRef(repoConfig.repo, repoConfig.ref, manifest.github.token);
+    repoConfig._resolvedRef = resolvedRef;  // store for downstream use
+
+    const key = `${repoConfig.repo}@${resolvedRef || 'HEAD'}`;
     if (!repoLocalDirs[key]) {
       repoLocalDirs[key] = await fetchRepo(
         repoConfig.repo,
-        ref,
+        resolvedRef,
         manifest.github.token,
         noFetch
       );
     }
   }
 
-  // Step 4 — Resolve dependencies, clone dep repos, collect includes
-  const includeDirs = await resolveDeps(manifest, noFetch, buildDir);
+  // Step 4 — Resolve + clone dependencies, collect .inc files
+  const includeDirs = await resolveDeps(manifest, repoLocalDirs, noFetch, buildDir);
 
-  // Step 5 — Compile plugins
+  // Step 5 — Compile .sma → .amxx
   const compiledPlugins = await compilePlugins(
     manifest,
     repoLocalDirs,
@@ -110,58 +115,59 @@ async function runBuild(options) {
     buildDir
   );
 
-  // Step 6 — Collect extras
-  await collectExtras(manifest, repoLocalDirs, buildDir);
+  // Step 6 — Collect: copy amxmodx/ dirs from repos + local amxmodx/ + local assets/
+  await collectAll(manifest, repoLocalDirs, buildDir);
 
-  // Step 7 — Generate plugins-*.ini
-  buildIniFiles(compiledPlugins, manifest, buildDir);
+  // Step 7 — Generate plugins-*.ini into build/amxmodx/configs/
+  buildIniFiles(compiledPlugins, buildDir);
 
   if (noArchive) {
     logger.info('--no-archive: skipping zip creation');
     return;
   }
 
-  // Step 8 — Create archive
+  // Step 8 — Package
   await createArchive(manifest, buildDir);
 }
 
-// ─── clean implementation ────────────────────────────────────────────────────
+// ─── clean ───────────────────────────────────────────────────────────────────
 
 async function runClean(options) {
-  const buildDir  = path.resolve('./build');
-  const cacheDir  = getCacheDir();
-  const reposDir  = path.join(cacheDir, 'repos');
-  const compDir   = path.join(cacheDir, 'amxxpc');
+  const buildDir = path.resolve('./build');
+  const reposDir = path.join(getCacheDir(), 'repos');
+  const compDir  = path.join(getCacheDir(), 'amxxpc');
 
   if (fs.existsSync(buildDir)) {
     fs.rmSync(buildDir, { recursive: true, force: true });
     logger.info('Cleaned: ./build/');
   }
-
   if (fs.existsSync(reposDir)) {
     fs.rmSync(reposDir, { recursive: true, force: true });
     logger.info(`Cleaned: ${reposDir}`);
   }
-
   if (options.all && fs.existsSync(compDir)) {
     fs.rmSync(compDir, { recursive: true, force: true });
     logger.info(`Cleaned: ${compDir}`);
   }
 }
 
-// ─── dry-run output ──────────────────────────────────────────────────────────
+// ─── dry-run ─────────────────────────────────────────────────────────────────
 
-function printDryRun(manifest, noFetch, noArchive) {
+function printDryRun(manifest) {
   logger.info('--- DRY RUN ---');
-  logger.info(`Compiler version: ${manifest.amxmodx.version}`);
-  logger.info(`Repos to clone (${manifest.repos.length}):`);
+  logger.info(`Compiler: ${manifest.amxmodx.version || 'latest'}`);
+  logger.info(`amxmodx dir in repos: ${manifest.amxmodx.dir}`);
+  logger.info(`Repos (${manifest.repos.length}):`);
   for (const r of manifest.repos) {
-    logger.dim(`  ${r.repo} @ ${r.ref || 'default'}`);
+    const ref = r.ref || 'default branch';
+    logger.dim(`  ${r.repo} @ ${ref}  [amxmodx_dir: ${r.amxmodx_dir}]`);
   }
-  logger.info(`Global deps (${manifest.globalDeps.length}):`);
-  for (const d of manifest.globalDeps) {
-    logger.dim(`  ${d.repo}@${d.ref}${d.include_path ? ':' + d.include_path : ''}`);
+  if (manifest.globalDeps.length) {
+    logger.info(`Global deps (${manifest.globalDeps.length}):`);
+    for (const d of manifest.globalDeps) {
+      logger.dim(`  ${d.repo}@${d.ref}${d.include_path ? ':' + d.include_path : ''}`);
+    }
   }
-  logger.info(`Flags: no-fetch=${noFetch}, no-archive=${noArchive}`);
+  logger.info(`Output: ${manifest.output.amxmodx_path}/ in ${manifest.output.archive_name}`);
   logger.info('--- END DRY RUN ---');
 }

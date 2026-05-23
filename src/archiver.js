@@ -4,11 +4,12 @@ const archiver = require('archiver');
 const logger  = require('./logger');
 
 /**
- * Creates the output .zip archive from the build directory,
- * mapping build subdirs to the layout paths defined in manifest.output.layout.
+ * Creates the output .zip:
+ *   build/amxmodx/**  → <output.amxmodx_path>/**   (e.g. addons/amxmodx/)
+ *   build/assets/**   → **  (archive root)
  */
 async function createArchive(manifest, buildDir) {
-  const { dir, archive_name, layout } = manifest.output;
+  const { dir, archive_name, amxmodx_path } = manifest.output;
 
   const archiveName = archive_name
     .replace('{name}',    manifest.name)
@@ -17,25 +18,12 @@ async function createArchive(manifest, buildDir) {
   fs.mkdirSync(path.resolve(dir), { recursive: true });
   const archivePath = path.join(path.resolve(dir), archiveName);
 
-  // Build layout mapping: buildSubdir → archivePath
-  const mappings = [
-    { build: path.join(buildDir, 'plugins'),   archive: normalizeDir(layout.plugins) },
-    { build: path.join(buildDir, 'configs'),   archive: normalizeDir(layout.configs) },
-    { build: path.join(buildDir, 'lang'),      archive: normalizeDir(layout.lang) },
-    { build: path.join(buildDir, '_includes'), archive: normalizeDir(layout.includes) },
-  ];
-
   const output  = fs.createWriteStream(archivePath);
   const archive = archiver('zip', { zlib: { level: 9 } });
 
   const fileList = [];
-  let totalSize  = 0;
-
   archive.on('entry', (entry) => {
-    if (!entry.stats.isDirectory()) {
-      fileList.push(entry.name);
-      totalSize += entry.stats.size || 0;
-    }
+    if (!entry.stats || !entry.stats.isDirectory()) fileList.push(entry.name);
   });
 
   await new Promise((resolve, reject) => {
@@ -43,49 +31,44 @@ async function createArchive(manifest, buildDir) {
     archive.on('error', reject);
     archive.pipe(output);
 
-    for (const { build, archive: archiveDir } of mappings) {
-      if (fs.existsSync(build)) {
-        archive.directory(build + path.sep, archiveDir);
-      }
+    const amxmodxBuildDir = path.join(buildDir, 'amxmodx');
+    if (fs.existsSync(amxmodxBuildDir)) {
+      const dest = amxmodx_path.replace(/\/?$/, '/');
+      archive.directory(amxmodxBuildDir + path.sep, dest);
     }
 
-    // Copy any README-*.md files from build root
-    const readmes = fs.readdirSync(buildDir).filter((f) => f.match(/^README.*\.md$/i));
-    for (const readme of readmes) {
-      archive.file(path.join(buildDir, readme), { name: readme });
+    const assetsBuildDir = path.join(buildDir, 'assets');
+    if (fs.existsSync(assetsBuildDir)) {
+      // false = no prefix, files land at archive root
+      archive.directory(assetsBuildDir + path.sep, false);
     }
 
     archive.finalize();
   });
 
-  const sizeKb = Math.round(totalSize / 1024);
+  const sizeKb = Math.round(fs.statSync(archivePath).size / 1024);
   logger.success(`Archive: ${path.join(dir, archiveName)} (${sizeKb} KB)`);
 
-  // Print file listing grouped by top-level dir
-  const grouped = groupByTopDir(fileList);
-  for (const [dir2, files] of Object.entries(grouped)) {
-    if (files.length === 1) {
-      logger.dim(`  ${files[0]}`);
-    } else {
-      logger.dim(`  ${dir2}/ (${files.length} files)`);
-    }
-  }
+  printFileListing(fileList, amxmodx_path);
 }
 
-function normalizeDir(p) {
-  return p.replace(/\\/g, '/').replace(/\/?$/, '/');
-}
-
-function groupByTopDir(files) {
-  const map = {};
+function printFileListing(files, amxmodxPath) {
+  // Group files by second-level dir under amxmodx_path (e.g. addons/amxmodx/plugins/)
+  const grouped = new Map();
   for (const f of files) {
     const parts = f.split('/');
-    // Use first 3 path components as the group key
-    const key = parts.slice(0, 3).join('/');
-    if (!map[key]) map[key] = [];
-    map[key].push(f);
+    const key   = parts.length > 1 ? parts.slice(0, parts.length - 1).join('/') : '.';
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(f);
   }
-  return map;
+
+  for (const [dir, dirFiles] of grouped) {
+    if (dirFiles.length === 1) {
+      logger.dim(`  ${dirFiles[0]}`);
+    } else {
+      logger.dim(`  ${dir}/ (${dirFiles.length} files)`);
+    }
+  }
 }
 
 module.exports = { createArchive };
