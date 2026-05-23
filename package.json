@@ -1,0 +1,26 @@
+{
+  "name": "amxx-builder",
+  "version": "1.0.0",
+  "description": "CLI tool to build and package AMX Mod X server plugins",
+  "main": "index.js",
+  "bin": {
+    "amxx-builder": "./index.js",
+    "amxb": "./index.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.12",
+    "archiver": "^7.0.1",
+    "axios": "^1.7.2",
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0",
+    "fast-glob": "^3.3.2",
+    "js-yaml": "^4.1.0",
+    "simple-git": "^3.22.0"
+  }
+}

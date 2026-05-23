@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(node index.js --help)",
+      "Bash(node index.js build --help)",
+      "Bash(node index.js build --manifest example/manifest.yml --dry-run)",
+      "Bash(node index.js --version)"
+    ]
+  }
+}

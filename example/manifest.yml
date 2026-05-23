@@ -1,0 +1,68 @@
+name: MyServer
+version: "1.0.0"
+
+amxmodx:
+  # Compiler version from https://github.com/wopox1337/setup-amxxpawn releases
+  version: "1.10.5428"
+
+github:
+  token_env: GITHUB_TOKEN   # name of the env var holding your PAT
+
+# Global dependencies (merged with per-repo DEPS_LIST; manifest wins on conflict)
+deps:
+  - AmxxModularEcosystem/ParamsController@1.4.0
+  - Next21Team/AmxxEasyHttp@1.4.0:amxx/scripting/include
+
+# Default ini postfix → plugins-myserver.ini
+plugins_ini_postfix: myserver
+
+repos:
+  - repo: AmxxModularEcosystem/VipModular
+    ref: main
+
+    # Override DEPS_LIST; if set, the file in the repo is ignored
+    deps_override:
+      - AmxxModularEcosystem/VipModular@5.0.0-rc4f1
+
+    scripting_dir: scripting
+    local_include_dir: scripting/include
+
+    # This repo's plugins go into plugins-vip.ini
+    plugins_ini_postfix: vip
+
+    exclude:
+      - "*_test.sma"
+      - "test_*.sma"
+
+    # Explicit plugin list (overrides auto-discovery + exclude)
+    plugins:
+      - src: vip_core.sma
+        ini_comment: "VIP Core"
+      - src: vip_module_shop.sma
+        plugins_ini_postfix: shop   # overrides repo-level postfix for this plugin only
+
+    extras:
+      - src: configs/
+        dst: configs/vip/
+      - src: lang/
+        dst: lang/
+
+    store_readme: true
+
+  - repo: AmxxModularEcosystem/CustomWeaponsAPI
+    ref: main
+    # DEPS_LIST in the repo root is read automatically (no deps_override)
+    exclude:
+      - "examples/*.sma"
+    extras:
+      - src: configs/
+        dst: configs/cwapi/
+
+output:
+  dir: ./dist
+  archive_name: "{name}-{version}.zip"
+  layout:
+    plugins:  addons/amxmodx/plugins/
+    configs:  addons/amxmodx/configs/
+    lang:     addons/amxmodx/lang/
+    includes: addons/amxmodx/scripting/include/
