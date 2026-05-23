@@ -89,6 +89,36 @@ my-server/
       weapon.wav
 ```
 
+## Локальная сборка (замена build.bat)
+
+`repos:` не обязателен. Если не указан — инструмент работает только с локальными файлами.
+Чтобы архив начинался с имени пакета (как при дистрибуции плагина), используй шаблон `{name}` в путях:
+
+```yaml
+name: VipModular
+version: "5.0.0"
+
+output:
+  amxmodx_path: "{name}/addons/amxmodx"
+  assets_path:  "{name}"
+  readme: true
+```
+
+Результат:
+
+```text
+VipModular-5.0.0.zip
+  VipModular/
+    addons/amxmodx/
+      plugins/vip_core.amxx
+      configs/...
+      lang/...
+    models/...
+  README.md
+```
+
+Полный пример: [`example/manifest.local.yml`](example/manifest.local.yml).
+
 ## ref: latest
 
 ```yaml

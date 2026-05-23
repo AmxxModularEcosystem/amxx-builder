@@ -6,7 +6,8 @@
       "Bash(node index.js build --help)",
       "Bash(node index.js build --manifest example/manifest.yml --dry-run)",
       "Bash(node index.js --version)",
-      "Bash(node -e \"require\\('dotenv'\\).config\\(\\); console.log\\('dotenv ok, GITHUB_TOKEN:', process.env.GITHUB_TOKEN || '\\(not set\\)'\\)\")"
+      "Bash(node -e \"require\\('dotenv'\\).config\\(\\); console.log\\('dotenv ok, GITHUB_TOKEN:', process.env.GITHUB_TOKEN || '\\(not set\\)'\\)\")",
+      "Bash(node index.js build --manifest example/manifest.local.yml --dry-run)"
     ]
   }
 }

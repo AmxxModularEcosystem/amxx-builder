@@ -82,29 +82,34 @@ async function runBuild(options) {
   fs.rmSync(buildDir, { recursive: true, force: true });
   fs.mkdirSync(buildDir, { recursive: true });
 
+  const hasRepos = manifest.repos.length > 0;
+
   // Step 2 — Fetch compiler (resolves latest version if not pinned)
   const compilerPath = await fetchCompiler(manifest.amxmodx.version, manifest.github.token);
 
-  // Step 3 — Resolve refs and clone all source repos
+  // Step 3 — Resolve refs and clone all source repos (skipped for local-only builds)
   const repoLocalDirs = {};
-  for (const repoConfig of manifest.repos) {
-    // Resolve "latest" → actual tag via GitHub API
-    const resolvedRef = await resolveRef(repoConfig.repo, repoConfig.ref, manifest.github.token);
-    repoConfig._resolvedRef = resolvedRef;  // store for downstream use
+  if (hasRepos) {
+    for (const repoConfig of manifest.repos) {
+      const resolvedRef = await resolveRef(repoConfig.repo, repoConfig.ref, manifest.github.token);
+      repoConfig._resolvedRef = resolvedRef;
 
-    const key = `${repoConfig.repo}@${resolvedRef || 'HEAD'}`;
-    if (!repoLocalDirs[key]) {
-      repoLocalDirs[key] = await fetchRepo(
-        repoConfig.repo,
-        resolvedRef,
-        manifest.github.token,
-        noFetch
-      );
+      const key = `${repoConfig.repo}@${resolvedRef || 'HEAD'}`;
+      if (!repoLocalDirs[key]) {
+        repoLocalDirs[key] = await fetchRepo(
+          repoConfig.repo,
+          resolvedRef,
+          manifest.github.token,
+          noFetch
+        );
+      }
     }
   }
 
   // Step 4 — Resolve + clone dependencies, collect .inc files
-  const includeDirs = await resolveDeps(manifest, repoLocalDirs, noFetch, buildDir);
+  const includeDirs = hasRepos
+    ? await resolveDeps(manifest, repoLocalDirs, noFetch, buildDir)
+    : [];
 
   // Step 5 — Compile .sma → .amxx
   const compiledPlugins = await compilePlugins(

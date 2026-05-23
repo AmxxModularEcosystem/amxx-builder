@@ -4,19 +4,27 @@ const archiver = require('archiver');
 const logger  = require('./logger');
 
 /**
- * Creates the output .zip:
- *   build/amxmodx/**  → <output.amxmodx_path>/**   (e.g. addons/amxmodx/)
- *   build/assets/**   → **  (archive root)
+ * Creates the output .zip.
+ *
+ * {name} and {version} are expanded in amxmodx_path and assets_path.
+ *
+ *   build/amxmodx/**  → <amxmodx_path>/**   e.g. "addons/amxmodx" or "{name}/addons/amxmodx"
+ *   build/assets/**   → <assets_path>/**     e.g. "" (root) or "{name}"
+ *   README.md         → <assets_path>/       if output.readme = true
  */
 async function createArchive(manifest, buildDir) {
-  const { dir, archive_name, amxmodx_path } = manifest.output;
+  const out = manifest.output;
 
-  const archiveName = archive_name
+  const expand = (tpl) => tpl
     .replace('{name}',    manifest.name)
     .replace('{version}', manifest.version);
 
-  fs.mkdirSync(path.resolve(dir), { recursive: true });
-  const archivePath = path.join(path.resolve(dir), archiveName);
+  const archiveName  = expand(out.archive_name);
+  const amxmodxDest  = expand(out.amxmodx_path).replace(/\/?$/, '/');
+  const assetsDest   = expand(out.assets_path);  // '' = root
+
+  fs.mkdirSync(path.resolve(out.dir), { recursive: true });
+  const archivePath = path.join(path.resolve(out.dir), archiveName);
 
   const output  = fs.createWriteStream(archivePath);
   const archive = archiver('zip', { zlib: { level: 9 } });
@@ -31,29 +39,37 @@ async function createArchive(manifest, buildDir) {
     archive.on('error', reject);
     archive.pipe(output);
 
+    // amxmodx content
     const amxmodxBuildDir = path.join(buildDir, 'amxmodx');
     if (fs.existsSync(amxmodxBuildDir)) {
-      const dest = amxmodx_path.replace(/\/?$/, '/');
-      archive.directory(amxmodxBuildDir + path.sep, dest);
+      archive.directory(amxmodxBuildDir + path.sep, amxmodxDest);
     }
 
+    // assets — false means archive root, otherwise the given prefix
     const assetsBuildDir = path.join(buildDir, 'assets');
     if (fs.existsSync(assetsBuildDir)) {
-      // false = no prefix, files land at archive root
-      archive.directory(assetsBuildDir + path.sep, false);
+      archive.directory(assetsBuildDir + path.sep, assetsDest || false);
+    }
+
+    // README.md next to manifest
+    if (out.readme) {
+      const readmeSrc = path.join(path.dirname(manifest._path), 'README.md');
+      if (fs.existsSync(readmeSrc)) {
+        archive.file(readmeSrc, { name: 'README.md' });
+      } else {
+        logger.warn('readme: true but README.md not found next to manifest');
+      }
     }
 
     archive.finalize();
   });
 
   const sizeKb = Math.round(fs.statSync(archivePath).size / 1024);
-  logger.success(`Archive: ${path.join(dir, archiveName)} (${sizeKb} KB)`);
-
-  printFileListing(fileList, amxmodx_path);
+  logger.success(`Archive: ${path.join(out.dir, archiveName)} (${sizeKb} KB)`);
+  printFileListing(fileList);
 }
 
-function printFileListing(files, amxmodxPath) {
-  // Group files by second-level dir under amxmodx_path (e.g. addons/amxmodx/plugins/)
+function printFileListing(files) {
   const grouped = new Map();
   for (const f of files) {
     const parts = f.split('/');
@@ -61,13 +77,9 @@ function printFileListing(files, amxmodxPath) {
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(f);
   }
-
   for (const [dir, dirFiles] of grouped) {
-    if (dirFiles.length === 1) {
-      logger.dim(`  ${dirFiles[0]}`);
-    } else {
-      logger.dim(`  ${dir}/ (${dirFiles.length} files)`);
-    }
+    if (dirFiles.length === 1) logger.dim(`  ${dirFiles[0]}`);
+    else                       logger.dim(`  ${dir}/ (${dirFiles.length} files)`);
   }
 }
 

@@ -10,8 +10,7 @@ function parseManifest(manifestPath) {
 
   const raw = yaml.load(fs.readFileSync(absPath, 'utf8'));
 
-  if (!raw.name)                       throw new Error('manifest: missing required field "name"');
-  if (!raw.repos || !raw.repos.length) throw new Error('manifest: "repos" must have at least one entry');
+  if (!raw.name) throw new Error('manifest: missing required field "name"');
 
   const tokenEnv = (raw.github && raw.github.token_env) || 'GITHUB_TOKEN';
   const token    = process.env[tokenEnv] || null;
@@ -20,7 +19,7 @@ function parseManifest(manifestPath) {
   const globalAmxDir   = (raw.amxmodx && raw.amxmodx.dir) || 'amxmodx';
   const globalDeps     = parseDepsLines(raw.deps || []);
 
-  const repos = raw.repos.map((r) => parseRepoEntry(r, globalPostfix, globalAmxDir));
+  const repos = (raw.repos || []).map((r) => parseRepoEntry(r, globalPostfix, globalAmxDir));
 
   const output = raw.output || {};
   return {
@@ -39,6 +38,8 @@ function parseManifest(manifestPath) {
       dir:          output.dir || './dist',
       archive_name: output.archive_name || '{name}-{version}.zip',
       amxmodx_path: output.amxmodx_path || 'addons/amxmodx',
+      assets_path:  output.assets_path  != null ? String(output.assets_path) : '',
+      readme:       output.readme       || false,
     },
   };
 }
