@@ -44,3 +44,8 @@ output:
   dir: ./dist
   archive_name: "{name}-{version}.zip"
   amxmodx_path: addons/amxmodx   # куда ложится содержимое amxmodx/ в архиве
+  generate_ini: true             # сгенерировать plugins[-postfix].ini (дефолт: true)
+  on_conflict: last_wins         # поведение при конфликте файлов между репо:
+                                 #   last_wins  — последний репо побеждает (дефолт, варн)
+                                 #   first_wins — первый репо побеждает (варн)
+                                 #   error      — упасть при первом конфликте

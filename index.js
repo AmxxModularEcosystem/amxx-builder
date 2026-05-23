@@ -27,10 +27,11 @@ program
 program
   .command('build')
   .description('Build plugins from manifest')
-  .option('--manifest <path>', 'Path to manifest.yml', './manifest.yml')
-  .option('--no-fetch',   'Use cached repos without re-cloning')
-  .option('--no-archive', 'Compile only, skip archiving')
-  .option('--dry-run',    'Show plan without executing')
+  .option('--manifest <path>',   'Path to manifest.yml', './manifest.yml')
+  .option('--build-dir <path>', 'Override build staging directory (default: ./build)')
+  .option('--no-fetch',         'Use cached repos without re-cloning')
+  .option('--no-archive',       'Compile only, skip archiving')
+  .option('--dry-run',          'Show plan without executing')
   .action(async (options) => {
     try {
       await runBuild(options);
@@ -45,6 +46,7 @@ program
 program
   .command('clean')
   .description('Clean build directory and repo clone cache')
+  .option('--build-dir <path>', 'Override build staging directory (default: ./build)')
   .option('--all', 'Also clean compiler cache')
   .action(async (options) => {
     try {
@@ -64,6 +66,7 @@ async function runBuild(options) {
   const noFetch      = options.fetch === false;
   const noArchive    = options.archive === false;
   const dryRun       = options.dryRun || false;
+  const buildDir     = path.resolve(options.buildDir || './build');
 
   // Load .env from the manifest's directory (before any token is read)
   const manifestDir = path.dirname(path.resolve(manifestPath));
@@ -78,7 +81,6 @@ async function runBuild(options) {
     return;
   }
 
-  const buildDir = path.resolve('./build');
   fs.rmSync(buildDir, { recursive: true, force: true });
   fs.mkdirSync(buildDir, { recursive: true });
 
@@ -87,31 +89,38 @@ async function runBuild(options) {
   // Step 2 — Fetch compiler (resolves latest version if not pinned)
   const compilerPath = await fetchCompiler(manifest.amxmodx.version, manifest.github.token);
 
-  // Step 3 — Resolve refs and clone all source repos (skipped for local-only builds)
+  // Step 3 — Resolve all refs in parallel, then clone deduped set in parallel
   const repoLocalDirs = {};
   if (hasRepos) {
-    for (const repoConfig of manifest.repos) {
-      const resolvedRef = await resolveRef(repoConfig.repo, repoConfig.ref, manifest.github.token);
-      repoConfig._resolvedRef = resolvedRef;
+    await Promise.all(manifest.repos.map(async (repoConfig) => {
+      repoConfig._resolvedRef = await resolveRef(
+        repoConfig.repo, repoConfig.ref, manifest.github.token
+      );
+    }));
 
-      const key = `${repoConfig.repo}@${resolvedRef || 'HEAD'}`;
-      if (!repoLocalDirs[key]) {
-        repoLocalDirs[key] = await fetchRepo(
-          repoConfig.repo,
-          resolvedRef,
-          manifest.github.token,
-          noFetch
+    const cloneJobs = new Map();
+    for (const repoConfig of manifest.repos) {
+      const key = `${repoConfig.repo}@${repoConfig._resolvedRef || 'HEAD'}`;
+      if (!cloneJobs.has(key)) {
+        cloneJobs.set(key,
+          fetchRepo(repoConfig.repo, repoConfig._resolvedRef, manifest.github.token, noFetch)
         );
       }
     }
+    const cloned = await Promise.all(
+      [...cloneJobs.entries()].map(async ([key, p]) => ({ key, dir: await p }))
+    );
+    for (const { key, dir } of cloned) repoLocalDirs[key] = dir;
   }
 
-  // Step 4 — Resolve + clone dependencies, collect .inc files
-  const includeDirs = hasRepos
-    ? await resolveDeps(manifest, repoLocalDirs, noFetch, buildDir)
-    : [];
+  // Step 4 — Resolve + clone deps, collect .inc files (always — works for local-only builds too)
+  const includeDirs = await resolveDeps(manifest, repoLocalDirs, noFetch, buildDir);
 
-  // Step 5 — Compile .sma → .amxx
+  // Step 5 — Collect: copy amxmodx/ dirs from repos + local amxmodx/ + local assets/
+  //           Must run before compile so that compiled .amxx always overwrites any pre-built ones.
+  await collectAll(manifest, repoLocalDirs, buildDir);
+
+  // Step 6 — Compile .sma → .amxx (runs after collect, wins over any pre-built plugins)
   const compiledPlugins = await compilePlugins(
     manifest,
     repoLocalDirs,
@@ -120,11 +129,10 @@ async function runBuild(options) {
     buildDir
   );
 
-  // Step 6 — Collect: copy amxmodx/ dirs from repos + local amxmodx/ + local assets/
-  await collectAll(manifest, repoLocalDirs, buildDir);
-
   // Step 7 — Generate plugins-*.ini into build/amxmodx/configs/
-  buildIniFiles(compiledPlugins, buildDir);
+  if (manifest.output.generate_ini) {
+    buildIniFiles(compiledPlugins, buildDir);
+  }
 
   if (noArchive) {
     logger.info('--no-archive: skipping zip creation');
@@ -138,13 +146,13 @@ async function runBuild(options) {
 // ─── clean ───────────────────────────────────────────────────────────────────
 
 async function runClean(options) {
-  const buildDir = path.resolve('./build');
+  const buildDir = path.resolve(options.buildDir || './build');
   const reposDir = path.join(getCacheDir(), 'repos');
   const compDir  = path.join(getCacheDir(), 'amxxpc');
 
   if (fs.existsSync(buildDir)) {
     fs.rmSync(buildDir, { recursive: true, force: true });
-    logger.info('Cleaned: ./build/');
+    logger.info(`Cleaned: ${buildDir}`);
   }
   if (fs.existsSync(reposDir)) {
     fs.rmSync(reposDir, { recursive: true, force: true });

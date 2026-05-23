@@ -16,3 +16,4 @@ output:
   amxmodx_path: "{name}/addons/amxmodx"   # плагин в корне архива с префиксом
   assets_path:  "{name}"                  # assets/ → {name}/ (модели, звуки и т.п.)
   readme: true                            # включить README.md → /README.md
+  generate_ini: false                     # plugins.ini в дистрибутиве не нужен

@@ -40,8 +40,19 @@ function parseManifest(manifestPath) {
       amxmodx_path: output.amxmodx_path || 'addons/amxmodx',
       assets_path:  output.assets_path  != null ? String(output.assets_path) : '',
       readme:       output.readme       || false,
+      generate_ini: output.generate_ini != null ? Boolean(output.generate_ini) : true,
+      on_conflict:  validateOnConflict(output.on_conflict),
     },
   };
+}
+
+function validateOnConflict(val) {
+  const valid = ['last_wins', 'first_wins', 'error'];
+  if (val == null) return 'last_wins';
+  if (!valid.includes(val)) {
+    throw new Error(`manifest: output.on_conflict must be one of: ${valid.join(', ')}`);
+  }
+  return val;
 }
 
 function parseRepoEntry(r, globalPostfix, globalAmxDir) {

@@ -7,14 +7,24 @@ const logger = require('./logger');
  * Copies everything from each repo's amxmodx_dir into build/amxmodx/,
  * then merges local amxmodx/ and assets/ directories (next to manifest.yml).
  *
- * .sma files are NOT copied — they are compiled; .amxx output is already in plugins/.
- * Everything else (configs, lang, includes, etc.) is copied as-is.
+ * .sma files are NOT copied — they are compiled; .amxx output is written by the
+ * compiler step that runs after this one, overwriting any pre-built plugins.
+ *
+ * Repo-vs-repo file conflicts are handled according to output.on_conflict:
+ *   last_wins  (default) — later repo in list wins, warning emitted
+ *   first_wins           — first repo wins, later duplicates skipped with warning
+ *   error                — build fails on first conflict
+ *
+ * Local amxmodx/ always wins over repo files (intentional override layer, no warning).
  */
 async function collectAll(manifest, repoLocalDirs, buildDir) {
+  const onConflict      = manifest.output.on_conflict;
   const amxmodxBuildDir = path.join(buildDir, 'amxmodx');
   fs.mkdirSync(amxmodxBuildDir, { recursive: true });
 
-  // Copy from each repo
+  const origins = new Map(); // rel path → repo label (conflict tracking)
+
+  // Copy from each remote repo
   for (const repoConfig of manifest.repos) {
     const repoDir = repoLocalDirs[`${repoConfig.repo}@${repoConfig._resolvedRef || repoConfig.ref || 'HEAD'}`];
     const srcDir  = path.join(repoDir, repoConfig.amxmodx_dir);
@@ -27,19 +37,34 @@ async function collectAll(manifest, repoLocalDirs, buildDir) {
     const files = await glob('**/*', {
       cwd: srcDir,
       onlyFiles: true,
-      ignore: ['scripting/**/*.sma'],  // sources are compiled, not deployed
+      ignore: ['scripting/**/*.sma'],
     });
 
+    let copied = 0;
     for (const f of files) {
+      if (origins.has(f)) {
+        const prev = origins.get(f);
+        if (onConflict === 'error') {
+          throw new Error(`File conflict: "${f}" — provided by both "${prev}" and "${repoConfig.repo}"`);
+        }
+        if (onConflict === 'first_wins') {
+          logger.warn(`Conflict (kept "${prev}"): ${f}`);
+          continue;
+        }
+        // last_wins (default)
+        logger.warn(`Conflict (overwriting "${prev}"): ${f}`);
+      }
       const dest = path.join(amxmodxBuildDir, f);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(path.join(srcDir, f), dest);
+      origins.set(f, repoConfig.repo);
+      copied++;
     }
 
-    logger.dim(`  ${repoConfig.repo}: ${files.length} files from ${repoConfig.amxmodx_dir}/`);
+    logger.dim(`  ${repoConfig.repo}: ${copied}/${files.length} files from ${repoConfig.amxmodx_dir}/`);
   }
 
-  // Merge local amxmodx/ dir (next to manifest.yml)
+  // Merge local amxmodx/ dir — always wins over repo files (intentional override layer)
   const manifestDir     = path.dirname(manifest._path);
   const localAmxmodxDir = path.join(manifestDir, manifest.amxmodx.dir);
 
