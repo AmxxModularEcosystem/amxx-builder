@@ -14,6 +14,7 @@ function parseManifest(manifestPath) {
 
   const tokenEnv = (raw.github && raw.github.token_env) || 'GITHUB_TOKEN';
   const token    = process.env[tokenEnv] || null;
+  const ssh      = !!(raw.github && raw.github.ssh);
 
   const globalPostfix  = raw.plugins_ini_postfix != null ? String(raw.plugins_ini_postfix) : '';
   const globalAmxDir   = (raw.amxmodx && raw.amxmodx.dir) || 'amxmodx';
@@ -30,7 +31,7 @@ function parseManifest(manifestPath) {
       version: (raw.amxmodx && raw.amxmodx.version) ? String(raw.amxmodx.version) : null,
       dir:     globalAmxDir,
     },
-    github: { token_env: tokenEnv || null, token },
+    github: { token_env: tokenEnv || null, token, ssh },
     globalDeps,
     globalPostfix,
     repos,

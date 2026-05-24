@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-liner install for Linux / macOS:
-#   curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/main/install.sh | bash
 #
 # With PAT for private repos:
 #   GITHUB_TOKEN=ghp_xxx curl -fsSL .../install.sh | bash

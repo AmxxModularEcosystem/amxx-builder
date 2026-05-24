@@ -52,7 +52,7 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
   const includeDirs = [];
 
   for (const [k, dep] of merged) {
-    const depDir = await fetchRepo(dep.repo, dep.ref, token, noFetch);
+    const depDir = await fetchRepo(dep.repo, dep.ref, token, noFetch, manifest.github.ssh);
     const srcDir = resolveIncludePath(depDir, dep.include_path, dep.repo);
 
     const destDir = path.join(includesRoot, k.replace('/', '__'));

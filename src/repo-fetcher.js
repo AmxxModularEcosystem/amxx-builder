@@ -32,8 +32,13 @@ async function resolveRef(repo, ref, token) {
 
 /**
  * Ensures the repo is cloned locally. Returns the local path.
+ *
+ * Clone URL priority:
+ *   ssh=true           → git@github.com:owner/repo.git  (explicit flag)
+ *   token set          → https://<token>@github.com/...  (HTTPS + auth)
+ *   neither            → git@github.com:owner/repo.git  (SSH default — no token, use key)
  */
-async function fetchRepo(repo, ref, token, noFetch) {
+async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
   const resolvedRef = ref || null;  // null = clone default branch
   const cacheKey    = resolvedRef || 'HEAD';
   const cacheDir    = getRepoCacheDir(repo, cacheKey);
@@ -52,7 +57,7 @@ async function fetchRepo(repo, ref, token, noFetch) {
 
   logger.step(`Cloning ${repo} @ ${cacheKey} ...`);
 
-  const cloneUrl  = buildCloneUrl(repo, token);
+  const cloneUrl  = buildCloneUrl(repo, token, ssh);
   const cloneArgs = ['--depth=1'];
   if (resolvedRef) cloneArgs.push('--branch', resolvedRef);
 
@@ -69,10 +74,9 @@ async function fetchRepo(repo, ref, token, noFetch) {
   return cacheDir;
 }
 
-function buildCloneUrl(repo, token) {
-  return token
-    ? `https://${token}@github.com/${repo}.git`
-    : `https://github.com/${repo}.git`;
+function buildCloneUrl(repo, token, ssh) {
+  if (ssh || !token) return `git@github.com:${repo}.git`;
+  return `https://${token}@github.com/${repo}.git`;
 }
 
 module.exports = { fetchRepo, resolveRef, getRepoCacheDir };

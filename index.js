@@ -103,7 +103,7 @@ async function runBuild(options) {
       const key = `${repoConfig.repo}@${repoConfig._resolvedRef || 'HEAD'}`;
       if (!cloneJobs.has(key)) {
         cloneJobs.set(key,
-          fetchRepo(repoConfig.repo, repoConfig._resolvedRef, manifest.github.token, noFetch)
+          fetchRepo(repoConfig.repo, repoConfig._resolvedRef, manifest.github.token, noFetch, manifest.github.ssh)
         );
       }
     }
