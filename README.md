@@ -92,6 +92,53 @@ my-server/
       weapon.wav
 ```
 
+## GitHub Actions
+
+```yaml
+# .github/workflows/build.yml
+name: Build
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: AmxxModularEcosystem/amxx-builder@v1
+        with:
+          manifest: ./manifest.yml
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Для приватных зависимостей передай PAT вместо встроенного токена:
+
+```yaml
+      - uses: AmxxModularEcosystem/amxx-builder@v1
+        with:
+          github-token: ${{ secrets.MY_PAT }}
+```
+
+Все доступные инпуты:
+
+| Инпут | По умолчанию | Описание |
+| --- | --- | --- |
+| `manifest` | `./manifest.yml` | Путь к манифесту |
+| `build-dir` | `./build` | Директория сборки |
+| `no-fetch` | `false` | Пропустить клонирование (использовать кэш раннера) |
+| `no-archive` | `false` | Только компиляция, без `.zip` |
+| `github-token` | `${{ github.token }}` | GitHub токен для приватных репо |
+
+Готовый архив появляется в `output.dir` манифеста (по умолчанию `./dist`). Добавь шаг `actions/upload-artifact`, чтобы сохранить его:
+
+```yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-build
+          path: dist/*.zip
+```
+
 ## Локальная сборка (замена build.bat)
 
 `repos:` не обязателен. Если не указан — инструмент работает только с локальными файлами.
