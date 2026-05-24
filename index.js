@@ -87,7 +87,7 @@ async function runBuild(options) {
   const hasRepos = manifest.repos.length > 0;
 
   // Step 2 — Fetch compiler (resolves latest version if not pinned)
-  const compilerPath = await fetchCompiler(manifest.amxmodx.version, manifest.github.token);
+  const { compilerPath, includeDir: compilerIncludeDir } = await fetchCompiler(manifest.amxmodx.version);
 
   // Step 3 — Resolve all refs in parallel, then clone deduped set in parallel
   const repoLocalDirs = {};
@@ -114,7 +114,9 @@ async function runBuild(options) {
   }
 
   // Step 4 — Resolve + clone deps, collect .inc files (always — works for local-only builds too)
-  const includeDirs = await resolveDeps(manifest, repoLocalDirs, noFetch, buildDir);
+  // Compiler's bundled includes (amxmodx.inc etc.) appended last — lowest priority so user includes win.
+  const depsIncludeDirs = await resolveDeps(manifest, repoLocalDirs, noFetch, buildDir);
+  const includeDirs = compilerIncludeDir ? [...depsIncludeDirs, compilerIncludeDir] : depsIncludeDirs;
 
   // Step 5 — Collect: copy amxmodx/ dirs from repos + local amxmodx/ + local assets/
   //           Must run before compile so that compiled .amxx always overwrites any pre-built ones.
