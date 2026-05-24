@@ -14,7 +14,7 @@ const { resolveDeps }    = require('./src/deps-resolver');
 const { compilePlugins } = require('./src/compiler');
 const { collectAll }     = require('./src/collector');
 const { buildIniFiles }  = require('./src/ini-builder');
-const { createArchive }  = require('./src/archiver');
+const { createArchive, copyOutput } = require('./src/archiver');
 const { getCacheDir }    = require('./src/cache-dir');
 
 program
@@ -144,7 +144,11 @@ async function runBuild(options) {
   }
 
   // Step 8 — Package
-  await createArchive(manifest, buildDir);
+  if (manifest.output.pack === false) {
+    copyOutput(manifest, buildDir);
+  } else {
+    await createArchive(manifest, buildDir);
+  }
 }
 
 // ─── clean ───────────────────────────────────────────────────────────────────

@@ -83,4 +83,48 @@ function printFileListing(files) {
   }
 }
 
-module.exports = { createArchive };
+/**
+ * Same layout as createArchive but copies files to output.dir instead of zipping.
+ * Used when output.pack = false (e.g. in CI to avoid artifact double-wrapping).
+ */
+function copyOutput(manifest, buildDir) {
+  const out    = manifest.output;
+  const expand = (tpl) => tpl
+    .replace('{name}',    manifest.name)
+    .replace('{version}', manifest.version);
+
+  const outDir     = path.resolve(out.dir);
+  const amxmodxDst = path.join(outDir, expand(out.amxmodx_path));
+  const assetsDst  = out.assets_path
+    ? path.join(outDir, expand(out.assets_path))
+    : outDir;
+
+  const amxmodxSrc = path.join(buildDir, 'amxmodx');
+  if (fs.existsSync(amxmodxSrc)) copyDirSync(amxmodxSrc, amxmodxDst);
+
+  const assetsSrc = path.join(buildDir, 'assets');
+  if (fs.existsSync(assetsSrc)) copyDirSync(assetsSrc, assetsDst);
+
+  if (out.readme) {
+    const readmeSrc = path.join(path.dirname(manifest._path), 'README.md');
+    if (fs.existsSync(readmeSrc)) {
+      fs.copyFileSync(readmeSrc, path.join(outDir, 'README.md'));
+    } else {
+      logger.warn('readme: true but README.md not found next to manifest');
+    }
+  }
+
+  logger.success(`Output dir: ${out.dir}`);
+}
+
+function copyDirSync(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src,  entry.name);
+    const d = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirSync(s, d);
+    else fs.copyFileSync(s, d);
+  }
+}
+
+module.exports = { createArchive, copyOutput };

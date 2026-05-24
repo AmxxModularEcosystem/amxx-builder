@@ -42,6 +42,7 @@ function parseManifest(manifestPath) {
       assets_path:  output.assets_path  != null ? String(output.assets_path) : '',
       readme:       output.readme       || false,
       generate_ini: output.generate_ini != null ? Boolean(output.generate_ini) : true,
+      pack:         output.pack         != null ? Boolean(output.pack)         : true,
       on_conflict:  validateOnConflict(output.on_conflict),
     },
   };
