@@ -120,8 +120,15 @@ async function runCompile(compilerPath, task) {
 }
 
 function spawnAsync(cmd, args) {
+  const env = { ...process.env };
+  if (process.platform === 'linux') {
+    const compilerDir = path.dirname(cmd);
+    env.LD_LIBRARY_PATH = env.LD_LIBRARY_PATH
+      ? `${compilerDir}:${env.LD_LIBRARY_PATH}`
+      : compilerDir;
+  }
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { windowsHide: true });
+    const proc = spawn(cmd, args, { windowsHide: true, env });
     let output = '';
     if (proc.stdout) proc.stdout.on('data', (d) => output += d);
     if (proc.stderr) proc.stderr.on('data', (d) => output += d);
