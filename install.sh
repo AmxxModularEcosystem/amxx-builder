@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-liner install for Linux / macOS:
-#   curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/install.sh | bash
 #
 # With PAT for private repos:
 #   GITHUB_TOKEN=ghp_xxx curl -fsSL .../install.sh | bash
@@ -8,7 +8,7 @@
 set -euo pipefail
 
 REPO="AmxxModularEcosystem/amxx-builder"   # <-- replace with actual GitHub owner/repo
-BRANCH="main"
+BRANCH="master"
 
 step()  { echo -e "\033[36m[amxx-builder]\033[0m $*"; }
 ok()    { echo -e "\033[32m[amxx-builder]\033[0m $*"; }
