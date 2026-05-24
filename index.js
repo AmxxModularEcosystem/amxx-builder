@@ -20,7 +20,7 @@ const { getCacheDir }    = require('./src/cache-dir');
 program
   .name('amxx-builder')
   .description('Build and package AMX Mod X server plugins')
-  .version('1.0.0');
+  .version(require('./package.json').version);
 
 // ─── build ───────────────────────────────────────────────────────────────────
 
