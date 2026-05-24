@@ -57,9 +57,12 @@ function validateOnConflict(val) {
 }
 
 function parseRepoEntry(r, globalPostfix, globalAmxDir) {
-  // Shorthand: just a string "owner/repo"
+  // Shorthand: "owner/repo" or "owner/repo@ref"
   if (typeof r === 'string') {
-    return makeRepo({ repo: r }, globalPostfix, globalAmxDir);
+    const atIdx = r.indexOf('@');
+    const repo  = atIdx === -1 ? r.trim() : r.slice(0, atIdx).trim();
+    const ref   = atIdx === -1 ? null     : r.slice(atIdx + 1).trim() || null;
+    return makeRepo({ repo, ref }, globalPostfix, globalAmxDir);
   }
   if (!r.repo) throw new Error(`manifest: repo entry missing "repo" field: ${JSON.stringify(r)}`);
   return makeRepo(r, globalPostfix, globalAmxDir);

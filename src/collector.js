@@ -37,7 +37,7 @@ async function collectAll(manifest, repoLocalDirs, buildDir) {
     const files = await glob('**/*', {
       cwd: srcDir,
       onlyFiles: true,
-      ignore: ['scripting/**/*.sma'],
+      ignore: [],
     });
 
     let copied = 0;
@@ -72,7 +72,7 @@ async function collectAll(manifest, repoLocalDirs, buildDir) {
     const files = await glob('**/*', {
       cwd: localAmxmodxDir,
       onlyFiles: true,
-      ignore: ['scripting/**/*.sma'],
+      ignore: [],
     });
     for (const f of files) {
       const dest = path.join(amxmodxBuildDir, f);

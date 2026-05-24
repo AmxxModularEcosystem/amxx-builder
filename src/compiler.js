@@ -59,9 +59,11 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
     const excluded = await findExcluded(scriptingDir, exclude);
     for (const ex of excluded) logger.skip(`Skipped (excluded): ${ex}`);
 
-    const localIncDir = path.join(scriptingDir, 'include');
+    const localIncDir    = path.join(scriptingDir, 'include');
+    const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
     const allIncludes = [];
-    if (fs.existsSync(localIncDir)) allIncludes.push(`-i${localIncDir}`);
+    if (fs.existsSync(localIncDir))     allIncludes.push(`-i${localIncDir}`);
+    if (fs.existsSync(collectedIncDir)) allIncludes.push(`-i${collectedIncDir}`);
     for (const d of includeDirs) allIncludes.push(`-i${d}`);
 
     for (const smaRel of smaFiles) {
