@@ -74,7 +74,8 @@ function makeRepo(r, globalPostfix, globalAmxDir) {
     ref:                 r.ref || null,
     amxmodx_dir:         r.amxmodx_dir || globalAmxDir,
     plugins_ini_postfix: r.plugins_ini_postfix != null ? String(r.plugins_ini_postfix) : globalPostfix,
-    exclude:             r.exclude || [],
+    exclude:             r.exclude       || [],
+    exclude_files:       r.exclude_files || [],
     deps_override:       r.deps_override ? parseDepsLines(r.deps_override) : null,
   };
 }

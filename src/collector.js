@@ -34,10 +34,9 @@ async function collectAll(manifest, repoLocalDirs, buildDir) {
       continue;
     }
 
-    const files = await glob('**/*', {
+    const files = await glob(['**/*', ...repoConfig.exclude_files.map((p) => `!${p}`)], {
       cwd: srcDir,
       onlyFiles: true,
-      ignore: [],
     });
 
     let copied = 0;

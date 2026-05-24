@@ -1,50 +1,39 @@
 const fs    = require('fs');
 const path  = require('path');
 const chalk = require('chalk');
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const glob  = require('fast-glob');
 const logger = require('./logger');
 
-const PREFIX = chalk.bold.white('[amxx-builder]');
-
-/**
- * Compiles all .sma files:
- *   - from <amxmodx_dir>/scripting/ of each remote repo
- *   - from local <amxmodx.dir>/scripting/ next to the manifest (local-only builds)
- * Output .amxx files go to build/amxmodx/plugins/.
- * Returns array of { amxxName, plugins_ini_postfix, ini_comment, repo, ref }.
- */
 async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs, buildDir) {
   const pluginsDir = path.join(buildDir, 'amxmodx', 'plugins');
   fs.mkdirSync(pluginsDir, { recursive: true });
 
-  const compiled = [];
+  const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
 
-  // Build a unified list of sources: remote repos + local dir
+  // ── Build unified source list ──────────────────────────────────────────────
   const sources = manifest.repos.map((repoConfig) => ({
-    label:       repoConfig.repo,
-    ref:         repoConfig._resolvedRef || repoConfig.ref || 'HEAD',
+    label:        repoConfig.repo,
+    ref:          repoConfig._resolvedRef || repoConfig.ref || 'HEAD',
     scriptingDir: path.join(
       repoLocalDirs[`${repoConfig.repo}@${repoConfig._resolvedRef || repoConfig.ref || 'HEAD'}`],
       repoConfig.amxmodx_dir,
       'scripting'
     ),
-    exclude:     repoConfig.exclude,
-    postfix:     repoConfig.plugins_ini_postfix,
+    exclude: repoConfig.exclude,
+    postfix: repoConfig.plugins_ini_postfix,
   }));
 
-  // Local amxmodx/scripting/ next to manifest (always included)
   const localScriptingDir = path.join(path.dirname(manifest._path), manifest.amxmodx.dir, 'scripting');
   if (fs.existsSync(localScriptingDir)) {
     sources.push({
-      label:        '(local)',
-      ref:          'local',
-      scriptingDir: localScriptingDir,
-      exclude:      [],
-      postfix:      manifest.globalPostfix,
+      label: '(local)', ref: 'local', scriptingDir: localScriptingDir,
+      exclude: [], postfix: manifest.globalPostfix,
     });
   }
 
+  // ── Collect all .sma tasks ─────────────────────────────────────────────────
+  const tasks = [];
   for (const src of sources) {
     const { scriptingDir, exclude, postfix, label, ref } = src;
 
@@ -59,40 +48,86 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
     const excluded = await findExcluded(scriptingDir, exclude);
     for (const ex of excluded) logger.skip(`Skipped (excluded): ${ex}`);
 
-    const localIncDir    = path.join(scriptingDir, 'include');
-    const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
-    const allIncludes = [];
-    if (fs.existsSync(localIncDir))     allIncludes.push(`-i${localIncDir}`);
-    if (fs.existsSync(collectedIncDir)) allIncludes.push(`-i${collectedIncDir}`);
-    for (const d of includeDirs) allIncludes.push(`-i${d}`);
+    const localIncDir = path.join(scriptingDir, 'include');
+    const includes = [];
+    if (fs.existsSync(localIncDir))     includes.push(`-i${localIncDir}`);
+    if (fs.existsSync(collectedIncDir)) includes.push(`-i${collectedIncDir}`);
+    for (const d of includeDirs) includes.push(`-i${d}`);
 
     for (const smaRel of smaFiles) {
-      const srcPath = path.join(scriptingDir, smaRel);
-      const outName = path.basename(smaRel, '.sma') + '.amxx';
-      const outPath = path.join(pluginsDir, outName);
-
-      process.stdout.write(`${PREFIX} Compiling ${path.basename(smaRel)} `);
-
-      const result = spawnSync(compilerPath, [srcPath, `-o${outPath}`, ...allIncludes], {
-        encoding: 'utf8',
-        windowsHide: true,
+      const baseName = path.basename(smaRel);
+      tasks.push({
+        label, ref, postfix, baseName,
+        srcPath:  path.join(scriptingDir, smaRel),
+        outName:  baseName.replace(/\.sma$/, '.amxx'),
+        outPath:  path.join(pluginsDir, baseName.replace(/\.sma$/, '.amxx')),
+        includes,
       });
-
-      if (result.status !== 0) {
-        process.stdout.write('\n');
-        logger.error(`Compiling ${path.basename(smaRel)} ... FAILED`);
-        if (result.stderr) process.stderr.write(result.stderr);
-        if (result.stdout) process.stderr.write(result.stdout);
-        throw new Error(`Compilation failed: ${smaRel}`);
-      }
-
-      process.stdout.write(dots(path.basename(smaRel)) + chalk.green('OK') + '\n');
-
-      compiled.push({ amxxName: outName, plugins_ini_postfix: postfix, ini_comment: null, repo: label, ref });
     }
   }
 
+  if (!tasks.length) return [];
+
+  logger.info(`Compiling ${tasks.length} plugin(s)...`);
+
+  // ── Run all compilations in parallel ──────────────────────────────────────
+  const settled = await Promise.allSettled(
+    tasks.map((task) => runCompile(compilerPath, task))
+  );
+
+  const compiled = [];
+  const failed   = [];
+
+  for (let i = 0; i < settled.length; i++) {
+    if (settled[i].status === 'fulfilled') {
+      compiled.push(settled[i].value);
+    } else {
+      failed.push({ task: tasks[i], err: settled[i].reason });
+    }
+  }
+
+  if (failed.length) {
+    for (const { task, err } of failed) {
+      logger.error(`FAILED: ${task.baseName}`);
+      const out = (err.compilerOutput || '').trim();
+      if (out) process.stderr.write(out + '\n');
+    }
+    throw new Error(
+      `Compilation failed (${failed.length}/${tasks.length}): ` +
+      failed.map(({ task }) => task.baseName).join(', ')
+    );
+  }
+
   return compiled;
+}
+
+async function runCompile(compilerPath, task) {
+  const { srcPath, outPath, outName, includes, baseName, postfix, label, ref } = task;
+
+  const { status, output } = await spawnAsync(compilerPath, [srcPath, `-o${outPath}`, ...includes]);
+
+  if (status !== 0) {
+    const err = new Error(`Compilation failed: ${baseName}`);
+    err.compilerOutput = output;
+    throw err;
+  }
+
+  process.stdout.write(
+    `${chalk.bold.white('[amxx-builder]')}   ${baseName} ${dots(baseName)} ${chalk.green('OK')}\n`
+  );
+
+  return { amxxName: outName, plugins_ini_postfix: postfix, ini_comment: null, repo: label, ref };
+}
+
+function spawnAsync(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, { windowsHide: true });
+    let output = '';
+    if (proc.stdout) proc.stdout.on('data', (d) => output += d);
+    if (proc.stderr) proc.stderr.on('data', (d) => output += d);
+    proc.on('close', (code) => resolve({ status: code, output }));
+    proc.on('error', reject);
+  });
 }
 
 async function findExcluded(dir, patterns) {
@@ -103,7 +138,7 @@ async function findExcluded(dir, patterns) {
 }
 
 function dots(filename) {
-  return ' ' + '.'.repeat(Math.max(1, 42 - filename.length)) + ' ';
+  return chalk.dim(' ' + '.'.repeat(Math.max(1, 42 - filename.length)) + ' ');
 }
 
 module.exports = { compilePlugins };
