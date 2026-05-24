@@ -34,9 +34,11 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          npm version "${VERSION#v}" --no-git-tag-version
+          git add package.json package-lock.json
           git add -f dist/
           if git diff --cached --quiet; then
-            echo "dist/ already up to date, skipping commit"
+            echo "nothing changed, skipping commit"
           else
             git commit -m "chore: build dist for $VERSION"
             git push origin HEAD:refs/heads/master
