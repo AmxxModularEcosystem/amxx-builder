@@ -4,6 +4,7 @@ const glob = require('fast-glob');
 const logger = require('./logger');
 const { parseDepsLines } = require('./manifest');
 const { fetchRepo } = require('./repo-fetcher');
+const { fetchReleaseDep } = require('./release-fetcher');
 
 /**
  * Resolves all deps, clones them, copies .inc files to build/_includes/,
@@ -29,18 +30,18 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
 
     for (const dep of repoDeps) {
       const k = normalize(dep.repo);
-      if (!merged.has(k)) merged.set(k, { ...dep, source: 'repo' });
+      if (!merged.has(k)) merged.set(k, { ...dep, _from: 'repo' });
     }
   }
 
   // manifest.globalDeps win over everything
   for (const dep of manifest.globalDeps) {
-    merged.set(normalize(dep.repo), { ...dep, source: 'manifest' });
+    merged.set(normalize(dep.repo), { ...dep, _from: 'manifest' });
   }
 
   if (merged.size === 0) return [];
 
-  const overridden = [...merged.values()].filter((d) => d.source === 'manifest').length;
+  const overridden = [...merged.values()].filter((d) => d._from === 'manifest').length;
   logger.info(
     `Merged deps: ${merged.size} unique` +
     (overridden ? ` (${overridden} overridden by manifest)` : '')
@@ -52,8 +53,13 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
   const includeDirs = [];
 
   for (const [k, dep] of merged) {
-    const depDir = await fetchRepo(dep.repo, dep.ref, token, noFetch, manifest.github.ssh);
-    const srcDir = resolveIncludePath(depDir, dep.include_path, dep.repo);
+    let srcDir;
+    if (dep.source === 'release') {
+      srcDir = await fetchReleaseDep(dep, token, noFetch);
+    } else {
+      const depDir = await fetchRepo(dep.repo, dep.ref, token, noFetch, manifest.github.ssh);
+      srcDir = resolveIncludePath(depDir, dep.include_path, dep.repo);
+    }
 
     const destDir = path.join(includesRoot, k.replace('/', '__'));
     fs.mkdirSync(destDir, { recursive: true });
@@ -92,7 +98,7 @@ function resolveIncludePath(repoDir, explicitPath, repoName) {
     if (!fs.existsSync(full)) throw new Error(`Include path "${explicitPath}" not found in ${repoName}`);
     return full;
   }
-  for (const candidate of ['scripting/include', 'include', '.']) {
+  for (const candidate of ['scripting/include', 'amxmodx/scripting/include', 'include', '.']) {
     const full = path.join(repoDir, candidate);
     if (fs.existsSync(full)) return full;
   }

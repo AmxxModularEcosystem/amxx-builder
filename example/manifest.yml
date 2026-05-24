@@ -15,8 +15,16 @@ github:
 # ── Глобальные зависимости ────────────────────────────────────────────────────
 # Выигрывают над DEPS_LIST из любого репо
 deps:
+  # Краткая форма — клонирует репо (git), берёт .inc из scripting/include или include/
   - AmxxModularEcosystem/ParamsController@1.4.0
   - Next21Team/AmxxEasyHttp@1.4.0:amxx/scripting/include
+
+  # Полная форма — скачать release-архив с GitHub
+  - repo: rehlds/ReAPI
+    ref: latest               # 'latest' или конкретный тег
+    source: release           # скачать release-asset вместо git clone
+    include_path: addons/amxmodx/scripting/include
+    # asset: "*.zip"          # необязательно: glob-паттерн имени файла (дефолт: первый .zip)
 
 # ── Имя ini-файла: plugins-{postfix}.ini ─────────────────────────────────────
 plugins_ini_postfix: myserver

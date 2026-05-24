@@ -79,12 +79,36 @@ function makeRepo(r, globalPostfix, globalAmxDir) {
 function parseDepsLines(lines) {
   const result = [];
   for (const line of lines) {
+    // Long-form object (manifest only — DEPS_LIST files are always strings)
+    if (line && typeof line === 'object') {
+      if (!line.repo) throw new Error(`Dep entry missing "repo": ${JSON.stringify(line)}`);
+      if (!line.ref)  throw new Error(`Dep entry missing "ref": ${JSON.stringify(line)}`);
+      const source = line.source || 'git';
+      if (!['git', 'release'].includes(source)) {
+        throw new Error(`Dep entry "source" must be "git" or "release": ${JSON.stringify(line)}`);
+      }
+      result.push({
+        repo:         String(line.repo).trim(),
+        ref:          String(line.ref).trim(),
+        include_path: line.include_path ? String(line.include_path).trim() : null,
+        source,
+        asset:        line.asset != null ? line.asset : null,
+      });
+      continue;
+    }
+    // Short-form string: "owner/repo@ref[:include_path]"  (always git)
     const trimmed = String(line).trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const match = trimmed.match(/^([^@]+)@([^:]+)(?::(.+))?$/);
     if (!match) throw new Error(`Invalid dep entry: "${trimmed}"`);
     const [, repoPath, ref, includePath] = match;
-    result.push({ repo: repoPath.trim(), ref: ref.trim(), include_path: includePath ? includePath.trim() : null });
+    result.push({
+      repo:         repoPath.trim(),
+      ref:          ref.trim(),
+      include_path: includePath ? includePath.trim() : null,
+      source:       'git',
+      asset:        null,
+    });
   }
   return result;
 }
