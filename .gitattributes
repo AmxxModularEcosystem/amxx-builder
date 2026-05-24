@@ -1,0 +1,2 @@
+# Collapse generated dist files in GitHub diffs and exclude from language stats
+dist/** linguist-generated=true

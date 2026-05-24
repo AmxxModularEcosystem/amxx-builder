@@ -1,0 +1,35 @@
+name: 'amxx-builder'
+description: 'Build and package AMX Mod X server plugins from a manifest'
+author: 'ArKaNeMaN'
+
+branding:
+  icon: 'package'
+  color: 'blue'
+
+inputs:
+  manifest:
+    description: 'Path to manifest.yml (relative to workspace root)'
+    required: false
+    default: './manifest.yml'
+  build-dir:
+    description: 'Build staging directory'
+    required: false
+    default: './build'
+  no-fetch:
+    description: 'Skip re-cloning repos (use local runner cache only)'
+    required: false
+    default: 'false'
+  no-archive:
+    description: 'Skip archive creation — compile only'
+    required: false
+    default: 'false'
+  github-token:
+    description: >
+      GitHub token for accessing private repositories.
+      Defaults to the built-in GITHUB_TOKEN (sufficient for public repos).
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

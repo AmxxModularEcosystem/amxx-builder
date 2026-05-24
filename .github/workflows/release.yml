@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build dist
+        run: npx ncc build action-entry.js -o dist --minify --license licenses.txt
+
+      - name: Commit dist and update tags
+        run: |
+          VERSION="${{ github.ref_name }}"
+          MINOR=$(echo "$VERSION" | cut -d. -f1-2)
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -f dist/
+          git commit -m "chore: build dist for $VERSION"
+          git push origin HEAD:refs/heads/master
+
+          # Move exact tag to dist-included commit
+          git tag -fa "$VERSION" -m "Release $VERSION"
+
+          # Update floating minor and major tags
+          git tag -fa "$MINOR"   -m "Update $MINOR"
+          git tag -fa "$MAJOR"   -m "Update $MAJOR"
+
+          git push origin "$VERSION" "$MINOR" "$MAJOR" --force
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
