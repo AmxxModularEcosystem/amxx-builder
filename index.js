@@ -27,11 +27,12 @@ program
 program
   .command('build')
   .description('Build plugins from manifest')
-  .option('--manifest <path>',   'Path to manifest.yml', './manifest.yml')
-  .option('--build-dir <path>', 'Override build staging directory (default: ./build)')
-  .option('--no-fetch',         'Use cached repos without re-cloning')
-  .option('--no-archive',       'Compile only, skip archiving')
-  .option('--dry-run',          'Show plan without executing')
+  .option('--manifest <path>',       'Path to manifest.yml', './manifest.yml')
+  .option('--build-dir <path>',     'Override build staging directory (default: ./build)')
+  .option('--set <key=value...>',   'Override manifest field (e.g. --set version=1.2.3 --set output.archive_name="{name}-{version}.zip")')
+  .option('--no-fetch',             'Use cached repos without re-cloning')
+  .option('--no-archive',           'Compile only, skip archiving')
+  .option('--dry-run',              'Show plan without executing')
   .action(async (options) => {
     try {
       await runBuild(options);
@@ -72,8 +73,9 @@ async function runBuild(options) {
   const manifestDir = path.dirname(path.resolve(manifestPath));
   require('dotenv').config({ path: path.join(manifestDir, '.env') });
 
-  // Step 1 — Parse manifest
+  // Step 1 — Parse manifest, then apply --set overrides
   const manifest = parseManifest(manifestPath);
+  if (options.set?.length) applyOverrides(manifest, options.set);
   logger.info(`Manifest: ${manifest.name} v${manifest.version}`);
 
   if (dryRun) {
@@ -190,4 +192,29 @@ function printDryRun(manifest) {
   }
   logger.info(`Output: ${manifest.output.amxmodx_path}/ in ${manifest.output.archive_name}`);
   logger.info('--- END DRY RUN ---');
+}
+
+// ─── manifest overrides ───────────────────────────────────────────────────────
+
+function applyOverrides(manifest, pairs) {
+  for (const pair of pairs) {
+    const eqIdx = pair.indexOf('=');
+    if (eqIdx === -1) throw new Error(`--set: invalid format "${pair}" (expected key=value)`);
+    const keys  = pair.slice(0, eqIdx).trim().split('.');
+    const value = parseOverrideValue(pair.slice(eqIdx + 1));
+    let node = manifest;
+    for (let i = 0; i < keys.length - 1; i++) {
+      if (node[keys[i]] == null) node[keys[i]] = {};
+      node = node[keys[i]];
+    }
+    node[keys[keys.length - 1]] = value;
+  }
+}
+
+function parseOverrideValue(str) {
+  if (str === 'true')  return true;
+  if (str === 'false') return false;
+  if (str === 'null')  return null;
+  if (/^\d+$/.test(str)) return parseInt(str, 10);
+  return str;
 }

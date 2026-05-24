@@ -23,12 +23,29 @@ inputs:
     description: 'Skip archive creation — compile only'
     required: false
     default: 'false'
+  version:
+    description: 'Shorthand for --set version=<value>'
+    required: false
+  archive-name:
+    description: 'Shorthand for --set output.archive_name=<value>'
+    required: false
+  set:
+    description: |
+      Override any manifest field. One entry per line:
+        version=1.2.3
+        output.archive_name={name}-{version}.zip
+        output.generate_ini=false
+    required: false
   github-token:
     description: >
       GitHub token for accessing private repositories.
       Defaults to the built-in GITHUB_TOKEN (sufficient for public repos).
     required: false
     default: ${{ github.token }}
+
+outputs:
+  name:
+    description: 'Project name from the manifest (value of manifest.name)'
 
 runs:
   using: 'node20'
