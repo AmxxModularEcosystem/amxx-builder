@@ -117,7 +117,8 @@ program.parse(process.argv);
 
 function resolveManifestPath(explicit) {
   if (explicit) return explicit;
-  if (fs.existsSync('./amxbuild.yml')) return './amxbuild.yml';
+  if (fs.existsSync('./amxbuild.yml'))  return './amxbuild.yml';
+  if (fs.existsSync('./amxbuild.yaml')) return './amxbuild.yaml';
   if (fs.existsSync('./manifest.yml')) {
     logger.warn('manifest.yml is deprecated — rename it to amxbuild.yml');
     return './manifest.yml';
