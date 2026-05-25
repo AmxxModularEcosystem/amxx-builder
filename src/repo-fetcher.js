@@ -64,7 +64,8 @@ async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
   fs.mkdirSync(cacheDir, { recursive: true });
 
   try {
-    await simpleGit().clone(cloneUrl, cacheDir, cloneArgs);
+    const git = simpleGit({ env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' } });
+    await git.clone(cloneUrl, cacheDir, cloneArgs);
   } catch (err) {
     try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (_) {}
     throw new Error(`Failed to clone ${repo}@${cacheKey}: ${err.message}`);
@@ -76,7 +77,7 @@ async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
 
 function buildCloneUrl(repo, token, ssh) {
   if (ssh || !token) return `git@github.com:${repo}.git`;
-  return `https://${token}@github.com/${repo}.git`;
+  return `https://oauth2:${token}@github.com/${repo}.git`;
 }
 
 module.exports = { fetchRepo, resolveRef, getRepoCacheDir };
