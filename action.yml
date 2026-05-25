@@ -8,9 +8,9 @@ branding:
 
 inputs:
   manifest:
-    description: 'Path to manifest.yml (relative to workspace root)'
+    description: 'Path to amxbuild.yml (relative to workspace root)'
     required: false
-    default: './manifest.yml'
+    default: './amxbuild.yml'
   build-dir:
     description: 'Build staging directory'
     required: false

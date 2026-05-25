@@ -5,7 +5,7 @@ const logger = require('./logger');
 
 /**
  * Copies everything from each repo's amxmodx_dir into build/amxmodx/,
- * then merges local amxmodx/ and assets/ directories (next to manifest.yml).
+ * then merges local amxmodx/ and assets/ directories (next to amxbuild.yml).
  *
  * .sma files are NOT copied — they are compiled; .amxx output is written by the
  * compiler step that runs after this one, overwriting any pre-built plugins.

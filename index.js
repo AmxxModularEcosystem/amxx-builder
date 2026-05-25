@@ -27,7 +27,7 @@ program
 program
   .command('build')
   .description('Build plugins from manifest')
-  .option('--manifest <path>',       'Path to manifest.yml', './manifest.yml')
+  .option('--manifest <path>',       'Path to manifest file (default: amxbuild.yml, fallback: manifest.yml)')
   .option('--build-dir <path>',     'Override build staging directory (default: ./build)')
   .option('--set <key=value...>',   'Override manifest field (e.g. --set version=1.2.3 --set output.archive_name="{name}-{version}.zip")')
   .option('--no-fetch',             'Use cached repos without re-cloning')
@@ -58,12 +58,75 @@ program
     }
   });
 
+// ─── cache ───────────────────────────────────────────────────────────────────
+
+const cacheCmd = program
+  .command('cache')
+  .description('Manage the local cache');
+
+cacheCmd
+  .command('info', { isDefault: true })
+  .description('Show cache contents and disk usage')
+  .action(() => {
+    try {
+      runCacheInfo();
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+cacheCmd
+  .command('clean')
+  .description('Remove cached files')
+  .option('--compiler', 'Clean compiler cache (amxxpc binaries)')
+  .option('--repos',    'Clean repository clones')
+  .option('--deps',     'Clean release dependency clones')
+  .option('--all',      'Clean all caches')
+  .action((options) => {
+    try {
+      runCacheClean(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── init ────────────────────────────────────────────────────────────────────
+
+program
+  .command('init')
+  .description('Scaffold a new plugin project in the current directory')
+  .option('--name <name>',   'Package name (default: current directory name)')
+  .option('--workflow',      'Generate .github/workflows/ci.yml')
+  .option('--ci',           'Alias for --workflow')
+  .option('--plugin <name>', 'Create amxmodx/scripting/<name>.sma')
+  .option('--gitignore',     'Create .gitignore')
+  .action((options) => {
+    try {
+      runInit(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
 program.parse(process.argv);
 
 // ─── build implementation ────────────────────────────────────────────────────
 
+function resolveManifestPath(explicit) {
+  if (explicit) return explicit;
+  if (fs.existsSync('./amxbuild.yml')) return './amxbuild.yml';
+  if (fs.existsSync('./manifest.yml')) {
+    logger.warn('manifest.yml is deprecated — rename it to amxbuild.yml');
+    return './manifest.yml';
+  }
+  return './amxbuild.yml'; // will fail with a clear error in parseManifest
+}
+
 async function runBuild(options) {
-  const manifestPath = options.manifest || './manifest.yml';
+  const manifestPath = resolveManifestPath(options.manifest);
   const noFetch      = options.fetch === false;
   const noArchive    = options.archive === false;
   const dryRun       = options.dryRun || false;
@@ -177,6 +240,111 @@ async function runClean(options) {
   }
 }
 
+// ─── cache implementation ─────────────────────────────────────────────────────
+
+function dirSize(dir) {
+  if (!fs.existsSync(dir)) return 0;
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    total += entry.isDirectory() ? dirSize(p) : fs.statSync(p).size;
+  }
+  return total;
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024)        return `${bytes} B`;
+  if (bytes < 1024 ** 2)  return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3)  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function parseCacheKey(key) {
+  // owner__repo__ref  →  owner/repo @ ref
+  const parts = key.split('__');
+  if (parts.length < 3) return key;
+  return `${parts.slice(0, -1).join('/')} @ ${parts[parts.length - 1]}`;
+}
+
+function runCacheInfo() {
+  const cacheRoot = getCacheDir();
+  const compDir   = path.join(cacheRoot, 'amxxpc');
+  const reposDir  = path.join(cacheRoot, 'repos');
+  const depsDir   = path.join(cacheRoot, 'release-deps');
+
+  const total = dirSize(cacheRoot);
+  logger.info(`Cache: ${cacheRoot} (${fmtSize(total)} total)`);
+
+  if (!fs.existsSync(cacheRoot) || total === 0) {
+    logger.dim('  (empty)');
+    return;
+  }
+
+  if (fs.existsSync(compDir)) {
+    const versions = fs.readdirSync(compDir, { withFileTypes: true }).filter(e => e.isDirectory());
+    if (versions.length) {
+      logger.info('\nCompiler (amxxpc):');
+      for (const ver of versions) {
+        const verDir    = path.join(compDir, ver.name);
+        const platforms = fs.readdirSync(verDir, { withFileTypes: true }).filter(e => e.isDirectory());
+        for (const plat of platforms) {
+          const size = dirSize(path.join(verDir, plat.name));
+          logger.dim(`  ${ver.name.padEnd(14)} ${plat.name.padEnd(10)} ${fmtSize(size)}`);
+        }
+      }
+    }
+  }
+
+  if (fs.existsSync(reposDir)) {
+    const entries = fs.readdirSync(reposDir, { withFileTypes: true }).filter(e => e.isDirectory());
+    if (entries.length) {
+      logger.info(`\nRepos (${entries.length}, ${fmtSize(dirSize(reposDir))} total):`);
+      for (const e of entries) {
+        const label = parseCacheKey(e.name);
+        const size  = dirSize(path.join(reposDir, e.name));
+        logger.dim(`  ${label.padEnd(52)} ${fmtSize(size)}`);
+      }
+    }
+  }
+
+  if (fs.existsSync(depsDir)) {
+    const entries = fs.readdirSync(depsDir, { withFileTypes: true }).filter(e => e.isDirectory());
+    if (entries.length) {
+      logger.info(`\nRelease deps (${entries.length}, ${fmtSize(dirSize(depsDir))} total):`);
+      for (const e of entries) {
+        const label = parseCacheKey(e.name);
+        const size  = dirSize(path.join(depsDir, e.name));
+        logger.dim(`  ${label.padEnd(52)} ${fmtSize(size)}`);
+      }
+    }
+  }
+}
+
+function runCacheClean(options) {
+  const { all, compiler, repos, deps } = options;
+
+  if (!all && !compiler && !repos && !deps) {
+    logger.error('Specify what to clean: --compiler, --repos, --deps, or --all');
+    process.exit(1);
+  }
+
+  const cacheRoot = getCacheDir();
+  const targets = [];
+  if (all || compiler) targets.push({ dir: path.join(cacheRoot, 'amxxpc'),       label: 'compiler' });
+  if (all || repos)    targets.push({ dir: path.join(cacheRoot, 'repos'),         label: 'repos' });
+  if (all || deps)     targets.push({ dir: path.join(cacheRoot, 'release-deps'),  label: 'release deps' });
+
+  for (const { dir, label } of targets) {
+    if (!fs.existsSync(dir)) {
+      logger.dim(`  ${label}: already empty`);
+      continue;
+    }
+    const freed = dirSize(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    logger.success(`Cleaned ${label} (${fmtSize(freed)} freed)`);
+  }
+}
+
 // ─── dry-run ─────────────────────────────────────────────────────────────────
 
 function printDryRun(manifest) {
@@ -221,4 +389,127 @@ function parseOverrideValue(str) {
   if (str === 'null')  return null;
   if (/^\d+$/.test(str)) return parseInt(str, 10);
   return str;
+}
+
+// ─── init ─────────────────────────────────────────────────────────────────────
+
+function runInit(options) {
+  const pkgName = options.name || path.basename(process.cwd());
+  const version = require('./package.json').version;
+  const actionTag = `v${version.split('.')[0]}`;
+
+  writeIfAbsent('amxbuild.yml', manifestTemplate(pkgName));
+
+  if (options.workflow || options.ci) {
+    const dest = path.join('.github', 'workflows', 'ci.yml');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    writeIfAbsent(dest, workflowTemplate(actionTag));
+  }
+
+  if (options.plugin) {
+    const dest = path.join('amxmodx', 'scripting', `${options.plugin}.sma`);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    writeIfAbsent(dest, '');
+  }
+
+  if (options.gitignore) {
+    writeIfAbsent('.gitignore', [
+      '*.amxx', '*.zip', '.env', '.claude', 'build', 'dist', '',
+    ].join('\n'));
+  }
+}
+
+function writeIfAbsent(filePath, content) {
+  if (fs.existsSync(filePath)) {
+    logger.warn(`${filePath} already exists, skipping`);
+    return;
+  }
+  fs.writeFileSync(filePath, content);
+  logger.success(`Created ${filePath}`);
+}
+
+function manifestTemplate(name) {
+  const schemaUrl = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
+  return `# yaml-language-server: $schema=${schemaUrl}
+
+name: ${name}
+
+amxmodx:
+  version: "1.10.5428"
+
+deps:
+  # org/repo@tag
+
+output:
+  dir: ./
+  archive_name: "{name}.zip"
+  amxmodx_path: "{name}/addons/amxmodx"
+  readme: false
+  generate_ini: false
+`;
+}
+
+function workflowTemplate(actionTag) {
+  /* eslint-disable no-template-curly-in-string */
+  return `name: CI
+
+on:
+  push:
+    branches: [master, feature/**, fix/**]
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    types: [opened, reopened, synchronize]
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    outputs:
+      sha:  \${{ steps.sha.outputs.SHORT }}
+      name: \${{ steps.build.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: sha
+        run: echo "SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - id: build
+        uses: AmxxModularEcosystem/amxx-builder@${actionTag}
+        with:
+          set: |
+            output.pack=false
+            output.dir=./artifact
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: \${{ steps.build.outputs.name }}-\${{ steps.sha.outputs.SHORT }}-dev
+          path: artifact/
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: |
+      github.event_name == 'release' &&
+      github.event.action == 'published' &&
+      startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: \${{ needs.build.outputs.name }}-\${{ needs.build.outputs.sha }}-dev
+          path: artifact/
+
+      - name: Package for release
+        run: |
+          cd artifact
+          zip -r "../\${{ needs.build.outputs.name }}-\${{ github.ref_name }}.zip" .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: "\${{ needs.build.outputs.name }}-*.zip"
+`;
+  /* eslint-enable no-template-curly-in-string */
 }

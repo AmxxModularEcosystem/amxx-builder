@@ -1,0 +1,225 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json",
+  "title": "amxx-builder manifest",
+  "description": "Manifest file for the amxb build tool (amxx-builder)",
+  "type": "object",
+  "required": ["name"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Project name. Used as a {name} placeholder in archive_name and amxmodx_path."
+    },
+    "version": {
+      "type": ["string", "number"],
+      "description": "Project version. Used as a {version} placeholder in archive_name. Can be overridden via --set version=X or the action 'version' input."
+    },
+    "amxmodx": {
+      "type": "object",
+      "description": "AMX Mod X compiler settings.",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "amxxpc compiler version to use. Format: major.minor.build (e.g. \"1.10.5428\"). Omit to use the latest available.",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "examples": ["1.10.5428", "1.9.0"]
+        },
+        "dir": {
+          "type": "string",
+          "description": "Name of the amxmodx directory inside each repo (default: \"amxmodx\").",
+          "default": "amxmodx"
+        }
+      }
+    },
+    "github": {
+      "type": "object",
+      "description": "GitHub authentication and clone settings.",
+      "additionalProperties": false,
+      "properties": {
+        "token_env": {
+          "type": "string",
+          "description": "Name of the environment variable holding the GitHub PAT (default: \"GITHUB_TOKEN\").",
+          "default": "GITHUB_TOKEN"
+        },
+        "ssh": {
+          "type": "boolean",
+          "description": "Use SSH instead of HTTPS for git clone (default: false).",
+          "default": false
+        }
+      }
+    },
+    "plugins_ini_postfix": {
+      "type": "string",
+      "description": "Global postfix appended to generated plugins-<postfix>.ini filenames. Each repo gets its own INI file."
+    },
+    "deps": {
+      "type": "array",
+      "description": "Global include dependencies (.inc files) applied to all plugin compilations.",
+      "items": { "$ref": "#/definitions/depEntry" }
+    },
+    "repos": {
+      "type": "array",
+      "description": "GitHub repositories to pull AMX Mod X content from.",
+      "items": { "$ref": "#/definitions/repoEntry" }
+    },
+    "output": {
+      "type": "object",
+      "description": "Output packaging settings.",
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "type": "string",
+          "description": "Directory to write the output archive or copied files (default: \"./dist\").",
+          "default": "./"
+        },
+        "archive_name": {
+          "type": "string",
+          "description": "Archive filename. Supports {name} and {version} placeholders (default: \"{name}-{version}.zip\").",
+          "default": "{name}.zip",
+          "examples": ["{name}.zip", "{name}-{version}.zip"]
+        },
+        "amxmodx_path": {
+          "type": "string",
+          "description": "Path of the amxmodx directory inside the archive (default: \"addons/amxmodx\").",
+          "default": "addons/amxmodx",
+          "examples": ["{name}/addons/amxmodx", "addons/amxmodx"]
+        },
+        "assets_path": {
+          "type": "string",
+          "description": "Local directory whose contents are copied to the archive root alongside amxmodx_path."
+        },
+        "readme": {
+          "type": "boolean",
+          "description": "Include the project README.md in the archive root (default: false).",
+          "default": false
+        },
+        "generate_ini": {
+          "type": "boolean",
+          "description": "Generate plugins-*.ini files listing compiled plugins (default: true).",
+          "default": true
+        },
+        "pack": {
+          "type": "boolean",
+          "description": "Create a zip archive. Set to false to copy files to output.dir instead — useful for CI artifacts (default: true).",
+          "default": true
+        },
+        "on_conflict": {
+          "type": "string",
+          "description": "How to handle duplicate files when multiple repos provide the same path (default: \"last_wins\").",
+          "enum": ["last_wins", "first_wins", "error"],
+          "default": "last_wins"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "depEntry": {
+      "description": "An include dependency. Either a shorthand string or an object.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Shorthand: \"owner/repo@ref\" or \"owner/repo@ref:include_path\"",
+          "pattern": "^[^@\\s]+@[^:\\s]+(:.+)?$",
+          "examples": [
+            "rehlds/ReAPI@5.29.0.358",
+            "someorg/amxmodx-dev@v1.9.0:scripting/include"
+          ]
+        },
+        {
+          "type": "object",
+          "required": ["repo", "ref"],
+          "additionalProperties": false,
+          "properties": {
+            "repo": {
+              "type": "string",
+              "description": "GitHub repository in \"owner/repo\" format."
+            },
+            "ref": {
+              "type": "string",
+              "description": "Tag, branch, or commit SHA."
+            },
+            "include_path": {
+              "type": "string",
+              "description": "Path inside the repo or release asset where .inc files are located."
+            },
+            "source": {
+              "type": "string",
+              "description": "How to fetch the dependency: \"git\" clones the repo, \"release\" downloads a release asset (default: \"git\").",
+              "enum": ["git", "release"],
+              "default": "git"
+            },
+            "asset": {
+              "description": "For source=release: which release asset to download.",
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "Glob pattern matching the release asset filename (e.g. \"*-include*.zip\")."
+                },
+                {
+                  "type": "integer",
+                  "description": "Zero-based index of the release asset.",
+                  "minimum": 0
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "repoEntry": {
+      "description": "A GitHub repository to include. Either a shorthand string or an object.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Shorthand: \"owner/repo\" or \"owner/repo@ref\"",
+          "pattern": "^[^\\s]+(/[^\\s@]+)?(@[^\\s]+)?$",
+          "examples": [
+            "AmxxModularEcosystem/VipModular",
+            "AmxxModularEcosystem/VipModular@5.0.0"
+          ]
+        },
+        {
+          "type": "object",
+          "required": ["repo"],
+          "additionalProperties": false,
+          "properties": {
+            "repo": {
+              "type": "string",
+              "description": "GitHub repository in \"owner/repo\" format."
+            },
+            "ref": {
+              "type": "string",
+              "description": "Tag, branch, commit SHA, or \"latest\" (resolves to the latest GitHub release).",
+              "examples": ["main", "v1.2.3", "latest", "abc1234"]
+            },
+            "amxmodx_dir": {
+              "type": "string",
+              "description": "Override the amxmodx directory name for this repo (defaults to manifest.amxmodx.dir)."
+            },
+            "plugins_ini_postfix": {
+              "type": "string",
+              "description": "Override the INI postfix for this repo."
+            },
+            "exclude": {
+              "type": "array",
+              "description": "Glob patterns for paths to exclude when copying content from this repo.",
+              "items": { "type": "string" }
+            },
+            "exclude_files": {
+              "type": "array",
+              "description": "Specific filenames to exclude from this repo.",
+              "items": { "type": "string" }
+            },
+            "deps_override": {
+              "type": "array",
+              "description": "Explicit dep list for this repo, replacing the auto-detected DEPS_LIST file.",
+              "items": { "$ref": "#/definitions/depEntry" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

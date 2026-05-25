@@ -4,7 +4,7 @@ const core = require('@actions/core');
 const fs   = require('fs');
 const yaml = require('js-yaml');
 
-const manifest     = core.getInput('manifest')     || './manifest.yml';
+const manifest     = core.getInput('manifest')     || './amxbuild.yml';
 const buildDir     = core.getInput('build-dir')    || './build';
 
 // Expose manifest name as output before the build runs

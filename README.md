@@ -1,6 +1,6 @@
 # amxx-builder
 
-CLI-инструмент для сборки AMX Mod X серверов. Читает `manifest.yml`, клонирует плагины с GitHub, компилирует `.sma → .amxx` и упаковывает всё в готовый `.zip`.
+CLI-инструмент для сборки AMX Mod X серверов. Читает `amxbuild.yml`, клонирует плагины с GitHub, компилирует `.sma → .amxx` и упаковывает всё в готовый `.zip`.
 
 ## Установка
 
@@ -27,7 +27,7 @@ $env:GITHUB_TOKEN="ghp_xxx"; irm .../install.ps1 | iex
 ## Использование
 
 ```bash
-amxb build                          # manifest.yml в текущей папке
+amxb build                          # amxbuild.yml в текущей папке
 amxb build --manifest path/to.yml   # явный путь
 amxb build --dry-run                # показать план без выполнения
 amxb build --no-fetch               # использовать кэш, без клонирования
@@ -77,11 +77,11 @@ amxmodx/
 
 ## Локальные файлы
 
-Рядом с `manifest.yml` можно положить:
+Рядом с `amxbuild.yml` можно положить:
 
 ```text
 my-server/
-  manifest.yml
+  amxbuild.yml
   amxmodx/               ← мержится в addons/amxmodx/ (конфиги, доп. файлы)
     configs/
       server.cfg
@@ -102,7 +102,7 @@ uses: AmxxModularEcosystem/amxx-builder@v0
 
 | Инпут | По умолчанию | Описание |
 | --- | --- | --- |
-| `manifest` | `./manifest.yml` | Путь к манифесту |
+| `manifest` | `./amxbuild.yml` | Путь к манифесту |
 | `build-dir` | `./build` | Директория сборки |
 | `version` | — | Переопределяет `manifest.version` |
 | `archive-name` | — | Переопределяет `output.archive_name` |
@@ -119,7 +119,7 @@ uses: AmxxModularEcosystem/amxx-builder@v0
 
 ### Полный пример воркфлоу
 
-Манифест плагина (`manifest.yml`):
+Манифест плагина (`amxbuild.yml`):
 
 ```yaml
 name: MyPlugin
@@ -251,7 +251,7 @@ repos:
 
 ## Полный пример
 
-Все доступные опции: [`example/manifest.yml`](example/manifest.yml).
+Все доступные опции: [`example/amxbuild.yml`](example/amxbuild.yml).
 
 ## Приоритеты
 

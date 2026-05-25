@@ -57,6 +57,6 @@ try {
 
 Write-Ok 'Done. Usage:'
 Write-Host '  cd your-server-project'
-Write-Host '  amxb build                      # uses ./manifest.yml'
+Write-Host '  amxb build                      # uses ./amxbuild.yml'
 Write-Host '  amxb build --manifest other.yml'
 Write-Host '  amxb build --dry-run'

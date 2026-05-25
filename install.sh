@@ -46,6 +46,6 @@ fi
 
 ok "Done. Usage:"
 echo "  cd your-server-project"
-echo "  amxb build                      # uses ./manifest.yml"
+echo "  amxb build                      # uses ./amxbuild.yml"
 echo "  amxb build --manifest other.yml"
 echo "  amxb build --dry-run"
