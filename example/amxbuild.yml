@@ -2,6 +2,7 @@
 
 name: MyServer
 version: "1.0.0"
+platform: linux    # целевая платформа сервера (linux/windows/mac, default: хост)
 
 # ── Компилятор ────────────────────────────────────────────────────────────────
 # version не указан → берётся последний релиз автоматически
@@ -48,6 +49,41 @@ repos:
     ref: latest           # автоматически берёт тег последнего релиза
     exclude:
       - "CWAPI-A-Test.sma"
+
+# ── Ассеты ────────────────────────────────────────────────────────────────────
+# Локальные ассеты (папка assets/ рядом с манифестом) всегда перекрывают удалённые.
+assets:
+  on_conflict: last_wins   # среди удалённых источников (last_wins / first_wins)
+
+  sources:
+    # Базовый amxmodx — использует platform и amxmodx.version выше
+    - source: amxmodx
+      map:
+        - from: addons/amxmodx/modules/
+          to: addons/amxmodx/modules/
+        - from: addons/amxmodx/plugins/
+          to: addons/amxmodx/plugins/
+
+    # Архив по URL: всё содержимое → корень ассетов
+    - url: https://cdn.example.com/map-pack.zip
+      cache: local           # кэш рядом с манифестом в .amxb-cache/
+
+    # Архив: взять подпапку, положить в конкретное место
+    - url: https://cdn.example.com/full-pack.zip
+      cache: global
+      map:
+        - from: resource/models/     # содержимое папки → models/
+          to: models/
+        - from: resource/sound/      # содержимое папки → sound/
+          to: sound/
+
+    # Одиночный файл → в указанную папку
+    - url: https://cdn.example.com/weapon.wav
+      to: sound/weapons/
+
+    # Одиночный файл с переименованием
+    - url: https://cdn.example.com/pistol_v2.mdl
+      to: models/v_pistol.mdl
 
 # ── Выходной архив ────────────────────────────────────────────────────────────
 output:

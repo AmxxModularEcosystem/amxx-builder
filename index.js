@@ -13,6 +13,7 @@ const { fetchRepo, resolveRef } = require('./src/repo-fetcher');
 const { resolveDeps }    = require('./src/deps-resolver');
 const { compilePlugins } = require('./src/compiler');
 const { collectAll }     = require('./src/collector');
+const { fetchAssets }    = require('./src/asset-fetcher');
 const { buildIniFiles }  = require('./src/ini-builder');
 const { createArchive, copyOutput } = require('./src/archiver');
 const { getCacheDir }    = require('./src/cache-dir');
@@ -187,6 +188,9 @@ async function runBuild(options) {
   // Step 5 — Collect: copy amxmodx/ dirs from repos + local amxmodx/ + local assets/
   //           Must run before compile so that compiled .amxx always overwrites any pre-built ones.
   await collectAll(manifest, repoLocalDirs, buildDir);
+
+  // Step 5.5 — Fetch remote assets, overlay onto build/assets/ (local assets from Step 5 win)
+  await fetchAssets(manifest, buildDir);
 
   // Step 6 — Compile .sma → .amxx (runs after collect, wins over any pre-built plugins)
   const compiledPlugins = await compilePlugins(

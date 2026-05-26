@@ -12,6 +12,7 @@ function parseManifest(manifestPath) {
 
   if (!raw.name) throw new Error('manifest: missing required field "name"');
 
+  const platform = parsePlatform(raw.platform);
   const tokenEnv = (raw.github && raw.github.token_env) || 'GITHUB_TOKEN';
   const token    = process.env[tokenEnv] || null;
   const ssh      = !!(raw.github && raw.github.ssh);
@@ -24,9 +25,10 @@ function parseManifest(manifestPath) {
 
   const output = raw.output || {};
   return {
-    _path:   absPath,
-    name:    raw.name,
-    version: String(raw.version || '1.0.0'),
+    _path:    absPath,
+    name:     raw.name,
+    version:  String(raw.version || '1.0.0'),
+    platform,
     amxmodx: {
       version: (raw.amxmodx && raw.amxmodx.version) ? String(raw.amxmodx.version) : null,
       dir:     globalAmxDir,
@@ -35,6 +37,7 @@ function parseManifest(manifestPath) {
     globalDeps,
     globalPostfix,
     repos,
+    assets:  parseAssets(raw.assets || {}),
     output: {
       dir:          output.dir || './dist',
       archive_name: output.archive_name || '{name}-{version}.zip',
@@ -116,6 +119,45 @@ function parseDepsLines(lines) {
     });
   }
   return result;
+}
+
+function parsePlatform(val) {
+  const valid = ['linux', 'windows', 'mac'];
+  if (val == null) return null; // null = auto-detect host at runtime
+  if (!valid.includes(val)) throw new Error(`manifest: platform must be one of: ${valid.join(', ')}`);
+  return val;
+}
+
+function parseAssets(raw) {
+  const valid = ['last_wins', 'first_wins'];
+  const onConflict = raw.on_conflict || 'last_wins';
+  if (!valid.includes(onConflict)) {
+    throw new Error(`manifest: assets.on_conflict must be one of: ${valid.join(', ')}`);
+  }
+  return {
+    on_conflict: onConflict,
+    sources: (raw.sources || []).map(parseAssetSource),
+  };
+}
+
+function parseAssetSource(s) {
+  if (s.source === 'amxmodx') {
+    return { type: 'amxmodx', map: parseAssetMap(s), cache: parseAssetCache(s.cache) };
+  }
+  if (!s.url) throw new Error(`asset source missing "url": ${JSON.stringify(s)}`);
+  return { type: 'url', url: s.url, map: parseAssetMap(s), cache: parseAssetCache(s.cache) };
+}
+
+function parseAssetMap(s) {
+  if (s.map) return s.map.map(e => ({ from: e.from || null, to: e.to || null }));
+  return [{ from: s.from || null, to: s.to || null }];
+}
+
+function parseAssetCache(val) {
+  const valid = ['none', 'local', 'global'];
+  if (val == null) return 'none';
+  if (!valid.includes(val)) throw new Error(`asset source cache must be one of: ${valid.join(', ')}`);
+  return val;
 }
 
 module.exports = { parseManifest, parseDepsLines };

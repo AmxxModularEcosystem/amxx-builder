@@ -92,6 +92,54 @@ my-server/
       weapon.wav
 ```
 
+## Удалённые ассеты
+
+Поле `assets.sources` позволяет добавлять файлы из URL-источников. Локальная папка `assets/` всегда перекрывает удалённые источники.
+
+```yaml
+platform: linux   # целевая платформа сервера (влияет на source: amxmodx)
+
+assets:
+  on_conflict: last_wins   # среди удалённых: last_wins / first_wins
+
+  sources:
+    # Базовый amxmodx (modules, plugins и т.д.)
+    - source: amxmodx
+      map:
+        - from: addons/amxmodx/modules/
+          to: addons/amxmodx/modules/
+
+    # Архив — всё содержимое в корень ассетов
+    - url: https://cdn.example.com/pack.zip
+      cache: local           # none (default) / local (.amxb-cache/) / global (~/.cache/)
+
+    # Архив — несколько правил из одного источника
+    - url: https://cdn.example.com/full-pack.zip
+      map:
+        - from: resource/models/   # содержимое папки → models/
+          to: models/
+        - from: resource/sound/
+          to: sound/
+
+    # Одиночный файл
+    - url: https://cdn.example.com/weapon.wav
+      to: sound/weapons/
+
+    # Одиночный файл с переименованием (to без trailing slash)
+    - url: https://cdn.example.com/pistol_v2.mdl
+      to: models/v_pistol.mdl
+```
+
+**Семантика `from` / `to` (trailing slash = содержимое папки):**
+
+| `from` | `to` | Результат |
+| --- | --- | --- |
+| *(нет)* | *(нет)* | весь архив / файл → корень ассетов |
+| `models/` | `models/` | содержимое `models/` → `assets/models/` |
+| `models` | `models/` | папка целиком → `assets/models/models/` |
+| `sound/gun.wav` | `sound/` | файл → `assets/sound/gun.wav` |
+| `sound/gun.wav` | `sound/pistol.wav` | файл с переименованием |
+
 ## GitHub Actions
 
 ```yaml

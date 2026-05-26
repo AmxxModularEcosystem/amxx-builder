@@ -15,6 +15,11 @@
       "type": ["string", "number"],
       "description": "Project version. Used as a {version} placeholder in archive_name. Can be overridden via --set version=X or the action 'version' input."
     },
+    "platform": {
+      "type": "string",
+      "description": "Target deployment platform. Affects which amxmodx base package is downloaded for asset sources. Defaults to the host platform.",
+      "enum": ["linux", "windows", "mac"]
+    },
     "amxmodx": {
       "type": "object",
       "description": "AMX Mod X compiler settings.",
@@ -63,6 +68,24 @@
       "type": "array",
       "description": "GitHub repositories to pull AMX Mod X content from.",
       "items": { "$ref": "#/definitions/repoEntry" }
+    },
+    "assets": {
+      "type": "object",
+      "description": "Remote asset sources to include in the build.",
+      "additionalProperties": true,
+      "properties": {
+        "on_conflict": {
+          "type": "string",
+          "description": "How to handle duplicate files among remote sources. Local assets always win regardless of this setting (default: \"last_wins\").",
+          "enum": ["last_wins", "first_wins"],
+          "default": "last_wins"
+        },
+        "sources": {
+          "type": "array",
+          "description": "List of remote asset sources.",
+          "items": { "$ref": "#/definitions/assetSource" }
+        }
+      }
     },
     "output": {
       "type": "object",
@@ -220,6 +243,57 @@
           }
         }
       ]
+    },
+    "assetMapEntry": {
+      "type": "object",
+      "description": "A single from→to mapping for an asset source.",
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Path inside the source (archive root or single file). Trailing slash means \"take contents\"; no trailing slash means \"take the item itself\". Omit to take everything."
+        },
+        "to": {
+          "type": "string",
+          "description": "Destination path in the asset tree. Trailing slash means \"place inside this folder\". Omit to place at asset root. For a single file without trailing slash, acts as a rename."
+        }
+      }
+    },
+    "assetSource": {
+      "type": "object",
+      "description": "A remote asset source.",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Special built-in source type. Use \"amxmodx\" to include the base amxmodx package (uses manifest.platform and amxmodx.version).",
+          "enum": ["amxmodx"]
+        },
+        "url": {
+          "type": "string",
+          "description": "URL of a file or archive to download. Supported: .zip, .tar.gz, .tar.bz2, and single files.",
+          "format": "uri"
+        },
+        "from": {
+          "type": "string",
+          "description": "Path inside the source to extract. Shorthand for a single map entry. Trailing slash = take contents; no trailing slash = take the item itself."
+        },
+        "to": {
+          "type": "string",
+          "description": "Destination in the asset tree. Shorthand for a single map entry. Trailing slash = place inside folder; no trailing slash on single file = rename."
+        },
+        "map": {
+          "type": "array",
+          "description": "Multiple from→to extraction rules for this source. Takes precedence over top-level from/to.",
+          "items": { "$ref": "#/definitions/assetMapEntry" }
+        },
+        "cache": {
+          "type": "string",
+          "description": "Caching strategy for this source (default: \"none\").\n- none: download to build/ on every build\n- local: cache in .amxb-cache/ next to the manifest\n- global: cache in the global amxx-builder cache directory",
+          "enum": ["none", "local", "global"],
+          "default": "none"
+        }
+      }
     }
   }
 }

@@ -122,9 +122,75 @@ async function fetchLatestVersion() {
 }
 
 function getPlatform() {
+  return getHostPlatform();
+}
+
+function getHostPlatform() {
   if (process.platform === 'win32')  return 'windows';
   if (process.platform === 'darwin') return 'mac';
   return 'linux';
+}
+
+/**
+ * Returns the path to the full amxmodx addons/ tree for the given target platform.
+ * Downloads and extracts the base package if not yet cached.
+ * Used by asset-fetcher when source: amxmodx is specified.
+ *
+ * The returned directory contains addons/amxmodx/{plugins,configs,modules,...}
+ */
+async function getAmxmodxFullDir(version, platform) {
+  const cacheDir = path.join(getCacheDir(), 'amxxpc', version, platform);
+  const sentinel = path.join(cacheDir, '.addons-extracted');
+
+  if (fs.existsSync(sentinel)) {
+    return cacheDir;
+  }
+
+  const { major, minor, build } = parseVersion(version);
+  const downloadUrl = buildDownloadUrl(major, minor, build, platform);
+
+  logger.step(`Assets: downloading amxmodx ${version} (${platform}) for asset extraction...`);
+  logger.dim(`  ${downloadUrl}`);
+
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const archivePath = path.join(cacheDir, path.basename(downloadUrl));
+
+  await downloadFile(downloadUrl, archivePath);
+  extractAddons(archivePath, cacheDir, platform);
+  fs.rmSync(archivePath, { force: true });
+  fs.writeFileSync(sentinel, '');
+
+  logger.success(`Assets: amxmodx ${version} (${platform}) ready`);
+  return cacheDir;
+}
+
+function extractAddons(archivePath, destDir, platform) {
+  const ADDONS_PREFIX = 'addons/';
+
+  if (archivePath.endsWith('.zip')) {
+    const zip = new AdmZip(archivePath);
+    for (const entry of zip.getEntries()) {
+      const name = entry.entryName.replace(/\\/g, '/');
+      if (entry.isDirectory || !name.startsWith(ADDONS_PREFIX)) continue;
+      const rel  = name.slice(ADDONS_PREFIX.length);
+      if (!rel) continue;
+      const dest = path.join(destDir, 'addons', rel);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, entry.getData());
+    }
+  } else {
+    const tmpDir = destDir + '_addons_tmp';
+    try {
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const flag = archivePath.endsWith('.tar.bz2') ? 'xjf' : 'xzf';
+      execSync(`tar ${flag} "${archivePath}" -C "${tmpDir}"`, { stdio: 'pipe' });
+      const addonsSrc = findDir(tmpDir, 'addons');
+      if (!addonsSrc) throw new Error(`addons/ dir not found in amxmodx archive`);
+      copyDirContents(addonsSrc, path.join(destDir, 'addons'));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
 }
 
 async function downloadFile(url, dest) {
@@ -196,4 +262,4 @@ function copyDirContents(src, dest) {
   }
 }
 
-module.exports = { fetchCompiler };
+module.exports = { fetchCompiler, getAmxmodxFullDir, getHostPlatform };
