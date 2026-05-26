@@ -1,5 +1,5 @@
 # Локальная сборка — эквивалент build.bat
-# Запускается из папки плагина: amxb build --manifest manifest.local.yml
+# Запускается из папки плагина: amxb build --manifest amxbuild.local.yml
 # Компилирует amxmodx/scripting/*.sma и пакует всё в {name}.zip
 # Структура архива: /{name}/addons/amxmodx/ + /README.md
 

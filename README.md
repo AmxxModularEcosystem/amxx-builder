@@ -287,7 +287,7 @@ VipModular-5.0.0.zip
   README.md
 ```
 
-Полный пример: [`example/manifest.local.yml`](example/manifest.local.yml).
+Полный пример: [`example/amxbuild.local.yml`](example/amxbuild.local.yml).
 
 ## ref: latest
 
