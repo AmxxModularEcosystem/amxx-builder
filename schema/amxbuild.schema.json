@@ -266,8 +266,23 @@
       "properties": {
         "source": {
           "type": "string",
-          "description": "Special built-in source type. Use \"amxmodx\" to include the base amxmodx package (uses manifest.platform and amxmodx.version).",
-          "enum": ["amxmodx"]
+          "description": "Special built-in source type:\n- \"amxmodx\": base amxmodx package (uses manifest.platform and amxmodx.version)\n- \"release\": GitHub release asset, shares cache with deps (requires repo + ref)",
+          "enum": ["amxmodx", "release"]
+        },
+        "repo": {
+          "type": "string",
+          "description": "For source=release: GitHub repository in \"owner/repo\" format."
+        },
+        "ref": {
+          "type": "string",
+          "description": "For source=release: tag, or \"latest\" to resolve the latest GitHub release."
+        },
+        "asset": {
+          "description": "For source=release: which release asset to download (same as deps asset selector).",
+          "oneOf": [
+            { "type": "string", "description": "Glob pattern matching the asset filename." },
+            { "type": "integer", "description": "Zero-based index of the asset.", "minimum": 0 }
+          ]
         },
         "url": {
           "type": "string",

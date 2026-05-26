@@ -19,7 +19,20 @@ const { getCacheDir } = require('./cache-dir');
  */
 async function fetchReleaseDep(dep, token, noFetch) {
   const { repo, ref, include_path, asset: assetSelector } = dep;
+  const cacheDir = await ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, 'Release dep');
+  return resolveIncludePath(cacheDir, include_path, repo);
+}
 
+/**
+ * Ensures the release is downloaded and extracted; returns the cache dir root.
+ * Used by asset-fetcher for source: release — shares the same cache as deps.
+ */
+async function getReleaseCacheDir(source, token, noFetch) {
+  const { repo, ref, asset: assetSelector } = source;
+  return ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, 'Release asset');
+}
+
+async function ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, label) {
   const resolvedRef  = await resolveReleaseTag(repo, ref, token);
   const cacheKey     = repo.replace('/', '__') + '__' + resolvedRef.replace(/[^a-zA-Z0-9._-]/g, '_');
   const cacheDir     = path.join(getCacheDir(), 'release-deps', cacheKey);
@@ -27,7 +40,7 @@ async function fetchReleaseDep(dep, token, noFetch) {
 
   if (fs.existsSync(sentinelFile)) {
     logger.dim(`  ${repo}@${resolvedRef} (release, cached)`);
-    return resolveIncludePath(cacheDir, include_path, repo);
+    return cacheDir;
   }
 
   if (noFetch) {
@@ -37,7 +50,7 @@ async function fetchReleaseDep(dep, token, noFetch) {
     );
   }
 
-  logger.step(`Release dep: ${repo} @ ${resolvedRef}`);
+  logger.step(`${label}: ${repo} @ ${resolvedRef}`);
 
   const headers = buildHeaders(token);
   const release  = await fetchRelease(repo, resolvedRef, headers);
@@ -51,11 +64,10 @@ async function fetchReleaseDep(dep, token, noFetch) {
   await downloadAsset(asset.browser_download_url, archivePath, headers);
   extractArchive(archivePath, cacheDir);
   fs.rmSync(archivePath, { force: true });
-
   fs.writeFileSync(sentinelFile, resolvedRef, 'utf8');
 
-  logger.info(`Release dep: ${repo}@${resolvedRef} ready`);
-  return resolveIncludePath(cacheDir, include_path, repo);
+  logger.info(`${label}: ${repo}@${resolvedRef} ready`);
+  return cacheDir;
 }
 
 async function resolveReleaseTag(repo, ref, token) {
@@ -168,4 +180,4 @@ function extractArchive(archivePath, destDir) {
   }
 }
 
-module.exports = { fetchReleaseDep };
+module.exports = { fetchReleaseDep, getReleaseCacheDir };

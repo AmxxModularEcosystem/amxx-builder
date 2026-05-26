@@ -8,15 +8,16 @@ const AdmZip = require('adm-zip');
 const { execSync } = require('child_process');
 
 const logger = require('./logger');
-const { getCacheDir }      = require('./cache-dir');
+const { getCacheDir }        = require('./cache-dir');
 const { getAmxmodxFullDir, getHostPlatform } = require('./compiler-fetcher');
+const { getReleaseCacheDir } = require('./release-fetcher');
 
 /**
  * Downloads and processes all asset sources defined in manifest.assets.sources.
  * Remote sources are merged into build/_assets_remote/ respecting on_conflict.
  * Then overlaid onto build/assets/ — local files already there win (placed by collectAll).
  */
-async function fetchAssets(manifest, buildDir) {
+async function fetchAssets(manifest, buildDir, noFetch = false) {
   const { sources, on_conflict } = manifest.assets;
   if (!sources.length) return;
 
@@ -32,7 +33,7 @@ async function fetchAssets(manifest, buildDir) {
 
   for (const source of sources) {
     const label  = source.type === 'amxmodx' ? 'amxmodx' : source.url;
-    const srcDir = await resolveSource(source, manifest, manifestDir, buildDir);
+    const srcDir = await resolveSource(source, manifest, manifestDir, buildDir, noFetch);
     if (!srcDir) continue;
     applyMap(srcDir, remoteDir, source.map, label, on_conflict, origins);
   }
@@ -43,13 +44,16 @@ async function fetchAssets(manifest, buildDir) {
 
 // ─── source resolution ────────────────────────────────────────────────────────
 
-async function resolveSource(source, manifest, manifestDir, buildDir) {
+async function resolveSource(source, manifest, manifestDir, buildDir, noFetch) {
   if (source.type === 'amxmodx') {
     const version  = manifest.amxmodx.version;
     const platform = manifest.platform || getHostPlatform();
     if (!version) throw new Error('assets: source: amxmodx requires amxmodx.version to be set');
     logger.step(`Assets: amxmodx ${version} (${platform})...`);
     return getAmxmodxFullDir(version, platform);
+  }
+  if (source.type === 'release') {
+    return getReleaseCacheDir(source, manifest.github.token, noFetch);
   }
   return resolveUrlSource(source, manifestDir, buildDir);
 }

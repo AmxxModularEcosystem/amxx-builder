@@ -144,7 +144,18 @@ function parseAssetSource(s) {
   if (s.source === 'amxmodx') {
     return { type: 'amxmodx', map: parseAssetMap(s), cache: parseAssetCache(s.cache) };
   }
-  if (!s.url) throw new Error(`asset source missing "url": ${JSON.stringify(s)}`);
+  if (s.source === 'release') {
+    if (!s.repo) throw new Error(`asset source: release requires "repo": ${JSON.stringify(s)}`);
+    if (!s.ref)  throw new Error(`asset source: release requires "ref": ${JSON.stringify(s)}`);
+    return {
+      type:  'release',
+      repo:  String(s.repo).trim(),
+      ref:   String(s.ref).trim(),
+      asset: s.asset != null ? s.asset : null,
+      map:   parseAssetMap(s),
+    };
+  }
+  if (!s.url) throw new Error(`asset source missing "url" or "source": ${JSON.stringify(s)}`);
   return { type: 'url', url: s.url, map: parseAssetMap(s), cache: parseAssetCache(s.cache) };
 }
 

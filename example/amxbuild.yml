@@ -85,6 +85,18 @@ assets:
     - url: https://cdn.example.com/pistol_v2.mdl
       to: models/v_pistol.mdl
 
+    # GitHub release asset — использует тот же кэш, что и deps
+    # Если этот же релиз уже используется в deps, файл не будет скачан повторно
+    - source: release
+      repo: org/weapon-pack
+      ref: v2.0.0
+      asset: "weapon-models.zip"   # glob-паттерн имени файла (опционально)
+      map:
+        - from: models/
+          to: models/
+        - from: sound/
+          to: sound/
+
 # ── Выходной архив ────────────────────────────────────────────────────────────
 output:
   dir: ./dist

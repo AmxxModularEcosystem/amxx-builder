@@ -190,7 +190,7 @@ async function runBuild(options) {
   await collectAll(manifest, repoLocalDirs, buildDir);
 
   // Step 5.5 — Fetch remote assets, overlay onto build/assets/ (local assets from Step 5 win)
-  await fetchAssets(manifest, buildDir);
+  await fetchAssets(manifest, buildDir, noFetch);
 
   // Step 6 — Compile .sma → .amxx (runs after collect, wins over any pre-built plugins)
   const compiledPlugins = await compilePlugins(
