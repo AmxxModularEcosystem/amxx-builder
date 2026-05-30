@@ -42,8 +42,12 @@ if ($token) {
     $env:GH_TOKEN = $token
 }
 
+# npm writes warnings to stderr; PS 5.1 treats native stderr as ErrorRecord with Stop preference
+$ErrorActionPreference = 'Continue'
 & npm @npmArgs
-if ($LASTEXITCODE -ne 0) { Write-Fail 'npm install failed. See output above.' }
+$npmExit = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($npmExit -ne 0) { Write-Fail 'npm install failed. See output above.' }
 
 # ── 3. Verify ────────────────────────────────────────────────────────────────
 Write-Step 'Verifying installation...'
