@@ -57,6 +57,7 @@ async function collectAll(manifest, repoLocalDirs, buildDir) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(path.join(srcDir, f), dest);
       origins.set(f, repoConfig.repo);
+      logger.verbose(`    + ${f}`);
       copied++;
     }
 

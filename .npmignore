@@ -1,0 +1,8 @@
+.github/
+.claude/
+example/
+schema/
+build/
+dist/
+*.zip
+*.amxx

@@ -5,7 +5,7 @@ const path = require('path');
 function parseManifest(manifestPath) {
   const absPath = path.resolve(manifestPath);
   if (!fs.existsSync(absPath)) {
-    throw new Error(`Manifest not found: ${absPath}`);
+    throw new Error(`Manifest not found: ${absPath}\n  → Run "amxb init" to create one`);
   }
 
   const raw = yaml.load(fs.readFileSync(absPath, 'utf8'));
@@ -32,6 +32,9 @@ function parseManifest(manifestPath) {
     amxmodx: {
       version: (raw.amxmodx && raw.amxmodx.version) ? String(raw.amxmodx.version) : null,
       dir:     globalAmxDir,
+      defines: (raw.amxmodx && Array.isArray(raw.amxmodx.defines))
+        ? raw.amxmodx.defines.map(String)
+        : [],
     },
     github: { token_env: tokenEnv || null, token, ssh },
     globalDeps,

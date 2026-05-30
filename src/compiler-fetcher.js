@@ -5,6 +5,7 @@ const AdmZip = require('adm-zip');
 const { execSync } = require('child_process');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
+const { withRetry } = require('./retry');
 
 const AMXX_DROP = 'https://www.amxmodx.org/amxxdrop/';
 
@@ -77,7 +78,7 @@ async function fetchLatestVersion() {
 
   // 1 — list of major.minor dirs on the drop page
   const { data: mainPage } = await axios.get(AMXX_DROP).catch((e) => {
-    throw new Error(`Failed to fetch ${AMXX_DROP}: ${e.message}`);
+    throw new Error(`Failed to fetch ${AMXX_DROP}: ${e.message}\n  → Check your internet connection or set amxmodx.version explicitly`);
   });
 
   const mmPattern = /href="(\d+\.\d+)\/"/g;
@@ -194,7 +195,10 @@ function extractAddons(archivePath, destDir, platform) {
 }
 
 async function downloadFile(url, dest) {
-  const response = await axios.get(url, { responseType: 'arraybuffer', maxRedirects: 5 });
+  const response = await withRetry(
+    () => axios.get(url, { responseType: 'arraybuffer', maxRedirects: 5 }),
+    { label: path.basename(url) }
+  );
   fs.writeFileSync(dest, Buffer.from(response.data));
 }
 

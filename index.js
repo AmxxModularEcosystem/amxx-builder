@@ -7,6 +7,7 @@ const path = require('path');
 
 
 const logger             = require('./src/logger');
+const { setVerbose }     = logger;
 const { parseManifest }  = require('./src/manifest');
 const { fetchCompiler }  = require('./src/compiler-fetcher');
 const { fetchRepo, resolveRef } = require('./src/repo-fetcher');
@@ -30,10 +31,12 @@ program
   .description('Build plugins from manifest')
   .option('--manifest <path>',       'Path to manifest file (default: amxbuild.yml, fallback: manifest.yml)')
   .option('--build-dir <path>',     'Override build staging directory (default: ./build)')
-  .option('--set <key=value...>',   'Override manifest field (e.g. --set version=1.2.3 --set output.archive_name="{name}-{version}.zip")')
+  .option('--set <key=value...>',    'Override manifest field (e.g. --set version=1.2.3 --set output.archive_name="{name}-{version}.zip")')
+  .option('--define <flag...>',     'Add compiler define, e.g. --define DEBUG --define "VERSION=1.2.3" (appends to amxmodx.defines)')
   .option('--no-fetch',             'Use cached repos without re-cloning')
   .option('--no-archive',           'Compile only, skip archiving')
   .option('--dry-run',              'Show plan without executing')
+  .option('--verbose',              'Show detailed output (compiler commands, per-file copies, include dirs)')
   .action(async (options) => {
     try {
       await runBuild(options);
@@ -68,9 +71,10 @@ const cacheCmd = program
 cacheCmd
   .command('info', { isDefault: true })
   .description('Show cache contents and disk usage')
-  .action(() => {
+  .option('--manifest <path>', 'Show local .amxb-cache/ for this manifest')
+  .action((options) => {
     try {
-      runCacheInfo();
+      runCacheInfo(options);
     } catch (err) {
       logger.error(err.message);
       process.exit(1);
@@ -128,6 +132,8 @@ function resolveManifestPath(explicit) {
 }
 
 async function runBuild(options) {
+  const buildStart   = Date.now();
+  if (options.verbose) logger.setVerbose(true);
   const manifestPath = resolveManifestPath(options.manifest);
   const noFetch      = options.fetch === false;
   const noArchive    = options.archive === false;
@@ -140,7 +146,8 @@ async function runBuild(options) {
 
   // Step 1 — Parse manifest, then apply --set overrides
   const manifest = parseManifest(manifestPath);
-  if (options.set?.length) applyOverrides(manifest, options.set);
+  if (options.set?.length)    applyOverrides(manifest, options.set);
+  if (options.define?.length) manifest.amxmodx.defines.push(...options.define);
   logger.info(`Manifest: ${manifest.name} v${manifest.version}`);
 
   if (dryRun) {
@@ -217,6 +224,9 @@ async function runBuild(options) {
   } else {
     await createArchive(manifest, buildDir);
   }
+
+  const elapsed = ((Date.now() - buildStart) / 1000).toFixed(1);
+  logger.success(`Done in ${elapsed}s`);
 }
 
 // ─── clean ───────────────────────────────────────────────────────────────────
@@ -271,7 +281,7 @@ function parseCacheKey(key) {
   return `${parts.slice(0, -1).join('/')} @ ${parts[parts.length - 1]}`;
 }
 
-function runCacheInfo() {
+function runCacheInfo(options = {}) {
   const cacheRoot = getCacheDir();
   const compDir   = path.join(cacheRoot, 'amxxpc');
   const reposDir  = path.join(cacheRoot, 'repos');
@@ -323,6 +333,17 @@ function runCacheInfo() {
       }
     }
   }
+
+  // Local .amxb-cache/ next to manifest
+  const manifestPath = resolveManifestPath(options.manifest);
+  const localCacheDir = path.join(path.dirname(path.resolve(manifestPath)), '.amxb-cache', 'assets');
+  if (fs.existsSync(localCacheDir)) {
+    const entries = fs.readdirSync(localCacheDir, { withFileTypes: true }).filter(e => e.isDirectory());
+    if (entries.length) {
+      logger.info(`\nLocal asset cache (${entries.length}, ${fmtSize(dirSize(localCacheDir))}):`)
+      logger.dim(`  ${localCacheDir}`);
+    }
+  }
 }
 
 function runCacheClean(options) {
@@ -353,22 +374,63 @@ function runCacheClean(options) {
 // ─── dry-run ─────────────────────────────────────────────────────────────────
 
 function printDryRun(manifest) {
-  logger.info('--- DRY RUN ---');
-  logger.info(`Compiler: ${manifest.amxmodx.version || 'latest'}`);
-  logger.info(`amxmodx dir in repos: ${manifest.amxmodx.dir}`);
-  logger.info(`Repos (${manifest.repos.length}):`);
-  for (const r of manifest.repos) {
-    const ref = r.ref || 'default branch';
-    logger.dim(`  ${r.repo} @ ${ref}  [amxmodx_dir: ${r.amxmodx_dir}]`);
+  const out = manifest.output;
+  const expand = (tpl) => tpl.replace('{name}', manifest.name).replace('{version}', manifest.version);
+
+  logger.info(`=== DRY RUN: ${manifest.name} v${manifest.version} ===`);
+
+  // Compiler
+  logger.info(`\nCompiler:`);
+  logger.dim(`  amxxpc ${manifest.amxmodx.version || 'latest'} — dir: ${manifest.amxmodx.dir}`);
+  if (manifest.platform) logger.dim(`  target platform: ${manifest.platform}`);
+  if (manifest.amxmodx.defines.length) {
+    logger.dim(`  defines: ${manifest.amxmodx.defines.map(d => `-D${d}`).join(' ')}`);
   }
-  if (manifest.globalDeps.length) {
-    logger.info(`Global deps (${manifest.globalDeps.length}):`);
-    for (const d of manifest.globalDeps) {
-      logger.dim(`  ${d.repo}@${d.ref}${d.include_path ? ':' + d.include_path : ''}`);
+
+  // Repos
+  if (manifest.repos.length) {
+    logger.info(`\nRepos (${manifest.repos.length}):`);
+    for (const r of manifest.repos) {
+      const ref = r.ref || 'default branch';
+      logger.dim(`  ${r.repo} @ ${ref}  [dir: ${r.amxmodx_dir}]`);
     }
   }
-  logger.info(`Output: ${manifest.output.amxmodx_path}/ in ${manifest.output.archive_name}`);
-  logger.info('--- END DRY RUN ---');
+
+  // Deps
+  if (manifest.globalDeps.length) {
+    logger.info(`\nGlobal deps (${manifest.globalDeps.length}):`);
+    for (const d of manifest.globalDeps) {
+      const src = d.source === 'release' ? 'release' : 'git';
+      logger.dim(`  [${src}] ${d.repo}@${d.ref}${d.include_path ? ':' + d.include_path : ''}`);
+    }
+  }
+
+  // Assets
+  if (manifest.assets.sources.length) {
+    logger.info(`\nAsset sources (${manifest.assets.sources.length}):`);
+    for (const s of manifest.assets.sources) {
+      if (s.type === 'amxmodx') {
+        logger.dim(`  [amxmodx] ${manifest.amxmodx.version || 'latest'} (${manifest.platform || 'host'})`);
+      } else if (s.type === 'release') {
+        logger.dim(`  [release] ${s.repo}@${s.ref}  cache: ${s.cache || 'global'}`);
+      } else {
+        logger.dim(`  [url] ${s.url}  cache: ${s.cache || 'none'}`);
+      }
+    }
+  }
+
+  // Output
+  logger.info(`\nOutput:`);
+  if (out.pack === false) {
+    logger.dim(`  copy → ${path.resolve(out.dir)}/${expand(out.amxmodx_path)}/`);
+  } else {
+    logger.dim(`  archive → ${path.resolve(out.dir)}/${expand(out.archive_name)}`);
+    logger.dim(`  amxmodx path in archive: ${expand(out.amxmodx_path)}/`);
+  }
+  if (out.assets_path) logger.dim(`  assets path: ${expand(out.assets_path)}/`);
+  logger.dim(`  generate_ini: ${out.generate_ini}  |  on_conflict: ${out.on_conflict}`);
+
+  logger.info(`\n=== END DRY RUN ===`);
 }
 
 // ─── manifest overrides ───────────────────────────────────────────────────────

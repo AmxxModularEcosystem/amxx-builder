@@ -24,6 +24,7 @@ async function resolveRef(repo, ref, token) {
       { headers }
     );
     logger.dim(`  ${repo}: latest = ${data.tag_name}`);
+    logger.verbose(`  ${repo}: resolved via GET /repos/${repo}/releases/latest`);
     return data.tag_name;
   } catch (err) {
     throw new Error(`Failed to resolve latest release for ${repo}: ${err.message}`);
@@ -68,7 +69,16 @@ async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
     await git.clone(cloneUrl, cacheDir, cloneArgs);
   } catch (err) {
     try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (_) {}
-    throw new Error(`Failed to clone ${repo}@${cacheKey}: ${err.message}`);
+    const msg = err.message || '';
+    let hint = '';
+    if (/repository not found|does not exist/i.test(msg)) {
+      hint = '\n  → Check the repo name, or set github.token_env if the repo is private';
+    } else if (/authentication failed|could not read/i.test(msg)) {
+      hint = '\n  → Check your GitHub token (github.token_env / GITHUB_TOKEN)';
+    } else if (/could not resolve host/i.test(msg)) {
+      hint = '\n  → Check your internet connection';
+    }
+    throw new Error(`Failed to clone ${repo}@${cacheKey}: ${msg}${hint}`);
   }
 
   logger.info(`Cloning ${repo} @ ${cacheKey} ... done`);

@@ -54,6 +54,13 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
     if (fs.existsSync(collectedIncDir)) includes.push(`-i${collectedIncDir}`);
     for (const d of includeDirs) includes.push(`-i${d}`);
 
+    const defines = (manifest.amxmodx.defines || []).map((d) => `-D${d}`);
+
+    if (logger.isVerbose()) {
+      logger.verbose(`  includes: ${includes.join(', ') || '(none)'}`);
+      if (defines.length) logger.verbose(`  defines: ${defines.join(', ')}`);
+    }
+
     for (const smaRel of smaFiles) {
       const baseName = path.basename(smaRel);
       tasks.push({
@@ -62,6 +69,7 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
         outName:  baseName.replace(/\.sma$/, '.amxx'),
         outPath:  path.join(pluginsDir, baseName.replace(/\.sma$/, '.amxx')),
         includes,
+        defines,
       });
     }
   }
@@ -102,9 +110,12 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
 }
 
 async function runCompile(compilerPath, task) {
-  const { srcPath, outPath, outName, includes, baseName, postfix, label, ref } = task;
+  const { srcPath, outPath, outName, includes, defines, baseName, postfix, label, ref } = task;
 
-  const { status, output } = await spawnAsync(compilerPath, [srcPath, `-o${outPath}`, ...includes]);
+  const args = [srcPath, `-o${outPath}`, ...includes, ...defines];
+  logger.verbose(`  cmd: ${compilerPath} ${args.join(' ')}`);
+
+  const { status, output } = await spawnAsync(compilerPath, args);
 
   if (status !== 0) {
     const err = new Error(`Compilation failed: ${baseName}`);

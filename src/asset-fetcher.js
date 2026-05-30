@@ -9,6 +9,7 @@ const { execSync } = require('child_process');
 
 const logger = require('./logger');
 const { getCacheDir }        = require('./cache-dir');
+const { withRetry }          = require('./retry');
 const { getAmxmodxFullDir, getHostPlatform } = require('./compiler-fetcher');
 const { getReleaseCacheDir } = require('./release-fetcher');
 
@@ -55,10 +56,10 @@ async function resolveSource(source, manifest, manifestDir, buildDir, noFetch) {
   if (source.type === 'release') {
     return getReleaseCacheDir(source, manifest.github.token, noFetch);
   }
-  return resolveUrlSource(source, manifestDir, buildDir);
+  return resolveUrlSource(source, manifestDir, buildDir, noFetch);
 }
 
-async function resolveUrlSource(source, manifestDir, buildDir) {
+async function resolveUrlSource(source, manifestDir, buildDir, noFetch) {
   const cacheDir = getCacheDirForUrl(source.url, source.cache, manifestDir, buildDir);
   const sentinel = path.join(cacheDir, '.cached');
 
@@ -67,11 +68,19 @@ async function resolveUrlSource(source, manifestDir, buildDir) {
     return cacheDir;
   }
 
+  if (noFetch) {
+    logger.warn(`Assets: skipping ${source.url} (--no-fetch, cache: none)`);
+    return null;
+  }
+
   logger.step(`Assets: downloading ${source.url}...`);
   fs.mkdirSync(cacheDir, { recursive: true });
 
   try {
-    const response    = await axios.get(source.url, { responseType: 'arraybuffer', maxRedirects: 5 });
+    const response    = await withRetry(
+      () => axios.get(source.url, { responseType: 'arraybuffer', maxRedirects: 5 }),
+      { label: getFilenameFromUrl(source.url) }
+    );
     const contentType = response.headers['content-type'] || '';
     const filename    = getFilenameFromUrl(source.url);
     const data        = Buffer.from(response.data);

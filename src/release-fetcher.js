@@ -5,6 +5,7 @@ const AdmZip = require('adm-zip');
 const { execSync } = require('child_process');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
+const { withRetry } = require('./retry');
 
 /**
  * Downloads a GitHub release asset and extracts it locally.
@@ -163,11 +164,14 @@ function buildHeaders(token) {
 }
 
 async function downloadAsset(url, dest, headers) {
-  const response = await axios.get(url, {
-    headers: { ...headers, Accept: 'application/octet-stream' },
-    responseType: 'arraybuffer',
-    maxRedirects: 5,
-  });
+  const response = await withRetry(
+    () => axios.get(url, {
+      headers: { ...headers, Accept: 'application/octet-stream' },
+      responseType: 'arraybuffer',
+      maxRedirects: 5,
+    }),
+    { label: path.basename(url) }
+  );
   fs.writeFileSync(dest, Buffer.from(response.data));
 }
 
