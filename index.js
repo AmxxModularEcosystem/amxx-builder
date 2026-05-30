@@ -352,6 +352,7 @@ async function runWatch(options) {
   const localIncDir = path.join(scriptingRootDir, 'include');
   const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
   const graphIncludeDirs = [
+    scriptingRootDir,
     ...(fs.existsSync(localIncDir)     ? [localIncDir]     : []),
     ...(fs.existsSync(collectedIncDir) ? [collectedIncDir] : []),
     ...includeDirs,

@@ -50,9 +50,10 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
 
     const localIncDir = path.join(scriptingDir, 'include');
     const includes = [];
+                                        includes.push(`-i${scriptingDir}`);
     if (fs.existsSync(localIncDir))     includes.push(`-i${localIncDir}`);
     if (fs.existsSync(collectedIncDir)) includes.push(`-i${collectedIncDir}`);
-    for (const d of includeDirs) includes.push(`-i${d}`);
+    for (const d of includeDirs)        includes.push(`-i${d}`);
 
     const defines = (manifest.amxmodx.defines || []).map((d) => `-D${d}`);
 
@@ -176,11 +177,13 @@ async function compileSingle(manifest, smaPath, compilerPath, includeDirs, build
   const outName  = rel.replace(/\.sma$/, '.amxx').split(path.sep).join('/');
   const outPath  = path.join(pluginsDir, ...outName.split('/'));
 
-  const localIncDir = path.join(scriptingRootDir || path.dirname(smaPath), 'include');
-  const includes    = [];
+  const scriptingDir = scriptingRootDir || path.dirname(smaPath);
+  const localIncDir  = path.join(scriptingDir, 'include');
+  const includes     = [];
+                                        includes.push(`-i${scriptingDir}`);
   if (fs.existsSync(localIncDir))     includes.push(`-i${localIncDir}`);
   if (fs.existsSync(collectedIncDir)) includes.push(`-i${collectedIncDir}`);
-  for (const d of includeDirs) includes.push(`-i${d}`);
+  for (const d of includeDirs)        includes.push(`-i${d}`);
 
   const defines = (manifest.amxmodx.defines || []).map((d) => `-D${d}`);
 
