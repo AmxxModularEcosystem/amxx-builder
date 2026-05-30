@@ -77,9 +77,9 @@ function startWatch(manifest, manifestPath, handlers) {
       return;
     }
 
-    // .inc → recompile all plugins
+    // .inc → recompile affected plugins
     if (filePath.endsWith('.inc')) {
-      logger.step(`Include changed: ${rel} → recompiling all plugins`);
+      logger.step(`Include changed: ${rel}`);
       handlers.onIncChange(absPath);
       return;
     }
