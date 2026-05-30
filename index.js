@@ -350,11 +350,12 @@ async function runWatch(options) {
 
   const handlers = {
     async onSmaChange(smaPath) {
-      const amxxName = await compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir);
+      const scriptingRootDir = path.join(path.dirname(path.resolve(manifestPath)), manifest.amxmodx.dir, 'scripting');
+      const amxxName = await compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir);
       if (!amxxName) return;
       if (doDeploy && manifest.deploy.path) {
         deployPlugin(manifest, buildDir, amxxName);
-        const pluginName = amxxName.replace(/\.amxx$/, '');
+        const pluginName = path.basename(amxxName).replace(/\.amxx$/, '');
         await sendRconCommand(manifest.deploy, pluginName);
       }
     },

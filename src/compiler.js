@@ -63,11 +63,12 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
 
     for (const smaRel of smaFiles) {
       const baseName = path.basename(smaRel);
+      const outName  = smaRel.replace(/\.sma$/, '.amxx').split(path.sep).join('/');
       tasks.push({
         label, ref, postfix, baseName,
-        srcPath:  path.join(scriptingDir, smaRel),
-        outName:  baseName.replace(/\.sma$/, '.amxx'),
-        outPath:  path.join(pluginsDir, baseName.replace(/\.sma$/, '.amxx')),
+        srcPath: path.join(scriptingDir, smaRel),
+        outName,
+        outPath: path.join(pluginsDir, ...outName.split('/')),
         includes,
         defines,
       });
@@ -112,6 +113,7 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
 async function runCompile(compilerPath, task) {
   const { srcPath, outPath, outName, includes, defines, baseName, postfix, label, ref } = task;
 
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
   const args = [srcPath, `-o${outPath}`, ...includes, ...defines];
   logger.verbose(`  cmd: ${compilerPath} ${args.join(' ')}`);
 
@@ -163,16 +165,18 @@ function dots(filename) {
  * Compiles a single .sma file. Used by watch mode.
  * Returns the .amxx filename on success, null on failure.
  */
-async function compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir) {
+async function compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir) {
   const pluginsDir      = path.join(buildDir, 'amxmodx', 'plugins');
   const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
 
-  const scriptingDir = path.dirname(smaPath);
-  const baseName     = path.basename(smaPath);
-  const outName      = baseName.replace(/\.sma$/, '.amxx');
-  const outPath      = path.join(pluginsDir, outName);
+  const baseName = path.basename(smaPath);
+  const rel      = scriptingRootDir
+    ? path.relative(scriptingRootDir, smaPath)
+    : baseName;
+  const outName  = rel.replace(/\.sma$/, '.amxx').split(path.sep).join('/');
+  const outPath  = path.join(pluginsDir, ...outName.split('/'));
 
-  const localIncDir = path.join(scriptingDir, 'include');
+  const localIncDir = path.join(scriptingRootDir || path.dirname(smaPath), 'include');
   const includes    = [];
   if (fs.existsSync(localIncDir))     includes.push(`-i${localIncDir}`);
   if (fs.existsSync(collectedIncDir)) includes.push(`-i${collectedIncDir}`);
@@ -180,7 +184,7 @@ async function compileSingle(manifest, smaPath, compilerPath, includeDirs, build
 
   const defines = (manifest.amxmodx.defines || []).map((d) => `-D${d}`);
 
-  fs.mkdirSync(pluginsDir, { recursive: true });
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
   const { status, output } = await spawnAsync(compilerPath, [smaPath, `-o${outPath}`, ...includes, ...defines]);
 
