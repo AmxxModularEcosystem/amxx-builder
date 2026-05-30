@@ -35,6 +35,12 @@
           "type": "string",
           "description": "Name of the amxmodx directory inside each repo (default: \"amxmodx\").",
           "default": "amxmodx"
+        },
+        "defines": {
+          "type": "array",
+          "description": "Compiler preprocessor defines passed to all plugin compilations (e.g. [\"DEBUG\", \"VERSION=1.2.3\"]). Appended to defines from --define CLI flag.",
+          "items": { "type": "string" },
+          "default": []
         }
       }
     },
@@ -68,6 +74,63 @@
       "type": "array",
       "description": "GitHub repositories to pull AMX Mod X content from.",
       "items": { "$ref": "#/definitions/repoEntry" }
+    },
+    "deploy": {
+      "type": "object",
+      "description": "Local deploy settings. Defaults read from env vars (AMXB_DEPLOY_*). Values support ${VAR} interpolation.",
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Server root directory to deploy into. Falls back to $AMXB_DEPLOY_PATH."
+        },
+        "amxmodx_path": {
+          "type": "string",
+          "description": "Path relative to deploy.path where amxmodx content goes. Defaults to output.amxmodx_path.",
+          "examples": ["addons/amxmodx", "{name}/addons/amxmodx"]
+        },
+        "assets_path": {
+          "type": "string",
+          "description": "Path relative to deploy.path where assets go. Defaults to deploy root."
+        },
+        "watch_debounce_ms": {
+          "type": "integer",
+          "description": "Milliseconds of file-write stability before triggering a watch rebuild (default: 500).",
+          "default": 500,
+          "minimum": 100
+        },
+        "exclude": {
+          "type": "array",
+          "description": "Paths relative to deploy.path to skip during deploy. Entire directory subtrees are excluded when a directory path is given. Useful for preserving default configs on the server.",
+          "items": { "type": "string" },
+          "examples": [["addons/amxmodx/configs/"], ["addons/amxmodx/configs/amxx.cfg"]]
+        },
+        "rcon": {
+          "type": "object",
+          "description": "GoldSrc (HL1/CS 1.6) UDP RCON settings. Falls back to AMXB_DEPLOY_RCON_* env vars.",
+          "additionalProperties": true,
+          "properties": {
+            "host": {
+              "type": "string",
+              "description": "RCON host. Falls back to $AMXB_DEPLOY_RCON_HOST."
+            },
+            "port": {
+              "type": "integer",
+              "description": "RCON port (default: 27015). Falls back to $AMXB_DEPLOY_RCON_PORT.",
+              "default": 27015
+            },
+            "password": {
+              "type": "string",
+              "description": "RCON password. Falls back to $AMXB_DEPLOY_RCON_PASSWORD."
+            },
+            "command": {
+              "type": "string",
+              "description": "RCON command to run after deploy. {plugin} is replaced with the plugin name. Falls back to $AMXB_DEPLOY_RCON_CMD. Leave empty to skip RCON.",
+              "examples": ["amxx load {plugin}", "amxx reload {plugin}"]
+            }
+          }
+        }
+      }
     },
     "assets": {
       "type": "object",

@@ -12,7 +12,10 @@ const { parseManifest }  = require('./src/manifest');
 const { fetchCompiler }  = require('./src/compiler-fetcher');
 const { fetchRepo, resolveRef } = require('./src/repo-fetcher');
 const { resolveDeps }    = require('./src/deps-resolver');
-const { compilePlugins } = require('./src/compiler');
+const { compilePlugins, compileSingle } = require('./src/compiler');
+const { deployBuild, deployPlugin, deployFile } = require('./src/deployer');
+const { sendRconCommand }  = require('./src/rcon');
+const { startWatch }       = require('./src/watcher');
 const { collectAll }     = require('./src/collector');
 const { fetchAssets }    = require('./src/asset-fetcher');
 const { buildIniFiles }  = require('./src/ini-builder');
@@ -97,6 +100,41 @@ cacheCmd
     }
   });
 
+// ─── deploy ──────────────────────────────────────────────────────────────────
+
+program
+  .command('deploy')
+  .description('Deploy build output to the server directory')
+  .option('--manifest <path>',  'Path to manifest file')
+  .option('--build-dir <path>', 'Build staging directory (default: ./build)')
+  .option('--incremental',      'Only copy files newer than the destination')
+  .option('--build',            'Run a full build before deploying')
+  .action(async (options) => {
+    try {
+      await runDeploy(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── watch ───────────────────────────────────────────────────────────────────
+
+program
+  .command('watch')
+  .description('Watch local files and incrementally build + deploy on changes')
+  .option('--manifest <path>',  'Path to manifest file')
+  .option('--build-dir <path>', 'Build staging directory (default: ./build)')
+  .option('--no-deploy',        'Watch and rebuild only, skip deploy')
+  .action(async (options) => {
+    try {
+      await runWatch(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
 // ─── init ────────────────────────────────────────────────────────────────────
 
 program
@@ -107,6 +145,7 @@ program
   .option('--ci',           'Alias for --workflow')
   .option('--plugin <name>', 'Create amxmodx/scripting/<name>.sma')
   .option('--gitignore',     'Create .gitignore')
+  .option('--deploy',        'Create .env with deploy stubs (AMXB_DEPLOY_*)')
   .action((options) => {
     try {
       runInit(options);
@@ -253,6 +292,114 @@ async function runClean(options) {
     fs.rmSync(compDir, { recursive: true, force: true });
     logger.info(`Cleaned: ${compDir}`);
   }
+}
+
+// ─── deploy implementation ────────────────────────────────────────────────────
+
+async function runDeploy(options) {
+  const manifestPath = resolveManifestPath(options.manifest);
+  const buildDir     = path.resolve(options.buildDir || './build');
+
+  require('dotenv').config({ path: path.join(path.dirname(path.resolve(manifestPath)), '.env') });
+
+  if (options.build) {
+    await runBuild({ ...options, manifest: manifestPath });
+  } else if (!fs.existsSync(buildDir)) {
+    throw new Error(`Build directory not found: ${buildDir}\n  → Run "amxb build" first, or use "amxb deploy --build"`);
+  }
+
+  const manifest = parseManifest(manifestPath);
+  await deployBuild(manifest, buildDir, { incremental: options.incremental || false });
+
+  const pluginName = '{all}';
+  await sendRconCommand(manifest.deploy, pluginName);
+}
+
+// ─── watch implementation ─────────────────────────────────────────────────────
+
+async function runWatch(options) {
+  const manifestPath = resolveManifestPath(options.manifest);
+  const buildDir     = path.resolve(options.buildDir || './build');
+  const doDeploy     = options.deploy !== false;
+
+  require('dotenv').config({ path: path.join(path.dirname(path.resolve(manifestPath)), '.env') });
+
+  // Initial full build
+  logger.info('Running initial build...');
+  await runBuild({ manifest: manifestPath, buildDir: options.buildDir });
+
+  let manifest = parseManifest(manifestPath);
+  if (options.verbose) logger.setVerbose(true);
+
+  // Fetch compiler info for recompilation
+  const { compilerPath, includeDir: compilerIncludeDir } = await fetchCompiler(manifest.amxmodx.version);
+  const depsIncludeRoot = path.join(buildDir, '_includes');
+  const depsDirs = fs.existsSync(depsIncludeRoot)
+    ? fs.readdirSync(depsIncludeRoot, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => path.join(depsIncludeRoot, e.name))
+    : [];
+  const includeDirs = [
+    ...depsDirs,
+    ...(compilerIncludeDir ? [compilerIncludeDir] : []),
+  ];
+
+  if (doDeploy && manifest.deploy.path) {
+    await deployBuild(manifest, buildDir, { incremental: true });
+  }
+
+  const handlers = {
+    async onSmaChange(smaPath) {
+      const amxxName = await compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir);
+      if (!amxxName) return;
+      if (doDeploy && manifest.deploy.path) {
+        deployPlugin(manifest, buildDir, amxxName);
+        const pluginName = amxxName.replace(/\.amxx$/, '');
+        await sendRconCommand(manifest.deploy, pluginName);
+      }
+    },
+
+    async onIncChange() {
+      try {
+        await runBuild({ manifest: manifestPath, buildDir: options.buildDir, noFetch: true });
+        manifest = parseManifest(manifestPath);
+        if (doDeploy && manifest.deploy.path) {
+          await deployBuild(manifest, buildDir, { incremental: true });
+          const pluginsDir = path.join(buildDir, 'amxmodx', 'plugins');
+          if (fs.existsSync(pluginsDir)) {
+            const amxxFiles = fs.readdirSync(pluginsDir).filter((f) => f.endsWith('.amxx'));
+            for (const amxx of amxxFiles) {
+              await sendRconCommand(manifest.deploy, amxx.replace(/\.amxx$/, ''));
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(err.message);
+      }
+    },
+
+    onFileChange(relPath, section) {
+      if (doDeploy && manifest.deploy.path) {
+        deployFile(manifest, buildDir, relPath, section);
+      }
+    },
+
+    async onManifestChange() {
+      try {
+        logger.info('Rebuilding...');
+        await runBuild({ manifest: manifestPath, buildDir: options.buildDir });
+        manifest = parseManifest(manifestPath);
+        if (doDeploy && manifest.deploy.path) {
+          await deployBuild(manifest, buildDir, { incremental: true });
+        }
+        logger.warn('Note: if new watch paths were added, restart amxb watch to pick them up');
+      } catch (err) {
+        logger.error(err.message);
+      }
+    },
+  };
+
+  startWatch(manifest, manifestPath, handlers);
 }
 
 // ─── cache implementation ─────────────────────────────────────────────────────
@@ -481,8 +628,12 @@ function runInit(options) {
 
   if (options.gitignore) {
     writeIfAbsent('.gitignore', [
-      '*.amxx', '*.zip', '.env', '.claude', 'build', 'dist', '',
+      '*.amxx', '*.zip', '.env', '.amxb-cache', '.claude', 'build', 'dist', '',
     ].join('\n'));
+  }
+
+  if (options.deploy) {
+    writeIfAbsent('.env', deployEnvTemplate());
   }
 }
 
@@ -493,6 +644,24 @@ function writeIfAbsent(filePath, content) {
   }
   fs.writeFileSync(filePath, content);
   logger.success(`Created ${filePath}`);
+}
+
+function deployEnvTemplate() {
+  return [
+    '# amxx-builder deploy configuration',
+    '# Used by: amxb deploy, amxb watch',
+    '',
+    '# Server root directory (files are deployed relative to this path)',
+    'AMXB_DEPLOY_PATH=',
+    '',
+    '# GoldSrc UDP RCON (optional — leave blank to skip RCON after deploy)',
+    'AMXB_DEPLOY_RCON_HOST=127.0.0.1',
+    'AMXB_DEPLOY_RCON_PORT=27015',
+    'AMXB_DEPLOY_RCON_PASSWORD=',
+    '# {plugin} is replaced with the plugin name (without .amxx)',
+    'AMXB_DEPLOY_RCON_CMD=amxx load {plugin}',
+    '',
+  ].join('\n');
 }
 
 function manifestTemplate(name) {

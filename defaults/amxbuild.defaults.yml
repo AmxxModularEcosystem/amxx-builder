@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=
+# Default values for amxbuild.yml manifests.
+# Loaded first; the project manifest is deep-merged on top, then --set overrides are applied.
+# Arrays (repos, deps, assets.sources) are replaced entirely by the project manifest.
+
+version: "1.0.0"
+
+amxmodx:
+  dir: amxmodx
+  defines: []
+
+github:
+  token_env: GITHUB_TOKEN
+  ssh: false
+
+output:
+  dir: ./dist
+  archive_name: "{name}-{version}.zip"
+  amxmodx_path: addons/amxmodx
+  assets_path: ""
+  readme: false
+  generate_ini: true
+  pack: true
+  on_conflict: last_wins
+
+assets:
+  on_conflict: last_wins
+  sources: []
+
+deploy:
+  amxmodx_path: addons/amxmodx
+  watch_debounce_ms: 500
+  exclude: []
+  rcon:
+    port: 27015

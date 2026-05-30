@@ -159,4 +159,42 @@ function dots(filename) {
   return chalk.dim(' ' + '.'.repeat(Math.max(1, 42 - filename.length)) + ' ');
 }
 
-module.exports = { compilePlugins };
+/**
+ * Compiles a single .sma file. Used by watch mode.
+ * Returns the .amxx filename on success, null on failure.
+ */
+async function compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir) {
+  const pluginsDir      = path.join(buildDir, 'amxmodx', 'plugins');
+  const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
+
+  const scriptingDir = path.dirname(smaPath);
+  const baseName     = path.basename(smaPath);
+  const outName      = baseName.replace(/\.sma$/, '.amxx');
+  const outPath      = path.join(pluginsDir, outName);
+
+  const localIncDir = path.join(scriptingDir, 'include');
+  const includes    = [];
+  if (fs.existsSync(localIncDir))     includes.push(`-i${localIncDir}`);
+  if (fs.existsSync(collectedIncDir)) includes.push(`-i${collectedIncDir}`);
+  for (const d of includeDirs) includes.push(`-i${d}`);
+
+  const defines = (manifest.amxmodx.defines || []).map((d) => `-D${d}`);
+
+  fs.mkdirSync(pluginsDir, { recursive: true });
+
+  const { status, output } = await spawnAsync(compilerPath, [smaPath, `-o${outPath}`, ...includes, ...defines]);
+
+  if (status !== 0) {
+    logger.error(`FAILED: ${baseName}`);
+    const out = (output || '').trim();
+    if (out) process.stderr.write(out + '\n');
+    return null;
+  }
+
+  process.stdout.write(
+    `${chalk.bold.white('[amxx-builder]')}   ${baseName} ${dots(baseName)} ${chalk.green('OK')}\n`
+  );
+  return outName;
+}
+
+module.exports = { compilePlugins, compileSingle };

@@ -50,6 +50,24 @@ repos:
     exclude:
       - "CWAPI-A-Test.sma"
 
+# ── Деплой (опционально) ──────────────────────────────────────────────────────
+# Значения по умолчанию берутся из .env (gitignored):
+#   AMXB_DEPLOY_PATH, AMXB_DEPLOY_RCON_HOST, AMXB_DEPLOY_RCON_PASSWORD и т.д.
+# Поддерживается интерполяция ${VAR} из env.
+#
+# deploy:
+#   path: /home/user/server           # или ${AMXB_DEPLOY_PATH}
+#   amxmodx_path: addons/amxmodx      # default: output.amxmodx_path
+#   watch_debounce_ms: 500            # мс стабильности файла перед ребилдом
+#   exclude:                          # пути от deploy.path, которые не перезаписываются
+#     - addons/amxmodx/configs/       # вся папка configs
+#     - addons/amxmodx/configs/amxx.cfg
+#   rcon:
+#     host: 127.0.0.1
+#     port: 27015
+#     password: ${RCON_PASSWORD}
+#     command: "amxx load {plugin}"   # {plugin} = имя без .amxx; пусто = не слать
+
 # ── Ассеты ────────────────────────────────────────────────────────────────────
 # Локальные ассеты (папка assets/ рядом с манифестом) всегда перекрывают удалённые.
 assets:

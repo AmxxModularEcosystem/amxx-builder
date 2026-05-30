@@ -2,32 +2,55 @@ const fs   = require('fs');
 const yaml = require('js-yaml');
 const path = require('path');
 
+const DEFAULTS_PATH = path.join(__dirname, '..', 'defaults', 'amxbuild.defaults.yml');
+
+function loadDefaultsRaw() {
+  if (!fs.existsSync(DEFAULTS_PATH)) return {};
+  return yaml.load(fs.readFileSync(DEFAULTS_PATH, 'utf8')) || {};
+}
+
+function deepMerge(base, overlay) {
+  if (overlay === null || overlay === undefined) return base;
+  if (base  === null || base  === undefined) return overlay;
+  if (Array.isArray(overlay)) return overlay;
+  if (typeof overlay === 'object' && typeof base === 'object') {
+    const result = { ...base };
+    for (const [k, v] of Object.entries(overlay)) {
+      result[k] = deepMerge(base[k], v);
+    }
+    return result;
+  }
+  return overlay;
+}
+
 function parseManifest(manifestPath) {
   const absPath = path.resolve(manifestPath);
   if (!fs.existsSync(absPath)) {
     throw new Error(`Manifest not found: ${absPath}\n  → Run "amxb init" to create one`);
   }
 
-  const raw = yaml.load(fs.readFileSync(absPath, 'utf8'));
+  const projectRaw = yaml.load(fs.readFileSync(absPath, 'utf8'));
+  const raw = deepMerge(loadDefaultsRaw(), projectRaw);
 
   if (!raw.name) throw new Error('manifest: missing required field "name"');
 
   const platform = parsePlatform(raw.platform);
-  const tokenEnv = (raw.github && raw.github.token_env) || 'GITHUB_TOKEN';
+  const gh       = raw.github || {};
+  const tokenEnv = gh.token_env || 'GITHUB_TOKEN';
   const token    = process.env[tokenEnv] || null;
-  const ssh      = !!(raw.github && raw.github.ssh);
+  const ssh      = !!gh.ssh;
 
-  const globalPostfix  = raw.plugins_ini_postfix != null ? String(raw.plugins_ini_postfix) : '';
-  const globalAmxDir   = (raw.amxmodx && raw.amxmodx.dir) || 'amxmodx';
-  const globalDeps     = parseDepsLines(raw.deps || []);
+  const globalPostfix = raw.plugins_ini_postfix != null ? String(raw.plugins_ini_postfix) : '';
+  const globalAmxDir  = (raw.amxmodx && raw.amxmodx.dir) || 'amxmodx';
+  const globalDeps    = parseDepsLines(raw.deps || []);
 
-  const repos = (raw.repos || []).map((r) => parseRepoEntry(r, globalPostfix, globalAmxDir));
-
+  const repos  = (raw.repos || []).map((r) => parseRepoEntry(r, globalPostfix, globalAmxDir));
   const output = raw.output || {};
+
   return {
     _path:    absPath,
     name:     raw.name,
-    version:  String(raw.version || '1.0.0'),
+    version:  String(raw.version),
     platform,
     amxmodx: {
       version: (raw.amxmodx && raw.amxmodx.version) ? String(raw.amxmodx.version) : null,
@@ -36,19 +59,20 @@ function parseManifest(manifestPath) {
         ? raw.amxmodx.defines.map(String)
         : [],
     },
-    github: { token_env: tokenEnv || null, token, ssh },
+    github: { token_env: tokenEnv, token, ssh },
     globalDeps,
     globalPostfix,
     repos,
     assets:  parseAssets(raw.assets || {}),
+    deploy:  parseDeploy(raw),
     output: {
-      dir:          output.dir || './dist',
-      archive_name: output.archive_name || '{name}-{version}.zip',
-      amxmodx_path: output.amxmodx_path || 'addons/amxmodx',
-      assets_path:  output.assets_path  != null ? String(output.assets_path) : '',
-      readme:       output.readme       || false,
-      generate_ini: output.generate_ini != null ? Boolean(output.generate_ini) : true,
-      pack:         output.pack         != null ? Boolean(output.pack)         : true,
+      dir:          String(output.dir),
+      archive_name: String(output.archive_name),
+      amxmodx_path: String(output.amxmodx_path),
+      assets_path:  output.assets_path != null ? String(output.assets_path) : '',
+      readme:       Boolean(output.readme),
+      generate_ini: Boolean(output.generate_ini),
+      pack:         Boolean(output.pack),
       on_conflict:  validateOnConflict(output.on_conflict),
     },
   };
@@ -172,6 +196,29 @@ function parseAssetCache(val) {
   if (val == null) return 'none';
   if (!valid.includes(val)) throw new Error(`asset source cache must be one of: ${valid.join(', ')}`);
   return val;
+}
+
+function interpolateEnv(val) {
+  if (typeof val !== 'string') return val;
+  return val.replace(/\$\{([^}]+)\}/g, (_, name) => process.env[name] ?? '');
+}
+
+function parseDeploy(raw) {
+  const d = raw.deploy || {};
+  const r = d.rcon || {};
+  return {
+    path:              interpolateEnv(d.path)         || process.env.AMXB_DEPLOY_PATH         || null,
+    amxmodx_path:      interpolateEnv(d.amxmodx_path) || null,
+    assets_path:       interpolateEnv(d.assets_path)  ?? null,
+    watch_debounce_ms: Number(d.watch_debounce_ms),
+    exclude:           Array.isArray(d.exclude) ? d.exclude.map(String) : [],
+    rcon: {
+      host:     interpolateEnv(r.host)     || process.env.AMXB_DEPLOY_RCON_HOST     || null,
+      port:     Number(r.port || process.env.AMXB_DEPLOY_RCON_PORT),
+      password: interpolateEnv(r.password) || process.env.AMXB_DEPLOY_RCON_PASSWORD || null,
+      command:  interpolateEnv(r.command)  || process.env.AMXB_DEPLOY_RCON_CMD      || null,
+    },
+  };
 }
 
 module.exports = { parseManifest, parseDepsLines };
