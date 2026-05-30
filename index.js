@@ -16,6 +16,7 @@ const { compilePlugins, compileSingle } = require('./src/compiler');
 const { deployBuild, deployPlugin, deployFile } = require('./src/deployer');
 const { sendRconCommand }  = require('./src/rcon');
 const { startWatch }       = require('./src/watcher');
+const { DepGraph }         = require('./src/dep-graph');
 const { collectAll }     = require('./src/collector');
 const { fetchAssets }    = require('./src/asset-fetcher');
 const { buildIniFiles }  = require('./src/ini-builder');
@@ -344,13 +345,34 @@ async function runWatch(options) {
     ...(compilerIncludeDir ? [compilerIncludeDir] : []),
   ];
 
+  const manifestDir      = path.dirname(path.resolve(manifestPath));
+  const scriptingRootDir = path.join(manifestDir, manifest.amxmodx.dir, 'scripting');
+
+  // Build dep graph: include dirs for <angle> resolution = local scripting/include + deps + compiler
+  const localIncDir = path.join(scriptingRootDir, 'include');
+  const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
+  const graphIncludeDirs = [
+    ...(fs.existsSync(localIncDir)     ? [localIncDir]     : []),
+    ...(fs.existsSync(collectedIncDir) ? [collectedIncDir] : []),
+    ...includeDirs,
+  ];
+  const depGraph = new DepGraph(graphIncludeDirs);
+
+  // Parse all local .sma files to seed the graph
+  const glob = require('fast-glob');
+  if (fs.existsSync(scriptingRootDir)) {
+    const smaFiles = await glob('**/*.sma', { cwd: scriptingRootDir, absolute: true });
+    for (const f of smaFiles) depGraph.parseFile(f);
+    logger.dim(`  Dep graph: ${smaFiles.length} .sma file(s) indexed`);
+  }
+
   if (doDeploy && manifest.deploy.path) {
     await deployBuild(manifest, buildDir, { incremental: true });
   }
 
   const handlers = {
     async onSmaChange(smaPath) {
-      const scriptingRootDir = path.join(path.dirname(path.resolve(manifestPath)), manifest.amxmodx.dir, 'scripting');
+      depGraph.update(smaPath);
       const amxxName = await compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir);
       if (!amxxName) return;
       if (doDeploy && manifest.deploy.path) {
@@ -360,18 +382,26 @@ async function runWatch(options) {
       }
     },
 
-    async onIncChange() {
+    async onIncChange(incPath) {
+      depGraph.update(incPath);
+      const affected = depGraph.getSmasDependingOn(incPath);
+
+      if (affected.size === 0) {
+        logger.dim(`  No plugins depend on ${path.relative(manifestDir, incPath)}, skipping`);
+        return;
+      }
+
       try {
-        await runBuild({ manifest: manifestPath, buildDir: options.buildDir, noFetch: true });
-        manifest = parseManifest(manifestPath);
+        const compiled = [];
+        for (const smaPath of affected) {
+          const amxxName = await compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir);
+          if (amxxName) compiled.push(amxxName);
+        }
         if (doDeploy && manifest.deploy.path) {
-          await deployBuild(manifest, buildDir, { incremental: true });
-          const pluginsDir = path.join(buildDir, 'amxmodx', 'plugins');
-          if (fs.existsSync(pluginsDir)) {
-            const amxxFiles = fs.readdirSync(pluginsDir).filter((f) => f.endsWith('.amxx'));
-            for (const amxx of amxxFiles) {
-              await sendRconCommand(manifest.deploy, amxx.replace(/\.amxx$/, ''));
-            }
+          for (const amxxName of compiled) {
+            deployPlugin(manifest, buildDir, amxxName);
+            const pluginName = path.basename(amxxName).replace(/\.amxx$/, '');
+            await sendRconCommand(manifest.deploy, pluginName);
           }
         }
       } catch (err) {
