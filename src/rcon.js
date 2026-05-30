@@ -41,7 +41,8 @@ async function sendRcon({ host, port, password, command }, timeoutMs = 5000) {
 
     sock.on('message', (buf) => {
       if (buf.length < 5) return;
-      const body = buf.slice(4).toString('utf8').trim();
+      // Strip null bytes (GoldSrc packets are null-terminated) then whitespace
+      const body = buf.slice(4).toString('utf8').replace(/\0/g, '').trim();
 
       if (body.startsWith('challenge rcon ')) {
         const challenge = body.split(' ')[2];
@@ -50,8 +51,10 @@ async function sendRcon({ host, port, password, command }, timeoutMs = 5000) {
         return;
       }
 
-      logger.verbose(`  RCON ← ${body}`);
-      done(null, body);
+      // All non-challenge responses are print packets with a 1-byte type prefix — strip it
+      const text = body.slice(1).trim();
+      logger.verbose(`  RCON ← ${text}`);
+      done(null, text);
     });
 
     const req = makePacket('challenge rcon');
@@ -77,4 +80,22 @@ async function sendRconCommand(deployConfig, pluginName) {
   }
 }
 
-module.exports = { sendRcon, sendRconCommand };
+/**
+ * Sends RCON after deploying one or more plugins.
+ * If the command contains {plugin} — sends once per plugin name.
+ * Otherwise — sends the command once regardless of how many plugins were deployed.
+ */
+async function sendRconForPlugins(deployConfig, pluginNames) {
+  const command = deployConfig.rcon && deployConfig.rcon.command;
+  if (!command) return;
+
+  if (command.includes('{plugin}')) {
+    for (const name of pluginNames) {
+      await sendRconCommand(deployConfig, name);
+    }
+  } else {
+    await sendRconCommand(deployConfig, '');
+  }
+}
+
+module.exports = { sendRcon, sendRconCommand, sendRconForPlugins };

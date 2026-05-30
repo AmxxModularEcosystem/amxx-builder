@@ -14,7 +14,7 @@ const { fetchRepo, resolveRef } = require('./src/repo-fetcher');
 const { resolveDeps }    = require('./src/deps-resolver');
 const { compilePlugins, compileSingle } = require('./src/compiler');
 const { deployBuild, deployPlugin, deployFile } = require('./src/deployer');
-const { sendRconCommand }  = require('./src/rcon');
+const { sendRconCommand, sendRconForPlugins } = require('./src/rcon');
 const { startWatch }       = require('./src/watcher');
 const { DepGraph }         = require('./src/dep-graph');
 const { collectAll }     = require('./src/collector');
@@ -182,7 +182,7 @@ async function runBuild(options) {
 
   // Load .env from the manifest's directory (before any token is read)
   const manifestDir = path.dirname(path.resolve(manifestPath));
-  require('dotenv').config({ path: path.join(manifestDir, '.env') });
+  require('dotenv').config({ path: path.join(manifestDir, '.env'), override: true });
 
   // Step 1 — Parse manifest, then apply --set overrides
   const manifest = parseManifest(manifestPath);
@@ -301,7 +301,7 @@ async function runDeploy(options) {
   const manifestPath = resolveManifestPath(options.manifest);
   const buildDir     = path.resolve(options.buildDir || './build');
 
-  require('dotenv').config({ path: path.join(path.dirname(path.resolve(manifestPath)), '.env') });
+  require('dotenv').config({ path: path.join(path.dirname(path.resolve(manifestPath)), '.env'), override: true });
 
   if (options.build) {
     await runBuild({ ...options, manifest: manifestPath });
@@ -312,8 +312,7 @@ async function runDeploy(options) {
   const manifest = parseManifest(manifestPath);
   await deployBuild(manifest, buildDir, { incremental: options.incremental || false });
 
-  const pluginName = '{all}';
-  await sendRconCommand(manifest.deploy, pluginName);
+  await sendRconForPlugins(manifest.deploy, []);
 }
 
 // ─── watch implementation ─────────────────────────────────────────────────────
@@ -323,7 +322,7 @@ async function runWatch(options) {
   const buildDir     = path.resolve(options.buildDir || './build');
   const doDeploy     = options.deploy !== false;
 
-  require('dotenv').config({ path: path.join(path.dirname(path.resolve(manifestPath)), '.env') });
+  require('dotenv').config({ path: path.join(path.dirname(path.resolve(manifestPath)), '.env'), override: true });
 
   // Initial full build
   logger.info('Running initial build...');
@@ -379,7 +378,7 @@ async function runWatch(options) {
       if (doDeploy && manifest.deploy.path) {
         deployPlugin(manifest, buildDir, amxxName);
         const pluginName = path.basename(amxxName).replace(/\.amxx$/, '');
-        await sendRconCommand(manifest.deploy, pluginName);
+        await sendRconForPlugins(manifest.deploy, [pluginName]);
       }
     },
 
@@ -399,11 +398,12 @@ async function runWatch(options) {
           if (amxxName) compiled.push(amxxName);
         }
         if (doDeploy && manifest.deploy.path) {
+          const pluginNames = [];
           for (const amxxName of compiled) {
             deployPlugin(manifest, buildDir, amxxName);
-            const pluginName = path.basename(amxxName).replace(/\.amxx$/, '');
-            await sendRconCommand(manifest.deploy, pluginName);
+            pluginNames.push(path.basename(amxxName).replace(/\.amxx$/, ''));
           }
+          await sendRconForPlugins(manifest.deploy, pluginNames);
         }
       } catch (err) {
         logger.error(err.message);
