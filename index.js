@@ -656,12 +656,12 @@ function runInit(options) {
   const version = require('./package.json').version;
   const actionTag = `v${version.split('.')[0]}`;
 
-  writeIfAbsent('amxbuild.yml', manifestTemplate(pkgName));
+  writeIfAbsent('amxbuild.yml', renderTemplate('init-manifest.yml', { name: pkgName, schemaUrl: SCHEMA_URL }));
 
   if (options.workflow || options.ci) {
     const dest = path.join('.github', 'workflows', 'ci.yml');
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    writeIfAbsent(dest, workflowTemplate(actionTag));
+    writeIfAbsent(dest, renderTemplate('init-workflow.yml', { actionTag }));
   }
 
   if (options.plugin) {
@@ -677,7 +677,7 @@ function runInit(options) {
   }
 
   if (options.deploy) {
-    writeIfAbsent('.env', deployEnvTemplate());
+    writeIfAbsent('.env', renderTemplate('init-deploy.env'));
   }
 }
 
@@ -690,104 +690,13 @@ function writeIfAbsent(filePath, content) {
   logger.success(`Created ${filePath}`);
 }
 
-function deployEnvTemplate() {
-  return [
-    '# amxx-builder deploy configuration',
-    '# Used by: amxb deploy, amxb watch',
-    '',
-    '# Server root directory — files are deployed relative to this path',
-    '# Example: /home/user/hlds/cstrike  or  C:\\hlds\\cstrike',
-    'AMXB_DEPLOY_PATH=',
-    '',
-    '# GoldSrc UDP RCON — leave blank to skip RCON after deploy',
-    'AMXB_DEPLOY_RCON_HOST=127.0.0.1',
-    'AMXB_DEPLOY_RCON_PORT=27015',
-    'AMXB_DEPLOY_RCON_PASSWORD=',
-    '# {plugin} is replaced with the plugin name (without .amxx extension)',
-    '# Leave blank to disable RCON commands',
-    'AMXB_DEPLOY_RCON_CMD=amxx load {plugin}',
-    '',
-  ].join('\n');
-}
+const TEMPLATES_DIR = path.join(__dirname, 'templates');
+const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
 
-function manifestTemplate(name) {
-  const schemaUrl = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
-  return `# yaml-language-server: $schema=${schemaUrl}
-
-name: ${name}
-
-amxmodx:
-  version: "1.10.5428"
-
-deps:
-  # org/repo@tag
-
-output:
-  readme: false   # default: true
-`;
-}
-
-function workflowTemplate(actionTag) {
-  /* eslint-disable no-template-curly-in-string */
-  return `name: CI
-
-on:
-  push:
-    branches: [master, feature/**, fix/**]
-    paths-ignore:
-      - "**.md"
-  pull_request:
-    types: [opened, reopened, synchronize]
-  release:
-    types: [published]
-
-jobs:
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    outputs:
-      sha:  \${{ steps.sha.outputs.SHORT }}
-      name: \${{ steps.build.outputs.name }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - id: sha
-        run: echo "SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - id: build
-        uses: AmxxModularEcosystem/amxx-builder@${actionTag}
-        with:
-          set: |
-            output.pack=false
-            output.dir=./artifact
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: \${{ steps.build.outputs.name }}-\${{ steps.sha.outputs.SHORT }}-dev
-          path: artifact/
-
-  publish:
-    name: Publish release
-    runs-on: ubuntu-latest
-    needs: [build]
-    if: |
-      github.event_name == 'release' &&
-      github.event.action == 'published' &&
-      startsWith(github.ref, 'refs/tags/')
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: \${{ needs.build.outputs.name }}-\${{ needs.build.outputs.sha }}-dev
-          path: artifact/
-
-      - name: Package for release
-        run: |
-          cd artifact
-          zip -r "../\${{ needs.build.outputs.name }}-\${{ github.ref_name }}.zip" .
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: "\${{ needs.build.outputs.name }}-*.zip"
-`;
-  /* eslint-enable no-template-curly-in-string */
+function renderTemplate(name, vars = {}) {
+  let content = fs.readFileSync(path.join(TEMPLATES_DIR, name), 'utf8');
+  for (const [key, value] of Object.entries(vars)) {
+    content = content.replaceAll(`{{${key}}}`, value);
+  }
+  return content;
 }
