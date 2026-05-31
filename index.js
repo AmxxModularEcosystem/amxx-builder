@@ -23,6 +23,9 @@ const { buildIniFiles }  = require('./src/ini-builder');
 const { createArchive, copyOutput } = require('./src/archiver');
 const { getCacheDir }    = require('./src/cache-dir');
 
+const TEMPLATES_DIR = path.join(__dirname, 'templates');
+const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
+
 program
   .name('amxx-builder')
   .description('Build and package AMX Mod X server plugins')
@@ -689,9 +692,6 @@ function writeIfAbsent(filePath, content) {
   fs.writeFileSync(filePath, content);
   logger.success(`Created ${filePath}`);
 }
-
-const TEMPLATES_DIR = path.join(__dirname, 'templates');
-const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
 
 function renderTemplate(name, vars = {}) {
   let content = fs.readFileSync(path.join(TEMPLATES_DIR, name), 'utf8');
