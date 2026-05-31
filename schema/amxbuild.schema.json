@@ -132,6 +132,11 @@
         }
       }
     },
+    "plugins": {
+      "type": "array",
+      "description": "Rules for filtering and categorizing local plugins (amxmodx/scripting/**/*.sma). Applies only to local plugins; repo plugins use their per-repo plugins_ini_postfix. First matching rule wins.",
+      "items": { "$ref": "#/definitions/pluginRule" }
+    },
     "assets": {
       "type": "object",
       "description": "Remote asset sources to include in the build.",
@@ -201,6 +206,31 @@
     }
   },
   "definitions": {
+    "pluginRule": {
+      "type": "object",
+      "description": "A rule matching local .sma files by glob pattern.",
+      "required": ["match"],
+      "additionalProperties": false,
+      "properties": {
+        "match": {
+          "type": "string",
+          "description": "Glob pattern relative to scripting/ (e.g. \"VipM/*.sma\", \"**/*.sma\").",
+          "examples": ["*.sma", "VipM/*.sma", "legacy/**/*.sma"]
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Set to false to skip compilation and deploy for matching plugins (default: true).",
+          "default": true
+        },
+        "ini": {
+          "description": "plugins-*.ini postfix for matching plugins. Overrides the global plugins_ini_postfix. Set to false to compile but exclude from all INI files.",
+          "oneOf": [
+            { "type": "string", "description": "Postfix for plugins-<ini>.ini. Empty string generates plugins.ini.", "examples": ["vipm", "extra", ""] },
+            { "type": "boolean", "enum": [false], "description": "Compile but do not add to any INI file." }
+          ]
+        }
+      }
+    },
     "depEntry": {
       "description": "An include dependency. Either a shorthand string or an object.",
       "oneOf": [

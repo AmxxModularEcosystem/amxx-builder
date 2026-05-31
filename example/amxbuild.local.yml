@@ -1,7 +1,14 @@
 # Локальная сборка — эквивалент build.bat
 # Запускается из папки плагина: amxb build --manifest amxbuild.local.yml
 # Компилирует amxmodx/scripting/*.sma и пакует всё в {name}.zip
-# Структура архива: /{name}/addons/amxmodx/ + /README.md
+# Структура архива: /{name}/addons/amxmodx/ + /{name}/ (assets) + README.md
+#
+# Дефолты уже обеспечивают:
+#   archive_name: "{name}.zip"
+#   amxmodx_path: "{name}/addons/amxmodx"
+#   assets_path:  "{name}"
+#   readme: true
+#   generate_ini: false
 
 name: ExampleLocal
 
@@ -10,10 +17,3 @@ amxmodx:
 
 deps:
   - AmxxModularEcosystem/ParamsController@1.4.0
-
-output:
-  archive_name: "{name}.zip"
-  amxmodx_path: "{name}/addons/amxmodx"   # плагин в корне архива с префиксом
-  assets_path:  "{name}"                  # assets/ → {name}/ (модели, звуки и т.п.)
-  readme: true                            # включить README.md → /README.md
-  generate_ini: false                     # plugins.ini в дистрибутиве не нужен

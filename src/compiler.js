@@ -2,8 +2,26 @@ const fs    = require('fs');
 const path  = require('path');
 const chalk = require('chalk');
 const { spawn } = require('child_process');
-const glob  = require('fast-glob');
+const glob       = require('fast-glob');
+const micromatch = require('micromatch');
 const logger = require('./logger');
+
+/**
+ * Applies plugin rules to a local .sma file path (relative to scripting/).
+ * Returns null if the plugin should be skipped (enabled: false),
+ * or { postfix, skipIni } where postfix is the INI postfix (false = skip INI).
+ */
+function applyPluginRule(smaRelPath, rules, defaultPostfix) {
+  const normalized = smaRelPath.split(path.sep).join('/');
+  for (const rule of rules) {
+    if (micromatch.isMatch(normalized, rule.match, { dot: true })) {
+      if (!rule.enabled) return null;
+      const postfix = rule.ini !== null ? rule.ini : defaultPostfix;
+      return { postfix, skipIni: rule.ini === false };
+    }
+  }
+  return { postfix: defaultPostfix, skipIni: false };
+}
 
 async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs, buildDir) {
   const pluginsDir = path.join(buildDir, 'amxmodx', 'plugins');
@@ -62,11 +80,26 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
       if (defines.length) logger.verbose(`  defines: ${defines.join(', ')}`);
     }
 
+    const isLocal = src.ref === 'local';
+
     for (const smaRel of smaFiles) {
+      let taskPostfix = postfix;
+      let skipIni     = false;
+
+      if (isLocal) {
+        const ruleResult = applyPluginRule(smaRel, manifest.pluginRules, postfix);
+        if (!ruleResult) {
+          logger.skip(`Skipped (plugin rule): ${smaRel}`);
+          continue;
+        }
+        taskPostfix = ruleResult.postfix;
+        skipIni     = ruleResult.skipIni;
+      }
+
       const baseName = path.basename(smaRel);
       const outName  = smaRel.replace(/\.sma$/, '.amxx').split(path.sep).join('/');
       tasks.push({
-        label, ref, postfix, baseName,
+        label, ref, postfix: taskPostfix, skipIni, baseName,
         srcPath: path.join(scriptingDir, smaRel),
         outName,
         outPath: path.join(pluginsDir, ...outName.split('/')),
@@ -112,7 +145,7 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
 }
 
 async function runCompile(compilerPath, task) {
-  const { srcPath, outPath, outName, includes, defines, baseName, postfix, label, ref } = task;
+  const { srcPath, outPath, outName, includes, defines, baseName, postfix, skipIni, label, ref } = task;
 
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   const args = [srcPath, `-o${outPath}`, ...includes, ...defines];
@@ -130,7 +163,7 @@ async function runCompile(compilerPath, task) {
     `${chalk.bold.white('[amxx-builder]')}   ${baseName} ${dots(baseName)} ${chalk.green('OK')}\n`
   );
 
-  return { amxxName: outName, plugins_ini_postfix: postfix, ini_comment: null, repo: label, ref };
+  return { amxxName: outName, plugins_ini_postfix: postfix, skipIni: skipIni || false, ini_comment: null, repo: label, ref };
 }
 
 function spawnAsync(cmd, args) {
@@ -204,4 +237,4 @@ async function compileSingle(manifest, smaPath, compilerPath, includeDirs, build
   return outName;
 }
 
-module.exports = { compilePlugins, compileSingle };
+module.exports = { compilePlugins, compileSingle, applyPluginRule };

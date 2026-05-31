@@ -63,8 +63,9 @@ function parseManifest(manifestPath) {
     globalDeps,
     globalPostfix,
     repos,
-    assets:  parseAssets(raw.assets || {}),
-    deploy:  parseDeploy(raw),
+    assets:      parseAssets(raw.assets || {}),
+    pluginRules: parsePluginRules(raw.plugins || []),
+    deploy:      parseDeploy(raw),
     output: {
       dir:          String(output.dir),
       archive_name: String(output.archive_name),
@@ -199,6 +200,19 @@ function parseAssetCache(val) {
   if (val == null) return 'none';
   if (!valid.includes(val)) throw new Error(`asset source cache must be one of: ${valid.join(', ')}`);
   return val;
+}
+
+function parsePluginRules(rules) {
+  if (!Array.isArray(rules)) return [];
+  return rules.map((r, i) => {
+    if (!r.match) throw new Error(`plugins[${i}]: missing "match" field`);
+    const ini = r.ini === false ? false : (r.ini != null ? String(r.ini) : null);
+    return {
+      match:   String(r.match),
+      enabled: r.enabled !== false,
+      ini,
+    };
+  });
 }
 
 function interpolateEnv(val) {

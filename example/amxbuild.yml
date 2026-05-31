@@ -6,14 +6,12 @@ platform: linux    # целевая платформа сервера (linux/win
 
 # ── Компилятор ────────────────────────────────────────────────────────────────
 # version не указан → берётся последний релиз автоматически
-# dir — имя папки в каждом репо, где лежит amxmodx-контент (дефолт: amxmodx)
 amxmodx:
   version: "1.10.5428"
-  dir: amxmodx
 
 # ── GitHub ────────────────────────────────────────────────────────────────────
-github:
-  token_env: GITHUB_TOKEN   # имя env-переменной с PAT; не нужен для публичных репо
+# token_env: GITHUB_TOKEN   # имя env-переменной с PAT (default: GITHUB_TOKEN)
+# ssh: false                # использовать SSH вместо HTTPS (default: false)
 
 # ── Глобальные зависимости ────────────────────────────────────────────────────
 # Выигрывают над DEPS_LIST из любого репо
@@ -31,6 +29,16 @@ deps:
 
 # ── Имя ini-файла: plugins-{postfix}.ini ─────────────────────────────────────
 plugins_ini_postfix: myserver
+
+# ── Управление локальными плагинами ──────────────────────────────────────────
+# Применяется только к amxmodx/scripting/. Первое совпадение побеждает.
+# plugins:
+#   - match: "VipM/*.sma"
+#     ini: vipm             # → plugins-vipm.ini (переопределяет plugins_ini_postfix)
+#   - match: "utils/*.sma"
+#     ini: false            # компилировать, но не добавлять ни в один INI
+#   - match: "legacy.sma"
+#     enabled: false        # пропустить полностью (не компилировать, не деплоить)
 
 # ── Репозитории ───────────────────────────────────────────────────────────────
 repos:
@@ -51,14 +59,14 @@ repos:
       - "CWAPI-A-Test.sma"
 
 # ── Деплой (опционально) ──────────────────────────────────────────────────────
-# Значения по умолчанию берутся из .env (gitignored):
+# Значения по умолчанию берутся из .env (создаётся через amxb init --deploy):
 #   AMXB_DEPLOY_PATH, AMXB_DEPLOY_RCON_HOST, AMXB_DEPLOY_RCON_PASSWORD и т.д.
 # Поддерживается интерполяция ${VAR} из env.
 #
 # deploy:
 #   path: /home/user/server           # или ${AMXB_DEPLOY_PATH}
-#   amxmodx_path: addons/amxmodx      # default: output.amxmodx_path
-#   watch_debounce_ms: 500            # мс стабильности файла перед ребилдом
+#   amxmodx_path: addons/amxmodx      # default: addons/amxmodx
+#   watch_debounce_ms: 500            # мс стабильности файла перед ребилдом (default: 500)
 #   exclude:                          # пути от deploy.path, которые не перезаписываются
 #     - addons/amxmodx/configs/       # вся папка configs
 #     - addons/amxmodx/configs/amxx.cfg
@@ -69,11 +77,17 @@ repos:
 #     command: "amxx load {plugin}"   # {plugin} = имя без .amxx; пусто = не слать
 
 # ── Ассеты ────────────────────────────────────────────────────────────────────
-# Локальные ассеты (папка assets/ рядом с манифестом) всегда перекрывают удалённые.
+# Источники обрабатываются по порядку, конфликты разрешаются через on_conflict.
+# source: local (папка assets/ рядом с манифестом) добавляется автоматически по дефолту;
+# при явном указании sources: нужно включить его явно.
 assets:
-  on_conflict: last_wins   # среди удалённых источников (last_wins / first_wins)
+  # on_conflict: last_wins   # среди источников: last_wins (default) / first_wins
 
   sources:
+    # Локальные ассеты (assets/ рядом с манифестом) — включены по дефолту,
+    # при явном sources: нужно прописать явно
+    - source: local
+
     # Базовый amxmodx — использует platform и amxmodx.version выше
     - source: amxmodx
       map:
@@ -118,10 +132,7 @@ assets:
 # ── Выходной архив ────────────────────────────────────────────────────────────
 output:
   dir: ./dist
-  archive_name: "{name}-{version}.zip"
-  amxmodx_path: addons/amxmodx   # куда ложится содержимое amxmodx/ в архиве
-  generate_ini: true             # сгенерировать plugins[-postfix].ini (дефолт: true)
-  on_conflict: last_wins         # поведение при конфликте файлов между репо:
-                                 #   last_wins  — последний репо побеждает (дефолт, варн)
-                                 #   first_wins — первый репо побеждает (варн)
-                                 #   error      — упасть при первом конфликте
+  archive_name: "{name}-{version}.zip"   # default: "{name}.zip"
+  amxmodx_path: addons/amxmodx           # default: "{name}/addons/amxmodx"
+  generate_ini: true                     # default: false
+  # on_conflict: last_wins               # last_wins (default) / first_wins / error

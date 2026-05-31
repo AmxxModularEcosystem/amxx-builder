@@ -14,6 +14,7 @@ function buildIniFiles(compiledPlugins, buildDir) {
 
   const groups = new Map(); // postfix → [plugin]
   for (const plugin of compiledPlugins) {
+    if (plugin.skipIni) continue;
     const k = plugin.plugins_ini_postfix;
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(plugin);

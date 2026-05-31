@@ -32,8 +32,21 @@ amxb build --manifest path/to.yml   # явный путь
 amxb build --dry-run                # показать план без выполнения
 amxb build --no-fetch               # использовать кэш, без клонирования
 amxb build --no-archive             # только скомпилировать, без .zip
+
+amxb deploy                         # задеплоить build/ на сервер
+amxb deploy --build                 # сначала собрать, потом задеплоить
+
+amxb watch                          # следить за изменениями и деплоить
+amxb watch --no-deploy              # только пересобирать, без деплоя
+
+amxb init                           # создать amxbuild.yml в текущей папке
+amxb init --deploy                  # + создать .env с заготовками для деплоя
+amxb init --plugin <name>           # + создать amxmodx/scripting/<name>.sma
+amxb init --workflow                # + создать .github/workflows/ci.yml
+
 amxb clean                          # очистить build/ и кэш клонов
 amxb clean --all                    # + кэш компилятора
+amxb cache info                     # показать содержимое кэша
 ```
 
 Кэш хранится в `%LOCALAPPDATA%\amxx-builder` (Windows) или `~/.cache/amxx-builder` (Unix).  
@@ -56,7 +69,7 @@ repos:
 - клонирует default branch каждого репо
 - берёт всё содержимое папки `amxmodx/` из каждого репо
 - компилирует все `.sma` из `amxmodx/scripting/`
-- упаковывает в `addons/amxmodx/` внутри архива
+- упаковывает в `{name}/addons/amxmodx/` внутри архива
 
 ## Структура репо плагина
 
@@ -66,6 +79,8 @@ repos:
 amxmodx/
   scripting/
     my_plugin.sma        ← компилируется в plugins/my_plugin.amxx
+    SubDir/
+      other.sma          ← компилируется в plugins/SubDir/other.amxx
     include/             ← используется компилятором
   configs/
     my_plugin.cfg        ← копируется как есть
@@ -85,24 +100,48 @@ my-server/
   amxmodx/               ← мержится в addons/amxmodx/ (конфиги, доп. файлы)
     configs/
       server.cfg
-  assets/                ← кладётся в корень архива
+  assets/                ← включается по умолчанию (source: local)
     models/
       weapon.mdl
     sound/
       weapon.wav
 ```
 
-## Удалённые ассеты
+## Управление локальными плагинами
 
-Поле `assets.sources` позволяет добавлять файлы из URL-источников. Локальная папка `assets/` всегда перекрывает удалённые источники.
+Поле `plugins:` позволяет фильтровать и распределять плагины из `amxmodx/scripting/` по INI-файлам. Применяется **только к локальным** плагинам; плагины из репо используют `plugins_ini_postfix` своего репо. Первое совпадение побеждает.
 
 ```yaml
-platform: linux   # целевая платформа сервера (влияет на source: amxmodx)
+plugins_ini_postfix: myserver   # глобальный постфикс → plugins-myserver.ini
 
+plugins:
+  - match: "VipM/*.sma"
+    ini: vipm             # → plugins-vipm.ini
+  - match: "utils/*.sma"
+    ini: false            # компилировать, но не включать ни в один INI
+  - match: "wip/*.sma"
+    enabled: false        # полностью пропустить (не компилировать, не деплоить)
+```
+
+| Поле | По умолчанию | Описание |
+| --- | --- | --- |
+| `match` | — | Glob-паттерн относительно `scripting/` |
+| `enabled` | `true` | `false` — пропустить компиляцию и деплой |
+| `ini` | `plugins_ini_postfix` | Постфикс INI, `false` — не включать в INI |
+
+## Удалённые ассеты
+
+Поле `assets.sources` позволяет добавлять файлы из разных источников. По умолчанию источником является локальная папка `assets/` (`source: local`).
+
+При явном указании `sources:` нужно включить `source: local` явно, если нужны локальные ассеты:
+
+```yaml
 assets:
-  on_conflict: last_wins   # среди удалённых: last_wins / first_wins
+  # on_conflict: last_wins   # last_wins (default) / first_wins
 
   sources:
+    - source: local           # assets/ рядом с манифестом
+
     # Базовый amxmodx (modules, plugins и т.д.)
     - source: amxmodx
       map:
@@ -128,6 +167,17 @@ assets:
     # Одиночный файл с переименованием (to без trailing slash)
     - url: https://cdn.example.com/pistol_v2.mdl
       to: models/v_pistol.mdl
+
+    # GitHub release asset — использует тот же кэш, что и deps
+    - source: release
+      repo: org/weapon-pack
+      ref: v2.0.0
+      asset: "weapon-models.zip"
+      map:
+        - from: models/
+          to: models/
+        - from: sound/
+          to: sound/
 ```
 
 **Семантика `from` / `to` (trailing slash = содержимое папки):**
@@ -139,6 +189,42 @@ assets:
 | `models` | `models/` | папка целиком → `assets/models/models/` |
 | `sound/gun.wav` | `sound/` | файл → `assets/sound/gun.wav` |
 | `sound/gun.wav` | `sound/pistol.wav` | файл с переименованием |
+
+## Деплой и watch
+
+Создайте `.env` рядом с манифестом (`amxb init --deploy`):
+
+```env
+AMXB_DEPLOY_PATH=/home/user/hlds/cstrike
+AMXB_DEPLOY_RCON_HOST=127.0.0.1
+AMXB_DEPLOY_RCON_PORT=27015
+AMXB_DEPLOY_RCON_PASSWORD=secret
+AMXB_DEPLOY_RCON_CMD=amxx load {plugin}
+```
+
+Или задайте прямо в манифесте (поддерживается `${VAR}` интерполяция):
+
+```yaml
+deploy:
+  path: /home/user/hlds/cstrike    # корень сервера (где лежат addons/, models/)
+  amxmodx_path: addons/amxmodx     # default: addons/amxmodx
+  watch_debounce_ms: 500           # мс стабильности файла перед ребилдом (default: 500)
+  exclude:                         # пути от deploy.path, которые не перезаписываются
+    - addons/amxmodx/configs/      # сохранить конфиги сервера
+    - addons/amxmodx/configs/amxx.cfg
+  rcon:
+    host: 127.0.0.1
+    port: 27015
+    password: ${RCON_PASSWORD}
+    command: "amxx load {plugin}"  # {plugin} = имя без .amxx; пусто = не слать
+```
+
+`amxb watch` отслеживает изменения в `amxmodx/` и `assets/`:
+
+- `.sma` → пересобрать плагин, задеплоить `.amxx`, послать RCON
+- `.inc` → пересобрать только плагины, зависящие от этого инклюда (по `#include`/`#tryinclude`)
+- остальные файлы → задеплоить напрямую
+- манифест → полная пересборка
 
 ## GitHub Actions
 
@@ -177,13 +263,6 @@ amxmodx:
 
 deps:
   - AmxxModularEcosystem/ParamsController@1.4.2
-
-output:
-  dir: ./
-  amxmodx_path: "{name}/addons/amxmodx"
-  assets_path:  "{name}"
-  readme: true
-  generate_ini: false
 ```
 
 Воркфлоу (`.github/workflows/ci.yml`):
@@ -262,22 +341,17 @@ jobs:
 ## Локальная сборка (замена build.bat)
 
 `repos:` не обязателен. Если не указан — инструмент работает только с локальными файлами.
-Чтобы архив начинался с имени пакета (как при дистрибуции плагина), используй шаблон `{name}` в путях:
+Чтобы архив начинался с имени пакета (как при дистрибуции плагина), используй шаблон `{name}` в путях — это уже поведение по умолчанию:
 
 ```yaml
 name: VipModular
 version: "5.0.0"
-
-output:
-  amxmodx_path: "{name}/addons/amxmodx"
-  assets_path:  "{name}"
-  readme: true
 ```
 
 Результат:
 
 ```text
-VipModular-5.0.0.zip
+VipModular.zip
   VipModular/
     addons/amxmodx/
       plugins/vip_core.amxx
@@ -303,8 +377,11 @@ repos:
 
 ## Приоритеты
 
-| Что | Приоритет (↑ выше) |
+| Что | Порядок (↑ выше) |
 | --- | --- |
-| `plugins_ini_postfix` | плагин → репо → манифест |
+| плагины `plugins:` | правила применяются по порядку, первое совпадение побеждает |
+| `plugins_ini_postfix` | правило `plugins:` → репо → глобальный |
 | зависимости | `manifest.deps` → `deps_override` → `DEPS_LIST` файл в репо |
+| ассеты | порядок в `sources:` + `on_conflict` |
 | версия компилятора | `amxmodx.version` → последний релиз |
+| значения манифеста | `--set` → манифест проекта → `defaults/amxbuild.defaults.yml` |

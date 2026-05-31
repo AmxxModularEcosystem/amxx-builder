@@ -1,0 +1,10 @@
+{
+  "yaml.schemas": {
+    "./schema/amxbuild.schema.json": [
+      "amxbuild.yml",
+      "amxbuild.yaml",
+      "example/amxbuild.yml",
+      "example/amxbuild.local.yml"
+    ]
+  }
+}

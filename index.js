@@ -12,7 +12,7 @@ const { parseManifest }  = require('./src/manifest');
 const { fetchCompiler }  = require('./src/compiler-fetcher');
 const { fetchRepo, resolveRef } = require('./src/repo-fetcher');
 const { resolveDeps }    = require('./src/deps-resolver');
-const { compilePlugins, compileSingle } = require('./src/compiler');
+const { compilePlugins, compileSingle, applyPluginRule } = require('./src/compiler');
 const { deployBuild, deployPlugin, deployFile } = require('./src/deployer');
 const { sendRconCommand, sendRconForPlugins } = require('./src/rcon');
 const { startWatch }       = require('./src/watcher');
@@ -373,6 +373,12 @@ async function runWatch(options) {
   const handlers = {
     async onSmaChange(smaPath) {
       depGraph.update(smaPath);
+      const smaRel = path.relative(scriptingRootDir, smaPath).split(path.sep).join('/');
+      const pluginRule = applyPluginRule(smaRel, manifest.pluginRules, manifest.globalPostfix);
+      if (!pluginRule) {
+        logger.dim(`  Skipped by plugin rule: ${smaRel}`);
+        return;
+      }
       const amxxName = await compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir);
       if (!amxxName) return;
       if (doDeploy && manifest.deploy.path) {
@@ -394,6 +400,12 @@ async function runWatch(options) {
       try {
         const compiled = [];
         for (const smaPath of affected) {
+          const smaRel = path.relative(scriptingRootDir, smaPath).split(path.sep).join('/');
+          const pluginRule = applyPluginRule(smaRel, manifest.pluginRules, manifest.globalPostfix);
+          if (!pluginRule) {
+            logger.dim(`  Skipped by plugin rule: ${smaRel}`);
+            continue;
+          }
           const amxxName = await compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir);
           if (amxxName) compiled.push(amxxName);
         }
@@ -711,11 +723,7 @@ deps:
   # org/repo@tag
 
 output:
-  dir: ./
-  archive_name: "{name}.zip"
-  amxmodx_path: "{name}/addons/amxmodx"
-  readme: false
-  generate_ini: false
+  readme: false   # default: true
 `;
 }
 

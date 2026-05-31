@@ -5,7 +5,11 @@
       "WebFetch(*)",
       "Read(*)",
       "Write(*)",
-      "PowerShell(*)"
+      "PowerShell(*)",
+      "Bash(mkdir \"c:\\\\Users\\\\arkan\\\\Desktop\\\\amxmdox-server-builder\\\\.vscode\" 2>/dev/null; echo \"ok\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\arkan\\Desktop\\amxmdox-server-builder"
     ]
   }
 }

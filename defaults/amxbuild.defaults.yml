@@ -22,6 +22,8 @@ output:
   pack: true
   on_conflict: last_wins
 
+plugins: []
+
 assets:
   on_conflict: last_wins
   sources:
