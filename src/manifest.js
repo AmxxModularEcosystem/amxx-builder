@@ -168,6 +168,9 @@ function parseAssets(raw) {
 }
 
 function parseAssetSource(s) {
+  if (s.source === 'local') {
+    return { type: 'local', map: parseAssetMap(s) };
+  }
   if (s.source === 'amxmodx') {
     return { type: 'amxmodx', map: parseAssetMap(s), cache: parseAssetCache(s.cache) };
   }

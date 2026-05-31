@@ -82,18 +82,6 @@ async function collectAll(manifest, repoLocalDirs, buildDir) {
     if (files.length) logger.info(`Local ${manifest.amxmodx.dir}/: ${files.length} files merged`);
   }
 
-  // Copy local assets/ → build/assets/ (go to archive root)
-  const localAssetsDir = path.join(manifestDir, 'assets');
-  if (fs.existsSync(localAssetsDir)) {
-    const assetsBuildDir = path.join(buildDir, 'assets');
-    const files = await glob('**/*', { cwd: localAssetsDir, onlyFiles: true });
-    for (const f of files) {
-      const dest = path.join(assetsBuildDir, f);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(path.join(localAssetsDir, f), dest);
-    }
-    if (files.length) logger.info(`Local assets/: ${files.length} files → archive root`);
-  }
 }
 
 module.exports = { collectAll };

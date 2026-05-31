@@ -329,8 +329,8 @@
       "properties": {
         "source": {
           "type": "string",
-          "description": "Special built-in source type:\n- \"amxmodx\": base amxmodx package (uses manifest.platform and amxmodx.version)\n- \"release\": GitHub release asset, shares cache with deps (requires repo + ref)",
-          "enum": ["amxmodx", "release"]
+          "description": "Built-in source type:\n- \"local\": local assets/ directory next to the manifest (included by default)\n- \"amxmodx\": base amxmodx package (uses manifest.platform and amxmodx.version)\n- \"release\": GitHub release asset, shares cache with deps (requires repo + ref)",
+          "enum": ["local", "amxmodx", "release"]
         },
         "repo": {
           "type": "string",

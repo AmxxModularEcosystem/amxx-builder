@@ -3,7 +3,7 @@
 # Компилирует amxmodx/scripting/*.sma и пакует всё в {name}.zip
 # Структура архива: /{name}/addons/amxmodx/ + /README.md
 
-name: VipModular
+name: ExampleLocal
 
 amxmodx:
   version: "1.10.5428"   # опционально; без указания берётся последняя версия

@@ -14,38 +14,47 @@ const { getAmxmodxFullDir, getHostPlatform } = require('./compiler-fetcher');
 const { getReleaseCacheDir } = require('./release-fetcher');
 
 /**
- * Downloads and processes all asset sources defined in manifest.assets.sources.
- * Remote sources are merged into build/_assets_remote/ respecting on_conflict.
- * Then overlaid onto build/assets/ — local files already there win (placed by collectAll).
+ * Processes all asset sources defined in manifest.assets.sources in order.
+ * Sources are written directly to build/assets/ with on_conflict resolution.
+ * source: local copies from assets/ next to the manifest.
  */
 async function fetchAssets(manifest, buildDir, noFetch = false) {
   const { sources, on_conflict } = manifest.assets;
   if (!sources.length) return;
 
   const manifestDir = path.dirname(manifest._path);
-  const remoteDir   = path.join(buildDir, '_assets_remote');
   const assetsDir   = path.join(buildDir, 'assets');
 
-  fs.mkdirSync(remoteDir, { recursive: true });
+  fs.mkdirSync(assetsDir, { recursive: true });
 
   logger.info(`Assets: processing ${sources.length} source(s)...`);
 
   const origins = new Map(); // relPath → source label (for conflict tracking)
 
   for (const source of sources) {
-    const label  = source.type === 'amxmodx' ? 'amxmodx' : source.url;
+    const label  = sourceLabel(source);
     const srcDir = await resolveSource(source, manifest, manifestDir, buildDir, noFetch);
     if (!srcDir) continue;
-    applyMap(srcDir, remoteDir, source.map, label, on_conflict, origins);
+    applyMap(srcDir, assetsDir, source.map, label, on_conflict, origins);
   }
+}
 
-  // Overlay remote into build/assets/, skipping files already there (local always wins)
-  overlayDir(remoteDir, assetsDir);
+function sourceLabel(source) {
+  if (source.type === 'local')   return 'local';
+  if (source.type === 'amxmodx') return 'amxmodx';
+  if (source.type === 'release') return `${source.repo}@${source.ref}`;
+  return source.url;
 }
 
 // ─── source resolution ────────────────────────────────────────────────────────
 
 async function resolveSource(source, manifest, manifestDir, buildDir, noFetch) {
+  if (source.type === 'local') {
+    const localAssetsDir = path.join(manifestDir, 'assets');
+    if (!fs.existsSync(localAssetsDir)) return null;
+    logger.dim(`  local assets/`);
+    return localAssetsDir;
+  }
   if (source.type === 'amxmodx') {
     const version  = manifest.amxmodx.version;
     const platform = manifest.platform || getHostPlatform();
@@ -222,19 +231,5 @@ function copyDirWithConflict(srcDir, destDir, trackBase, label, onConflict, orig
   }
 }
 
-// Overlay srcDir onto destDir — skip files that already exist (local wins)
-function overlayDir(srcDir, destDir) {
-  if (!fs.existsSync(srcDir)) return;
-  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    const srcPath  = path.join(srcDir,  entry.name);
-    const destPath = path.join(destDir, entry.name);
-    if (entry.isDirectory()) {
-      overlayDir(srcPath, destPath);
-    } else if (!fs.existsSync(destPath)) {
-      fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
 
 module.exports = { fetchAssets };
