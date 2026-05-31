@@ -74,6 +74,11 @@ function deployPlugin(manifest, buildDir, amxxName) {
     return null;
   }
 
+  if (isExcluded(dest, manifest.deploy.path, manifest.deploy.exclude || [])) {
+    logger.verbose(`  skip (excluded): ${amxxName}`);
+    return null;
+  }
+
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(src, dest);
   logger.success(`Deployed: ${amxxName}`);

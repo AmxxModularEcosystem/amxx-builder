@@ -45,7 +45,7 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   const localScriptingDir = path.join(path.dirname(manifest._path), manifest.amxmodx.dir, 'scripting');
   if (fs.existsSync(localScriptingDir)) {
     sources.push({
-      label: '(local)', ref: 'local', scriptingDir: localScriptingDir,
+      label: '(local)', ref: 'local', isLocal: true, scriptingDir: localScriptingDir,
       exclude: [], postfix: manifest.globalPostfix,
     });
   }
@@ -53,7 +53,7 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   // ── Collect all .sma tasks ─────────────────────────────────────────────────
   const tasks = [];
   for (const src of sources) {
-    const { scriptingDir, exclude, postfix, label, ref } = src;
+    const { scriptingDir, exclude, postfix, label, ref, isLocal = false } = src;
 
     if (!fs.existsSync(scriptingDir)) {
       logger.dim(`  ${label}: no scripting/ dir`);
@@ -79,8 +79,6 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
       logger.verbose(`  includes: ${includes.join(', ') || '(none)'}`);
       if (defines.length) logger.verbose(`  defines: ${defines.join(', ')}`);
     }
-
-    const isLocal = src.ref === 'local';
 
     for (const smaRel of smaFiles) {
       let taskPostfix = postfix;

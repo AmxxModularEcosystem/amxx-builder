@@ -70,25 +70,22 @@ function startWatch(manifest, manifestPath, handlers) {
       return;
     }
 
-    // .sma → recompile single plugin
-    if (filePath.endsWith('.sma')) {
+    const inAmxmodx = absPath.startsWith(localAmxmodxDir + path.sep);
+    const section   = inAmxmodx ? 'amxmodx' : 'assets';
+    const baseDir   = inAmxmodx ? localAmxmodxDir : localAssetsDir;
+    const relToBase = path.relative(baseDir, absPath);
+
+    if (inAmxmodx && filePath.endsWith('.sma')) {
       logger.step(`Changed: ${rel}`);
       handlers.onSmaChange(absPath);
       return;
     }
 
-    // .inc → recompile affected plugins
-    if (filePath.endsWith('.inc')) {
+    if (inAmxmodx && filePath.endsWith('.inc')) {
       logger.step(`Include changed: ${rel}`);
       handlers.onIncChange(absPath);
       return;
     }
-
-    // Other file in amxmodx/ or assets/
-    const inAmxmodx = absPath.startsWith(localAmxmodxDir + path.sep) || absPath === localAmxmodxDir;
-    const section   = inAmxmodx ? 'amxmodx' : 'assets';
-    const baseDir   = inAmxmodx ? localAmxmodxDir : localAssetsDir;
-    const relToBase = path.relative(baseDir, absPath);
 
     logger.step(`Changed: ${rel}`);
     handlers.onFileChange(relToBase, section);

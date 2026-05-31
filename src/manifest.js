@@ -50,7 +50,7 @@ function parseManifest(manifestPath) {
   return {
     _path:    absPath,
     name:     raw.name,
-    version:  String(raw.version),
+    version:  parseVersion(raw.version),
     platform,
     amxmodx: {
       version: (raw.amxmodx && raw.amxmodx.version) ? String(raw.amxmodx.version) : null,
@@ -77,6 +77,13 @@ function parseManifest(manifestPath) {
       on_conflict:  validateOnConflict(output.on_conflict),
     },
   };
+}
+
+function parseVersion(val) {
+  if (typeof val !== 'string') {
+    throw new Error(`manifest: "version" must be a string — wrap it in quotes: version: "${val}"`);
+  }
+  return val;
 }
 
 function validateOnConflict(val) {

@@ -12,8 +12,8 @@
       "description": "Project name. Used as a {name} placeholder in archive_name and amxmodx_path."
     },
     "version": {
-      "type": ["string", "number"],
-      "description": "Project version. Used as a {version} placeholder in archive_name. Can be overridden via --set version=X or the action 'version' input."
+      "type": "string",
+      "description": "Project version. Used as a {version} placeholder in archive_name. Can be overridden via --set version=X or the action 'version' input. Must be quoted in YAML to avoid number coercion (e.g. version: \"1.0\")."
     },
     "platform": {
       "type": "string",
