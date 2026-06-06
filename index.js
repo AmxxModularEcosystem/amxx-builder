@@ -139,6 +139,21 @@ program
     }
   });
 
+// ─── doctor ──────────────────────────────────────────────────────────────────
+
+program
+  .command('doctor')
+  .description('Check system health and validate manifest')
+  .option('--manifest <path>', 'Path to manifest file to validate')
+  .action(async (options) => {
+    try {
+      await runDoctor(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
 // ─── init ────────────────────────────────────────────────────────────────────
 
 program
@@ -150,9 +165,14 @@ program
   .option('--plugin <name>', 'Create amxmodx/scripting/<name>.sma')
   .option('--gitignore',     'Create .gitignore')
   .option('--deploy',        'Create .env with deploy stubs (AMXB_DEPLOY_*)')
-  .action((options) => {
+  .option('-i, --interactive', 'Interactive mode with prompts')
+  .action(async (options) => {
     try {
-      runInit(options);
+      if (options.interactive) {
+        await runInitInteractive(options);
+      } else {
+        runInit(options);
+      }
     } catch (err) {
       logger.error(err.message);
       process.exit(1);
@@ -300,6 +320,14 @@ async function runClean(options) {
 
 // ─── deploy implementation ────────────────────────────────────────────────────
 
+function gatherPluginNames(buildDir) {
+  const pluginsDir = path.join(buildDir, 'amxmodx', 'plugins');
+  if (!fs.existsSync(pluginsDir)) return [];
+  return fs.readdirSync(pluginsDir)
+    .filter(f => f.endsWith('.amxx'))
+    .map(f => f.replace(/\.amxx$/, ''));
+}
+
 async function runDeploy(options) {
   const manifestPath = resolveManifestPath(options.manifest);
   const buildDir     = path.resolve(options.buildDir || './build');
@@ -315,7 +343,8 @@ async function runDeploy(options) {
   const manifest = parseManifest(manifestPath);
   await deployBuild(manifest, buildDir, { incremental: options.incremental || false });
 
-  await sendRconForPlugins(manifest.deploy, []);
+  const pluginNames = gatherPluginNames(buildDir);
+  await sendRconForPlugins(manifest.deploy, pluginNames);
 }
 
 // ─── watch implementation ─────────────────────────────────────────────────────
@@ -438,6 +467,8 @@ async function runWatch(options) {
         manifest = parseManifest(manifestPath);
         if (doDeploy && manifest.deploy.path) {
           await deployBuild(manifest, buildDir, { incremental: true });
+          const pluginNames = gatherPluginNames(buildDir);
+          await sendRconForPlugins(manifest.deploy, pluginNames);
         }
         logger.warn('Note: if new watch paths were added, restart amxb watch to pick them up');
       } catch (err) {
@@ -565,6 +596,80 @@ function runCacheClean(options) {
   }
 }
 
+// ─── doctor ────────────────────────────────────────────────────────────────────
+
+async function runDoctor(options) {
+  const { execSync } = require('child_process');
+  const ok = [];
+  const warn = [];
+
+  // Node version
+  const nodeMajor = parseInt(process.version.slice(1).split('.')[0], 10);
+  (nodeMajor >= 16 ? ok : warn).push(`Node.js: ${process.version.slice(1)}${nodeMajor >= 16 ? '' : ' (minimum 16 required)'}`);
+
+  // Git
+  try {
+    const gitVer = execSync('git --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+    ok.push(`Git: ${gitVer.replace('git version ', '')}`);
+  } catch {
+    warn.push('Git: not found in PATH');
+  }
+
+  // npm
+  try {
+    const npmVer = execSync('npm --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+    ok.push(`npm: ${npmVer}`);
+  } catch {
+    warn.push('npm: not found in PATH');
+  }
+
+  // GitHub API
+  try {
+    const axios = require('axios');
+    const resp = await axios.get('https://api.github.com', { timeout: 5000 });
+    if (resp.status === 200 || resp.status === 403) {
+      ok.push('GitHub API: reachable');
+    } else {
+      warn.push(`GitHub API: returned ${resp.status}`);
+    }
+  } catch {
+    warn.push('GitHub API: unreachable (check internet)');
+  }
+
+  // Manifest
+  const manifestPath = options.manifest
+    ? path.resolve(options.manifest)
+    : fs.existsSync('./amxbuild.yml') ? './amxbuild.yml'
+    : fs.existsSync('./amxbuild.yaml') ? './amxbuild.yaml'
+    : null;
+
+  if (manifestPath && fs.existsSync(manifestPath)) {
+    try {
+      const { parseManifest } = require('./src/manifest');
+      parseManifest(manifestPath);
+      ok.push(`Manifest: valid (${path.basename(manifestPath)})`);
+    } catch (err) {
+      warn.push(`Manifest: invalid — ${err.message}`);
+    }
+  } else {
+    ok.push('Manifest: not found (run amxb init)');
+  }
+
+  // Cache
+  const cacheDir = getCacheDir();
+  const cacheSize = fmtSize(dirSize(cacheDir));
+  ok.push(`Cache: ${cacheDir} (${cacheSize})`);
+
+  // Output
+  logger.info('=== System Check ===');
+  for (const msg of ok) logger.success(`  ✓ ${msg}`);
+  for (const msg of warn) logger.warn(`  ⚠ ${msg}`);
+
+  if (warn.length) {
+    process.exitCode = 1;
+  }
+}
+
 // ─── dry-run ─────────────────────────────────────────────────────────────────
 
 function printDryRun(manifest) {
@@ -653,6 +758,92 @@ function parseOverrideValue(str) {
 }
 
 // ─── init ─────────────────────────────────────────────────────────────────────
+
+async function runInitInteractive(options) {
+  const { Input, Confirm } = require('enquirer');
+  const defaultName = options.name || path.basename(process.cwd());
+
+  const name = await new Input({
+    name: 'name',
+    message: 'Project name',
+    initial: defaultName,
+  }).run();
+
+  const description = await new Input({
+    name: 'description',
+    message: 'Project description (optional)',
+    initial: '',
+  }).run();
+
+  const doWorkflow = await new Confirm({
+    name: 'workflow',
+    message: 'Generate GitHub CI workflow?',
+    initial: false,
+  }).run();
+
+  const doPlugin = await new Confirm({
+    name: 'plugin',
+    message: 'Create a plugin .sma file?',
+    initial: true,
+  }).run();
+  const pluginName = doPlugin ? await new Input({
+    name: 'pluginName',
+    message: 'Plugin filename (without .sma)',
+    initial: name,
+  }).run() : null;
+
+  const doGitignore = await new Confirm({
+    name: 'gitignore',
+    message: 'Create .gitignore?',
+    initial: true,
+  }).run();
+
+  const doDeploy = await new Confirm({
+    name: 'deploy',
+    message: 'Create .env with deploy stubs?',
+    initial: false,
+  }).run();
+
+  // Collect info for summary
+  const actions = [];
+  actions.push(`amxbuild.yml`);
+  if (doWorkflow) actions.push('.github/workflows/ci.yml');
+  if (pluginName) actions.push(`amxmodx/scripting/${pluginName}.sma`);
+  if (doGitignore) actions.push('.gitignore');
+  if (doDeploy) actions.push('.env');
+
+  logger.info('Creating:');
+  for (const a of actions) logger.dim(`  ${a}`);
+
+  // Generate files
+  const version = require('./package.json').version;
+  const actionTag = `v${version.split('.')[0]}`;
+  const schemaUrl = SCHEMA_URL;
+
+  writeIfAbsent('amxbuild.yml', renderTemplate('init-manifest.yml', { name, schemaUrl }));
+
+  if (doWorkflow) {
+    const dest = path.join('.github', 'workflows', 'ci.yml');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    writeIfAbsent(dest, renderTemplate('init-workflow.yml', { actionTag }));
+  }
+
+  if (pluginName) {
+    const dest = path.join('amxmodx', 'scripting', `${pluginName}.sma`);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    writeIfAbsent(dest, '');
+  }
+
+  if (doGitignore) {
+    writeIfAbsent('.gitignore', [
+      '*.amxx', '*.zip', '.env', '.amxb-cache', '.claude', 'build', 'dist', '',
+    ].join('\n'));
+  }
+
+  if (doDeploy) {
+    writeIfAbsent('.env', renderTemplate('init-deploy.env'));
+  }
+}
 
 function runInit(options) {
   const pkgName = options.name || path.basename(process.cwd());

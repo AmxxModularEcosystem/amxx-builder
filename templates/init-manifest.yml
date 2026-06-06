@@ -2,8 +2,5 @@
 
 name: {{name}}
 
-amxmodx:
-  version: "1.10.5428"
-
 deps:
   # - org/repo@tag

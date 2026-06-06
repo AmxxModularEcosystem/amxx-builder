@@ -161,7 +161,7 @@ async function runCompile(compilerPath, task) {
     `${chalk.bold.white('[amxx-builder]')}   ${baseName} ${dots(baseName)} ${chalk.green('OK')}\n`
   );
 
-  return { amxxName: outName, plugins_ini_postfix: postfix, skipIni: skipIni || false, ini_comment: null, repo: label, ref };
+  return { amxxName: outName, plugins_ini_postfix: postfix, skipIni: skipIni || false, repo: label, ref };
 }
 
 function spawnAsync(cmd, args) {

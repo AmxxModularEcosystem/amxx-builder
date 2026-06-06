@@ -3,6 +3,7 @@ const path = require('path');
 const axios = require('axios');
 const AdmZip = require('adm-zip');
 const { execSync } = require('child_process');
+const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
 const { withRetry } = require('./retry');
@@ -195,10 +196,22 @@ function extractAddons(archivePath, destDir, platform) {
 }
 
 async function downloadFile(url, dest) {
+  const filename = path.basename(url);
+  const bar = require('./progress').createBar(100, `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`);
+
   const response = await withRetry(
-    () => axios.get(url, { responseType: 'arraybuffer', maxRedirects: 5 }),
-    { label: path.basename(url) }
+    () => axios.get(url, {
+      responseType: 'arraybuffer',
+      maxRedirects: 5,
+      onDownloadProgress: (e) => {
+        if (bar && e.total) {
+          bar.update(Math.round(e.loaded / e.total * 100));
+        }
+      },
+    }),
+    { label: filename }
   );
+  if (bar) bar.stop();
   fs.writeFileSync(dest, Buffer.from(response.data));
 }
 

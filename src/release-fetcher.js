@@ -3,6 +3,7 @@ const path = require('path');
 const axios = require('axios');
 const AdmZip = require('adm-zip');
 const { execSync } = require('child_process');
+const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
 const { withRetry } = require('./retry');
@@ -164,14 +165,23 @@ function buildHeaders(token) {
 }
 
 async function downloadAsset(url, dest, headers) {
+  const filename = path.basename(url);
+  const bar = require('./progress').createBar(100, `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`);
+
   const response = await withRetry(
     () => axios.get(url, {
       headers: { ...headers, Accept: 'application/octet-stream' },
       responseType: 'arraybuffer',
       maxRedirects: 5,
+      onDownloadProgress: (e) => {
+        if (bar && e.total) {
+          bar.update(Math.round(e.loaded / e.total * 100));
+        }
+      },
     }),
-    { label: path.basename(url) }
+    { label: filename }
   );
+  if (bar) bar.stop();
   fs.writeFileSync(dest, Buffer.from(response.data));
 }
 

@@ -2,6 +2,7 @@ const fs      = require('fs');
 const path    = require('path');
 const archiver = require('archiver');
 const logger  = require('./logger');
+const { createBar } = require('./progress');
 
 /**
  * Creates the output .zip.
@@ -30,28 +31,39 @@ async function createArchive(manifest, buildDir) {
   const archive = archiver('zip', { zlib: { level: 9 } });
 
   const fileList = [];
+
+  // Count files for progress bar
+  const amxmodxBuildDir = path.join(buildDir, 'amxmodx');
+  const assetsBuildDir  = path.join(buildDir, 'assets');
+  let totalFiles = 0;
+  if (fs.existsSync(amxmodxBuildDir)) totalFiles += countFiles(amxmodxBuildDir);
+  if (fs.existsSync(assetsBuildDir))  totalFiles += countFiles(assetsBuildDir);
+  if (out.readme && fs.existsSync(path.join(path.dirname(manifest._path), 'README.md'))) totalFiles++;
+
+  const bar = createBar(totalFiles || 1, '  Archiving files');
+  let archivedCount = 0;
+
   archive.on('entry', (entry) => {
-    if (!entry.stats || !entry.stats.isDirectory()) fileList.push(entry.name);
+    if (!entry.stats || !entry.stats.isDirectory()) {
+      fileList.push(entry.name);
+      archivedCount++;
+      if (bar) bar.update(archivedCount);
+    }
   });
 
   await new Promise((resolve, reject) => {
-    output.on('close', resolve);
+    output.on('close', () => { if (bar) bar.stop(); resolve(); });
     archive.on('error', reject);
     archive.pipe(output);
 
-    // amxmodx content
-    const amxmodxBuildDir = path.join(buildDir, 'amxmodx');
     if (fs.existsSync(amxmodxBuildDir)) {
       archive.directory(amxmodxBuildDir + path.sep, amxmodxDest);
     }
 
-    // assets — false means archive root, otherwise the given prefix
-    const assetsBuildDir = path.join(buildDir, 'assets');
     if (fs.existsSync(assetsBuildDir)) {
       archive.directory(assetsBuildDir + path.sep, assetsDest || false);
     }
 
-    // README.md next to manifest
     if (out.readme) {
       const readmeSrc = path.join(path.dirname(manifest._path), 'README.md');
       if (fs.existsSync(readmeSrc)) {
@@ -115,6 +127,26 @@ function copyOutput(manifest, buildDir) {
   }
 
   logger.success(`Output dir: ${out.dir}`);
+}
+
+function countFiles(dir) {
+  let count = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) count += countFiles(p);
+    else count++;
+  }
+  return count;
+}
+
+function countFiles(dir) {
+  let count = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) count += countFiles(p);
+    else count++;
+  }
+  return count;
 }
 
 function copyDirSync(src, dest) {

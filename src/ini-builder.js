@@ -32,8 +32,7 @@ function buildIniFiles(compiledPlugins, buildDir) {
         lines.push('', `; Source: ${repoId}`);
         lastRepo = repoId;
       }
-      const comment = p.ini_comment ? `\t; ${p.ini_comment}` : '';
-      lines.push(`${p.amxxName}${comment}`);
+      lines.push(p.amxxName);
     }
     lines.push('');
 

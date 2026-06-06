@@ -7,6 +7,7 @@ const axios  = require('axios');
 const AdmZip = require('adm-zip');
 const { execSync } = require('child_process');
 
+const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir }        = require('./cache-dir');
 const { withRetry }          = require('./retry');
@@ -31,11 +32,14 @@ async function fetchAssets(manifest, buildDir, noFetch = false) {
 
   const origins = new Map(); // relPath → source label (for conflict tracking)
 
-  for (const source of sources) {
-    const label  = sourceLabel(source);
-    const srcDir = await resolveSource(source, manifest, manifestDir, buildDir, noFetch);
+  // Resolve all sources in parallel (network-bound: release, url), apply maps sequentially
+  const resolved = await Promise.all(
+    sources.map(src => resolveSource(src, manifest, manifestDir, buildDir, noFetch))
+  );
+  for (let i = 0; i < sources.length; i++) {
+    const srcDir = resolved[i];
     if (!srcDir) continue;
-    applyMap(srcDir, assetsDir, source.map, label, on_conflict, origins);
+    applyMap(srcDir, assetsDir, sources[i].map, sourceLabel(sources[i]), on_conflict, origins);
   }
 }
 
@@ -82,16 +86,27 @@ async function resolveUrlSource(source, manifestDir, buildDir, noFetch) {
     return null;
   }
 
-  logger.step(`Assets: downloading ${source.url}...`);
+  const filename = getFilenameFromUrl(source.url);
+  logger.step(`Assets: downloading ${filename}...`);
   fs.mkdirSync(cacheDir, { recursive: true });
+
+  const bar = require('./progress').createBar(100, `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`);
 
   try {
     const response    = await withRetry(
-      () => axios.get(source.url, { responseType: 'arraybuffer', maxRedirects: 5 }),
-      { label: getFilenameFromUrl(source.url) }
+      () => axios.get(source.url, {
+        responseType: 'arraybuffer',
+        maxRedirects: 5,
+        onDownloadProgress: (e) => {
+          if (bar && e.total) {
+            bar.update(Math.round(e.loaded / e.total * 100));
+          }
+        },
+      }),
+      { label: filename }
     );
+    if (bar) bar.stop();
     const contentType = response.headers['content-type'] || '';
-    const filename    = getFilenameFromUrl(source.url);
     const data        = Buffer.from(response.data);
 
     if (isArchive(filename, contentType)) {
