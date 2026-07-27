@@ -272,4 +272,43 @@ function parseDeploy(raw) {
   };
 }
 
-module.exports = { parseManifest, parseDepsLines };
+// ─── Manifest overrides ────────────────────────────────────────────────────────
+
+function applyOverrides(manifest, pairs) {
+  for (const pair of pairs) {
+    const eqIdx = pair.indexOf('=');
+    if (eqIdx === -1) throw new Error(`--set: invalid format "${pair}" (expected key=value)`);
+    const keys  = pair.slice(0, eqIdx).trim().split('.');
+    const value = parseOverrideValue(pair.slice(eqIdx + 1));
+    let node = manifest;
+    for (let i = 0; i < keys.length - 1; i++) {
+      if (node[keys[i]] == null) node[keys[i]] = {};
+      node = node[keys[i]];
+    }
+    node[keys[keys.length - 1]] = value;
+  }
+}
+
+function parseOverrideValue(str) {
+  if (str === 'true')  return true;
+  if (str === 'false') return false;
+  if (str === 'null')  return null;
+  if (/^\d+$/.test(str)) return parseInt(str, 10);
+  return str;
+}
+
+function resolveManifest(manifestPath, options = {}) {
+  const manifest = parseManifest(manifestPath);
+
+  if (options.set && options.set.length > 0) {
+    applyOverrides(manifest, options.set);
+  }
+
+  if (options.define && options.define.length > 0) {
+    manifest.amxmodx.defines.push(...options.define);
+  }
+
+  return manifest;
+}
+
+module.exports = { parseManifest, parseDepsLines, applyOverrides, parseOverrideValue, resolveManifest };

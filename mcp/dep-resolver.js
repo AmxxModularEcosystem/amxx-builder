@@ -36,6 +36,8 @@ const {
 const { fetchRepo, resolveRef } = require('../src/repo-fetcher');
 const { fetchReleaseDep }       = require('../src/release-fetcher');
 const { getCacheDir }           = require('../src/cache-dir');
+const { buildDepTree }          = require('../src/deps-tree');
+const { parseManifest, parseDepsLines, resolveManifest } = require('../src/manifest');
 
 // ─── Dep parsing ─────────────────────────────────────────────────────────────
 
@@ -273,6 +275,102 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['dep'],
         },
       },
+      {
+        name: 'get_dep_tree',
+        title: 'Get recursive dependency tree',
+        description:
+          'Build a recursive dependency tree starting from root deps or a manifest. ' +
+          'Walks each dependency, clones the repo, reads its DEPS_LIST, and recurses ' +
+          'into sub-dependencies. Detects cycles and handles deps_override.\n\n' +
+          'Provide either "manifest" (path to amxbuild.yml) or "deps" (array of dep entries).\n\n' +
+          'Each dep entry can be a string ("owner/repo@ref") or an object ' +
+          '({ repo, ref, source?, include_path?, asset? }).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            manifest: {
+              type: 'string',
+              description:
+                'Path to amxbuild.yml. When provided, root deps are extracted from ' +
+                'manifest repos and global deps. deps_override is respected.',
+            },
+            deps: {
+              type: 'array',
+              description:
+                'Array of dep entries (strings or objects). Alternative to manifest. ' +
+                'Example: ["owner/repo@ref"] or [{ repo: "owner/repo", ref: "v1", source: "git" }].',
+              items: {
+                oneOf: [
+                  { type: 'string' },
+                  {
+                    type: 'object',
+                    properties: {
+                      repo:  { type: 'string' },
+                      ref:   { type: 'string' },
+                      source: { type: 'string', enum: ['git', 'release'] },
+                      include_path: { type: 'string' },
+                      asset: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+                    },
+                    required: ['repo', 'ref'],
+                  },
+                ],
+              },
+            },
+            depth: {
+              type: 'number',
+              description: 'Max recursion depth (0 = unlimited). Default: 0.',
+              default: 0,
+            },
+            token: {
+              type: 'string',
+              description:
+                'GitHub Personal Access Token for private repos. ' +
+                'Falls back to GITHUB_TOKEN env var if not provided.',
+            },
+            no_fetch: {
+              type: 'boolean',
+              description: 'Only use cache, skip network fetch.',
+              default: false,
+            },
+          },
+          oneOf: [
+            { required: ['manifest'] },
+            { required: ['deps'] },
+          ],
+        },
+      },
+      {
+        name: 'resolve_manifest',
+        title: 'Resolve manifest with all overrides',
+        description:
+          'Parse an amxbuild.yml, merge with defaults, validate against schema, ' +
+          'and apply --set/--define overrides. Returns the fully resolved manifest object.\n\n' +
+          'If manifest is not provided, auto-detects amxbuild.yml in the working directory.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            manifest: {
+              type: 'string',
+              description:
+                'Path to amxbuild.yml. If omitted, looks for amxbuild.yml / amxbuild.yaml / ' +
+                'manifest.yml in the current working directory.',
+            },
+            set: {
+              type: 'array',
+              description:
+                'Override manifest fields via dot notation, e.g. ["version=1.2", "output.pack=false"].',
+              items: { type: 'string' },
+            },
+            define: {
+              type: 'array',
+              description:
+                'Compiler defines to add, e.g. ["DEBUG", "VERSION=1.2"]. ' +
+                'Appended to amxmodx.defines.',
+              items: { type: 'string' },
+            },
+          },
+        },
+      },
     ],
   };
 });
@@ -283,25 +381,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
-    // Normalise token
+    // Normalise token (shared by all tools)
     const token = args?.token || process.env.GITHUB_TOKEN || null;
     const noFetch = args?.no_fetch === true;
 
-    // Build dep object
-    let dep;
-    try {
-      dep = parseDep(args?.dep || args);
-    } catch (parseErr) {
-      return errorResult(parseErr.message);
-    }
-
-    // Merge explicit overrides from call arguments
-    if (args?.source)         dep.source = args.source;
-    if (args?.include_path)   dep.include_path = args.include_path;
-    if (args?.asset != null)  dep.asset = args.asset;
-
     switch (name) {
       case 'get_dep_interface': {
+        let dep;
+        try {
+          dep = parseDep(args?.dep || args);
+        } catch (parseErr) {
+          return errorResult(parseErr.message);
+        }
+        if (args?.source)         dep.source = args.source;
+        if (args?.include_path)   dep.include_path = args.include_path;
+        if (args?.asset != null)  dep.asset = args.asset;
+
         const resolvedRef = await resolveDepRef(dep, token);
         const srcDir      = await fetchDepIncludeDir(dep, token, noFetch);
         const incFiles    = await collectIncFiles(srcDir);
@@ -331,6 +426,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'list_dep_incs': {
+        let dep;
+        try {
+          dep = parseDep(args?.dep || args);
+        } catch (parseErr) {
+          return errorResult(parseErr.message);
+        }
+        if (args?.source)         dep.source = args.source;
+        if (args?.include_path)   dep.include_path = args.include_path;
+        if (args?.asset != null)  dep.asset = args.asset;
+
         const resolvedRef = await resolveDepRef(dep, token);
         const srcDir      = await fetchDepIncludeDir(dep, token, noFetch);
         const incFiles    = await collectIncFiles(srcDir);
@@ -348,6 +453,64 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return textResult(
           `Dependency ${dep.repo}@${resolvedRef} — ${incFiles.length} .inc file(s):\n\n${listing}`
         );
+      }
+
+      case 'get_dep_tree': {
+        const depth = args?.depth || 0;
+        let rootDeps;
+        let getDepsOverride = null;
+
+        if (args?.manifest) {
+          // ── From manifest ────────────────────────────────────────────
+          const manifest = parseManifest(path.resolve(args.manifest));
+          rootDeps = [];
+
+          for (const repoConfig of manifest.repos) {
+            rootDeps.push({ repo: repoConfig.repo, ref: repoConfig.ref });
+          }
+          for (const d of manifest.globalDeps) {
+            rootDeps.push({ ...d });
+          }
+
+          getDepsOverride = (repo) => {
+            const config = manifest.repos.find(r => r.repo === repo);
+            return config ? config.deps_override : null;
+          };
+        } else if (args?.deps) {
+          // ── From inline deps ─────────────────────────────────────────
+          rootDeps = args.deps.map((entry) => {
+            if (typeof entry === 'string') {
+              const parsed = parseDep(entry);
+              return { repo: parsed.repo, ref: parsed.ref, source: parsed.source, include_path: parsed.include_path, asset: parsed.asset };
+            }
+            return { repo: entry.repo, ref: entry.ref, source: entry.source || 'git', include_path: entry.include_path || null, asset: entry.asset != null ? entry.asset : null };
+          });
+        } else {
+          return errorResult('Provide either "manifest" or "deps"', -32602);
+        }
+
+        const tree = await buildDepTree(rootDeps, {
+          token,
+          noFetch,
+          depth,
+          from: args?.manifest ? 'manifest' : 'user',
+          getDepsOverride,
+        });
+
+        return textResult(JSON.stringify(tree, null, 2));
+      }
+
+      case 'resolve_manifest': {
+        const manifestPath = resolveManifestPath(args?.manifest);
+        const fullPath = path.resolve(manifestPath);
+        require('dotenv').config({ path: path.join(path.dirname(fullPath), '.env'), override: true });
+
+        const manifest = resolveManifest(fullPath, {
+          set:    args?.set,
+          define: args?.define,
+        });
+
+        return textResult(JSON.stringify(manifest, null, 2));
       }
 
       default:
@@ -382,6 +545,15 @@ function errorResult(message, code = -32603) {
     isError: true,
     _meta: code ? { code } : undefined,
   };
+}
+
+function resolveManifestPath(explicit) {
+  if (explicit) return explicit;
+  const cwd = process.cwd();
+  if (fs.existsSync(path.join(cwd, 'amxbuild.yml')))  return path.join(cwd, 'amxbuild.yml');
+  if (fs.existsSync(path.join(cwd, 'amxbuild.yaml'))) return path.join(cwd, 'amxbuild.yaml');
+  if (fs.existsSync(path.join(cwd, 'manifest.yml')))  return path.join(cwd, 'manifest.yml');
+  return path.join(cwd, 'amxbuild.yml'); // will fail with a clear error in parseManifest
 }
 
 // ─── Start ───────────────────────────────────────────────────────────────────

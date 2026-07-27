@@ -8,7 +8,7 @@ const path = require('path');
 
 const logger             = require('./src/logger');
 const { setVerbose }     = logger;
-const { parseManifest }  = require('./src/manifest');
+const { parseManifest, applyOverrides, resolveManifest } = require('./src/manifest');
 const { fetchCompiler }  = require('./src/compiler-fetcher');
 const { fetchRepo, resolveRef } = require('./src/repo-fetcher');
 const { resolveDeps }    = require('./src/deps-resolver');
@@ -22,6 +22,7 @@ const { fetchAssets }    = require('./src/asset-fetcher');
 const { buildIniFiles }  = require('./src/ini-builder');
 const { createArchive, copyOutput } = require('./src/archiver');
 const { getCacheDir }    = require('./src/cache-dir');
+const { buildDepTree }   = require('./src/deps-tree');
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
 const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
@@ -98,6 +99,43 @@ cacheCmd
   .action((options) => {
     try {
       runCacheClean(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── deps-tree ────────────────────────────────────────────────────────────────
+
+program
+  .command('deps-tree')
+  .description('Show recursive dependency tree for manifest or inline deps')
+  .option('--manifest <path>', 'Path to manifest file')
+  .option('--depth <n>',       'Max recursion depth (0 = unlimited)', parseInt)
+  .option('--json',            'Output as JSON instead of tree view')
+  .option('--cycle-only',      'Show only cycles')
+  .option('--no-fetch',        'Use cached repos without re-cloning')
+  .action(async (options) => {
+    try {
+      await runDepsTree(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── resolve-manifest ──────────────────────────────────────────────────────────
+
+program
+  .command('resolve-manifest')
+  .description('Parse and fully resolve manifest (defaults + overrides)')
+  .option('--manifest <path>', 'Path to manifest file')
+  .option('--set <key=value...>', 'Override manifest field (dot notation)')
+  .option('--define <flag...>', 'Add compiler define')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    try {
+      await runResolveManifest(options);
     } catch (err) {
       logger.error(err.message);
       process.exit(1);
@@ -671,6 +709,139 @@ async function runDoctor(options) {
   }
 }
 
+// ─── deps-tree implementation ─────────────────────────────────────────────────
+
+async function runDepsTree(options) {
+  const manifestPath = options.manifest ? path.resolve(options.manifest) : resolveManifestPath(undefined);
+  const manifestDir  = path.dirname(path.resolve(manifestPath));
+
+  require('dotenv').config({ path: path.join(manifestDir, '.env'), override: true });
+
+  const noFetch = options.fetch === false;
+  const asJson  = options.json || false;
+  const cycleOnly = options.cycleOnly || false;
+
+  // Parse manifest to extract root deps (repos + global deps)
+  const manifest = parseManifest(manifestPath);
+
+  // Resolve refs for manifest repos (needed for deps resolution)
+  await Promise.all(manifest.repos.map(async (repoConfig) => {
+    repoConfig._resolvedRef = await resolveRef(
+      repoConfig.repo, repoConfig.ref, manifest.github.token
+    );
+  }));
+
+  // Build root dep list: global deps + each repo as a dep
+  // Repo deps have lower priority than global deps, but both are tree roots
+  // The deps_override from manifest repos is wired via getDepsOverride
+  const rootDeps = [];
+
+  for (const repoConfig of manifest.repos) {
+    rootDeps.push({
+      repo:  repoConfig.repo,
+      ref:   repoConfig.ref,
+      _from: 'repo',
+    });
+  }
+
+  // Global deps
+  for (const dep of manifest.globalDeps) {
+    rootDeps.push({ ...dep, _from: 'manifest' });
+  }
+
+  // deps_override callback: only applies to repos listed in manifest.repos
+  const getDepsOverride = (repo) => {
+    const config = manifest.repos.find(r => r.repo === repo);
+    return config ? config.deps_override : null;
+  };
+
+  const tree = await buildDepTree(rootDeps, {
+    token:   manifest.github.token,
+    noFetch,
+    depth:   0,
+    from:    'manifest',
+    getDepsOverride,
+  });
+
+  // Filter cycles only
+  const filtered = cycleOnly ? filterCycles(tree) : tree;
+
+  if (asJson) {
+    process.stdout.write(JSON.stringify(filtered, null, 2) + '\n');
+    return;
+  }
+
+  printTree(filtered);
+}
+
+function printTree(tree) {
+  if (!tree.dependencies || tree.dependencies.length === 0) {
+    logger.info('No dependencies');
+    return;
+  }
+  logger.info('Dependency tree:');
+  for (const node of tree.dependencies) {
+    printNode(node, '', true);
+  }
+}
+
+function printNode(node, prefix, isLast) {
+  const connector = isLast ? '└── ' : '├── ';
+  const childPrefix = isLast ? '    ' : '│   ';
+
+  const tag = buildNodeTag(node);
+  logger.dim(`${prefix}${connector}${node.repo}@${node.ref || 'HEAD'}${tag}`);
+
+  if (node.cycle) return; // don't expand cycles
+
+  for (let i = 0; i < node.dependencies.length; i++) {
+    printNode(node.dependencies[i], prefix + childPrefix, i === node.dependencies.length - 1);
+  }
+}
+
+function buildNodeTag(node) {
+  const parts = [];
+  if (node.from)           parts.push(`from ${node.from}`);
+  if (node.resolvedRef && node.ref !== node.resolvedRef) {
+    parts.push(`→ ${node.resolvedRef}`);
+  }
+  if (node.cycle)          parts.push('⚠ cycle');
+  if (node.error)          parts.push(`✗ ${node.error}`);
+  return parts.length ? `  (${parts.join(', ')})` : '';
+}
+
+function filterCycles(tree) {
+  const collect = [];
+  function walk(nodes) {
+    for (const n of nodes) {
+      if (n.cycle) collect.push(n);
+      else walk(n.dependencies);
+    }
+  }
+  walk(tree.dependencies || []);
+  return { dependencies: collect };
+}
+
+// ─── resolve-manifest implementation ─────────────────────────────────────────
+
+async function runResolveManifest(options) {
+  const manifestPath = options.manifest ? path.resolve(options.manifest) : resolveManifestPath(undefined);
+  require('dotenv').config({ path: path.join(path.dirname(path.resolve(manifestPath)), '.env'), override: true });
+
+  const manifest = resolveManifest(manifestPath, {
+    set:    options.set,
+    define: options.define,
+  });
+
+  if (options.json) {
+    process.stdout.write(JSON.stringify(manifest, null, 2) + '\n');
+    return;
+  }
+
+  logger.info('Resolved manifest:');
+  logger.dim(JSON.stringify(manifest, null, 2));
+}
+
 // ─── dry-run ─────────────────────────────────────────────────────────────────
 
 function printDryRun(manifest) {
@@ -731,31 +902,6 @@ function printDryRun(manifest) {
   logger.dim(`  generate_ini: ${out.generate_ini}  |  on_conflict: ${out.on_conflict}`);
 
   logger.info(`\n=== END DRY RUN ===`);
-}
-
-// ─── manifest overrides ───────────────────────────────────────────────────────
-
-function applyOverrides(manifest, pairs) {
-  for (const pair of pairs) {
-    const eqIdx = pair.indexOf('=');
-    if (eqIdx === -1) throw new Error(`--set: invalid format "${pair}" (expected key=value)`);
-    const keys  = pair.slice(0, eqIdx).trim().split('.');
-    const value = parseOverrideValue(pair.slice(eqIdx + 1));
-    let node = manifest;
-    for (let i = 0; i < keys.length - 1; i++) {
-      if (node[keys[i]] == null) node[keys[i]] = {};
-      node = node[keys[i]];
-    }
-    node[keys[keys.length - 1]] = value;
-  }
-}
-
-function parseOverrideValue(str) {
-  if (str === 'true')  return true;
-  if (str === 'false') return false;
-  if (str === 'null')  return null;
-  if (/^\d+$/.test(str)) return parseInt(str, 10);
-  return str;
 }
 
 // ─── init ─────────────────────────────────────────────────────────────────────
