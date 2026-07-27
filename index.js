@@ -164,6 +164,7 @@ program
   .option('--ci',           'Alias for --workflow')
   .option('--plugin <name>', 'Create amxmodx/scripting/<name>.sma')
   .option('--gitignore',     'Create .gitignore')
+  .option('--opencode',      'Create .opencode/opencode.json with amxx-dep-resolver MCP config')
   .option('--deploy',        'Create .env with deploy stubs (AMXB_DEPLOY_*)')
   .option('-i, --interactive', 'Interactive mode with prompts')
   .action(async (options) => {
@@ -804,6 +805,12 @@ async function runInitInteractive(options) {
     initial: false,
   }).run();
 
+  const doOpencode = await new Confirm({
+    name: 'opencode',
+    message: 'Create .opencode/opencode.json with amxx-dep-resolver MCP config?',
+    initial: false,
+  }).run();
+
   // Collect info for summary
   const actions = [];
   actions.push(`amxbuild.yml`);
@@ -811,6 +818,7 @@ async function runInitInteractive(options) {
   if (pluginName) actions.push(`amxmodx/scripting/${pluginName}.sma`);
   if (doGitignore) actions.push('.gitignore');
   if (doDeploy) actions.push('.env');
+  if (doOpencode) actions.push('.opencode/opencode.json');
 
   logger.info('Creating:');
   for (const a of actions) logger.dim(`  ${a}`);
@@ -843,6 +851,10 @@ async function runInitInteractive(options) {
   if (doDeploy) {
     writeIfAbsent('.env', renderTemplate('init-deploy.env'));
   }
+
+  if (doOpencode) {
+    writeOpencodeConfig();
+  }
 }
 
 function runInit(options) {
@@ -873,6 +885,10 @@ function runInit(options) {
   if (options.deploy) {
     writeIfAbsent('.env', renderTemplate('init-deploy.env'));
   }
+
+  if (options.opencode) {
+    writeOpencodeConfig();
+  }
 }
 
 function writeIfAbsent(filePath, content) {
@@ -882,6 +898,48 @@ function writeIfAbsent(filePath, content) {
   }
   fs.writeFileSync(filePath, content);
   logger.success(`Created ${filePath}`);
+}
+
+function writeOpencodeConfig() {
+  const dir   = '.opencode';
+  const file  = path.join(dir, 'opencode.json');
+  const mcpKey = 'amxx-dep-resolver';
+  const mcpConfig = {
+    type: 'local',
+    command: ['amxx-dep-resolver'],
+    enabled: true,
+  };
+
+  if (!fs.existsSync(file)) {
+    // Create new
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      $schema: 'https://opencode.ai/config.json',
+      mcp: { [mcpKey]: mcpConfig },
+    }, null, 2) + '\n');
+    logger.success(`Created ${file}`);
+    return;
+  }
+
+  // Merge into existing config
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    logger.warn(`${file} exists but is invalid JSON, skipping merge`);
+    return;
+  }
+
+  if (cfg.mcp?.[mcpKey]) {
+    logger.warn(`${file} already has amxx-dep-resolver MCP config, skipping`);
+    return;
+  }
+
+  cfg.mcp = cfg.mcp || {};
+  cfg.mcp[mcpKey] = mcpConfig;
+  cfg.$schema = cfg.$schema || 'https://opencode.ai/config.json';
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  logger.success(`Updated ${file} with amxx-dep-resolver MCP config`);
 }
 
 function renderTemplate(name, vars = {}) {
