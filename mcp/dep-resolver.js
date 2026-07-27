@@ -38,6 +38,8 @@ const { fetchReleaseDep }       = require('../src/release-fetcher');
 const { getCacheDir }           = require('../src/cache-dir');
 const { buildDepTree }          = require('../src/deps-tree');
 const { parseManifest, parseDepsLines, resolveManifest } = require('../src/manifest');
+const { validateManifestFile }  = require('../src/validate');
+const { getCacheInfo }          = require('../src/cache-info');
 
 // ─── Dep parsing ─────────────────────────────────────────────────────────────
 
@@ -371,6 +373,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: 'validate_manifest',
+        title: 'Validate manifest',
+        description:
+          'Validate an amxbuild.yml against the schema and return structured diagnostics ' +
+          '(errors and warnings) as data. Never throws — inspect the result.\n\n' +
+          'If manifest is not provided, auto-detects amxbuild.yml in the working directory.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            manifest: {
+              type: 'string',
+              description:
+                'Path to amxbuild.yml. If omitted, looks for amxbuild.yml / amxbuild.yaml / ' +
+                'manifest.yml in the current working directory.',
+            },
+          },
+        },
+      },
+      {
+        name: 'get_cache_info',
+        title: 'Get cache information',
+        description:
+          'Show contents of the local build cache (~/.cache/amxx-builder). ' +
+          'Includes cached compiler binaries, repo clones, release dependencies, ' +
+          'and optional local asset cache for a given manifest.\n\n' +
+          'If manifest is provided, also checks local .amxb-cache/ for asset cache info.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            manifest: {
+              type: 'string',
+              description:
+                'Optional path to manifest to also check local .amxb-cache/ assets.',
+            },
+          },
+        },
+      },
     ],
   };
 });
@@ -511,6 +551,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         return textResult(JSON.stringify(manifest, null, 2));
+      }
+
+      case 'validate_manifest': {
+        const manifestPath = resolveManifestPath(args?.manifest);
+        const result = validateManifestFile(manifestPath);
+        return textResult(JSON.stringify(result, null, 2));
+      }
+
+      case 'get_cache_info': {
+        const manifestPath = args?.manifest ? path.resolve(args.manifest) : undefined;
+        const info = getCacheInfo(manifestPath);
+        return textResult(JSON.stringify(info, null, 2));
       }
 
       default:

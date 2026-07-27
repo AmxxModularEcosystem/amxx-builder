@@ -311,4 +311,4 @@ function resolveManifest(manifestPath, options = {}) {
   return manifest;
 }
 
-module.exports = { parseManifest, parseDepsLines, applyOverrides, parseOverrideValue, resolveManifest };
+module.exports = { parseManifest, parseDepsLines, applyOverrides, parseOverrideValue, resolveManifest, loadDefaultsRaw, deepMerge };

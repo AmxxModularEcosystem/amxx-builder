@@ -23,6 +23,8 @@ const { buildIniFiles }  = require('./src/ini-builder');
 const { createArchive, copyOutput } = require('./src/archiver');
 const { getCacheDir }    = require('./src/cache-dir');
 const { buildDepTree }   = require('./src/deps-tree');
+const { validateManifestFile } = require('./src/validate');
+const { getCacheInfo, dirSize, fmtSize, parseCacheKey } = require('./src/cache-info');
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
 const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
@@ -136,6 +138,22 @@ program
   .action(async (options) => {
     try {
       await runResolveManifest(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── validate ──────────────────────────────────────────────────────────────────
+
+program
+  .command('validate')
+  .description('Validate manifest and show diagnostics')
+  .option('--manifest <path>', 'Path to manifest file')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    try {
+      await runValidate(options);
     } catch (err) {
       logger.error(err.message);
       process.exit(1);
@@ -521,92 +539,49 @@ async function runWatch(options) {
 
 // ─── cache implementation ─────────────────────────────────────────────────────
 
-function dirSize(dir) {
-  if (!fs.existsSync(dir)) return 0;
-  let total = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, entry.name);
-    total += entry.isDirectory() ? dirSize(p) : fs.statSync(p).size;
-  }
-  return total;
-}
-
-function fmtSize(bytes) {
-  if (bytes < 1024)        return `${bytes} B`;
-  if (bytes < 1024 ** 2)  return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 ** 3)  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-}
-
-function parseCacheKey(key) {
-  // owner__repo__ref  →  owner/repo @ ref
-  const parts = key.split('__');
-  if (parts.length < 3) return key;
-  return `${parts.slice(0, -1).join('/')} @ ${parts[parts.length - 1]}`;
-}
-
 function runCacheInfo(options = {}) {
-  const cacheRoot = getCacheDir();
-  const compDir   = path.join(cacheRoot, 'amxxpc');
-  const reposDir  = path.join(cacheRoot, 'repos');
-  const depsDir   = path.join(cacheRoot, 'release-deps');
+  const manifestPath = options.manifest ? path.resolve(options.manifest) : undefined;
+  const info = getCacheInfo(manifestPath);
 
-  const total = dirSize(cacheRoot);
-  logger.info(`Cache: ${cacheRoot} (${fmtSize(total)} total)`);
+  logger.info(`Cache: ${info.cacheDir} (${info.totalSizeHuman} total)`);
 
-  if (!fs.existsSync(cacheRoot) || total === 0) {
+  if (info.totalSize === 0) {
     logger.dim('  (empty)');
     return;
   }
 
-  if (fs.existsSync(compDir)) {
-    const versions = fs.readdirSync(compDir, { withFileTypes: true }).filter(e => e.isDirectory());
-    if (versions.length) {
-      logger.info('\nCompiler (amxxpc):');
-      for (const ver of versions) {
-        const verDir    = path.join(compDir, ver.name);
-        const platforms = fs.readdirSync(verDir, { withFileTypes: true }).filter(e => e.isDirectory());
-        for (const plat of platforms) {
-          const size = dirSize(path.join(verDir, plat.name));
-          logger.dim(`  ${ver.name.padEnd(14)} ${plat.name.padEnd(10)} ${fmtSize(size)}`);
-        }
+  // Compiler
+  if (info.compiler.versions.length) {
+    logger.info('\nCompiler (amxxpc):');
+    for (const ver of info.compiler.versions) {
+      for (const [platform, size] of Object.entries(ver.platforms)) {
+        logger.dim(`  ${ver.version.padEnd(14)} ${platform.padEnd(10)} ${fmtSize(size)}`);
       }
     }
   }
 
-  if (fs.existsSync(reposDir)) {
-    const entries = fs.readdirSync(reposDir, { withFileTypes: true }).filter(e => e.isDirectory());
-    if (entries.length) {
-      logger.info(`\nRepos (${entries.length}, ${fmtSize(dirSize(reposDir))} total):`);
-      for (const e of entries) {
-        const label = parseCacheKey(e.name);
-        const size  = dirSize(path.join(reposDir, e.name));
-        logger.dim(`  ${label.padEnd(52)} ${fmtSize(size)}`);
-      }
+  // Repos
+  if (info.repos.count) {
+    logger.info(`\nRepos (${info.repos.count}, ${info.repos.totalSizeHuman} total):`);
+    for (const e of info.repos.entries) {
+      const label = parseCacheKey(e.key);
+      logger.dim(`  ${label.padEnd(52)} ${fmtSize(e.size)}`);
     }
   }
 
-  if (fs.existsSync(depsDir)) {
-    const entries = fs.readdirSync(depsDir, { withFileTypes: true }).filter(e => e.isDirectory());
-    if (entries.length) {
-      logger.info(`\nRelease deps (${entries.length}, ${fmtSize(dirSize(depsDir))} total):`);
-      for (const e of entries) {
-        const label = parseCacheKey(e.name);
-        const size  = dirSize(path.join(depsDir, e.name));
-        logger.dim(`  ${label.padEnd(52)} ${fmtSize(size)}`);
-      }
+  // Release deps
+  if (info.releaseDeps.count) {
+    logger.info(`\nRelease deps (${info.releaseDeps.count}, ${info.releaseDeps.totalSizeHuman} total):`);
+    for (const e of info.releaseDeps.entries) {
+      const label = parseCacheKey(e.key);
+      logger.dim(`  ${label.padEnd(52)} ${fmtSize(e.size)}`);
     }
   }
 
-  // Local .amxb-cache/ next to manifest
-  const manifestPath = resolveManifestPath(options.manifest);
-  const localCacheDir = path.join(path.dirname(path.resolve(manifestPath)), '.amxb-cache', 'assets');
-  if (fs.existsSync(localCacheDir)) {
-    const entries = fs.readdirSync(localCacheDir, { withFileTypes: true }).filter(e => e.isDirectory());
-    if (entries.length) {
-      logger.info(`\nLocal asset cache (${entries.length}, ${fmtSize(dirSize(localCacheDir))}):`)
-      logger.dim(`  ${localCacheDir}`);
-    }
+  // Local asset cache
+  if (info.localAssetCache) {
+    logger.info(`\nLocal asset cache (${info.localAssetCache.count}, ${info.localAssetCache.totalSizeHuman}):`);
+    logger.dim(`  ${info.localAssetCache.path}`);
   }
 }
 
@@ -840,6 +815,33 @@ async function runResolveManifest(options) {
 
   logger.info('Resolved manifest:');
   logger.dim(JSON.stringify(manifest, null, 2));
+}
+
+// ─── validate implementation ─────────────────────────────────────────────────
+
+async function runValidate(options) {
+  const manifestPath = options.manifest ? path.resolve(options.manifest) : resolveManifestPath(undefined);
+  const result = validateManifestFile(manifestPath);
+
+  if (options.json) {
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    if (!result.valid) process.exitCode = 1;
+    return;
+  }
+
+  if (result.valid) {
+    logger.success('Manifest is valid');
+    return;
+  }
+
+  logger.error(`Manifest has ${result.errors.length} error(s) and ${result.warnings.length} warning(s):`);
+  for (const err of result.errors) {
+    logger.dim(`  ${err.path}: ${err.message}`);
+  }
+  for (const warn of result.warnings) {
+    logger.warn(`  ${warn.path}: ${warn.message}`);
+  }
+  process.exitCode = 1;
 }
 
 // ─── dry-run ─────────────────────────────────────────────────────────────────
