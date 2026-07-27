@@ -53,6 +53,14 @@ npx ncc build action-entry.js -o dist --minify --license licenses.txt
 ```
 This is automated in `.github/workflows/release.yml` on `v*.*.*` tags.
 
+## MCP dep-resolver server
+- Source: `mcp/dep-resolver.js` (reuses `src/repo-fetcher.js`, `src/release-fetcher.js`, `src/cache-dir.js`)
+- Runs directly from source — no bundling needed (installed alongside main package)
+- Registered as `bin.amxx-dep-resolver` in root `package.json`
+- Depends on `@modelcontextprotocol/sdk` (declared in root `package.json`)
+- Register in any project's `.opencode/opencode.json` via `"command": ["amxx-dep-resolver"]`
+- Exposes two MCP tools: `get_dep_interface` (returns .inc contents) and `list_dep_incs` (lists .inc files)
+
 ## Cache
 - Win: `%LOCALAPPDATA%\amxx-builder`, Unix: `~/.cache/amxx-builder`
 - Override: `AMXX_BUILDER_CACHE`

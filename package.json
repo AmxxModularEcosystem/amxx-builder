@@ -5,16 +5,19 @@
   "main": "index.js",
   "bin": {
     "amxx-builder": "./index.js",
-    "amxb": "./index.js"
+    "amxb": "./index.js",
+    "amxx-dep-resolver": "./mcp/dep-resolver.js"
   },
   "engines": {
     "node": ">=16"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "build": "ncc build action-entry.js -o dist --minify --license licenses.txt"
   },
   "dependencies": {
     "@actions/core": "1.11.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "adm-zip": "^0.5.12",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
