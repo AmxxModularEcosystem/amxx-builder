@@ -25,6 +25,7 @@ const { getCacheDir }    = require('./src/cache-dir');
 const { buildDepTree }   = require('./src/deps-tree');
 const { validateManifestFile } = require('./src/validate');
 const { getCacheInfo, dirSize, fmtSize, parseCacheKey } = require('./src/cache-info');
+const { listReleases, listTags } = require('./src/release-lister');
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
 const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
@@ -154,6 +155,25 @@ program
   .action(async (options) => {
     try {
       await runValidate(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── releases ──────────────────────────────────────────────────────────────────
+
+program
+  .command('releases')
+  .description('List GitHub releases or tags for a repository')
+  .argument('<repo>', 'Repository in format owner/repo')
+  .option('--limit <n>', 'Max results (default: 10)', parseInt)
+  .option('--tags', 'List git tags instead of releases')
+  .option('--assets', 'Include asset details')
+  .option('--json', 'Output as JSON')
+  .action(async (repo, options) => {
+    try {
+      await runReleases(repo, options);
     } catch (err) {
       logger.error(err.message);
       process.exit(1);
@@ -842,6 +862,47 @@ async function runValidate(options) {
     logger.warn(`  ${warn.path}: ${warn.message}`);
   }
   process.exitCode = 1;
+}
+
+// ─── releases implementation ────────────────────────────────────────────────
+
+async function runReleases(repo, options) {
+  require('dotenv').config({ override: true });
+  const token = process.env.GITHUB_TOKEN || null;
+  const limit = options.limit || 10;
+  const asJson = options.json || false;
+
+  let entries;
+  if (options.tags) {
+    entries = await listTags(repo, { token, limit });
+  } else {
+    entries = await listReleases(repo, { token, limit, includeAssets: options.assets });
+  }
+
+  if (asJson) {
+    process.stdout.write(JSON.stringify(entries, null, 2) + '\n');
+    return;
+  }
+
+  if (entries.length === 0) {
+    logger.info(`No ${options.tags ? 'tags' : 'releases'} found for ${repo}`);
+    return;
+  }
+
+  const label = options.tags ? 'Tags' : 'Releases';
+  logger.info(`${label} for ${repo} (${entries.length}):`);
+  for (const e of entries) {
+    const line = options.tags
+      ? `  ${e.name}`
+      : `  ${e.tagName}  ${e.prerelease ? '(pre) ' : ''}${e.publishedAt ? `— ${e.publishedAt.slice(0, 10)}` : ''}`;
+    logger.dim(line);
+
+    if (e.assets && e.assets.length > 0) {
+      for (const a of e.assets) {
+        logger.dim(`    └ assets/${a.name}  (${(a.size / 1024).toFixed(0)} KB)`);
+      }
+    }
+  }
 }
 
 // ─── dry-run ─────────────────────────────────────────────────────────────────

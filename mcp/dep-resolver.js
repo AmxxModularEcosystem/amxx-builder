@@ -40,6 +40,7 @@ const { buildDepTree }          = require('../src/deps-tree');
 const { parseManifest, parseDepsLines, resolveManifest } = require('../src/manifest');
 const { validateManifestFile }  = require('../src/validate');
 const { getCacheInfo }          = require('../src/cache-info');
+const { listReleases, listTags } = require('../src/release-lister');
 
 // ─── Dep parsing ─────────────────────────────────────────────────────────────
 
@@ -411,6 +412,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: 'list_releases',
+        title: 'List GitHub releases or tags for a repository',
+        description:
+          'Get the list of releases (or git tags) for a GitHub repository. ' +
+          'Useful for discovering available versions of a dependency.\n\n' +
+          'By default returns releases. Use tags=true to list git tags instead ' +
+          '(useful for repos that do not publish GitHub Releases).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            repo: {
+              type: 'string',
+              description: 'Repository in format "owner/repo", e.g. "AmxxModularEcosystem/ParamsController"',
+            },
+            limit: {
+              type: 'number',
+              description: 'Max results to return (default: 10).',
+              default: 10,
+            },
+            includeAssets: {
+              type: 'boolean',
+              description: 'Include asset details (name, size, download count) per release.',
+              default: false,
+            },
+            tags: {
+              type: 'boolean',
+              description: 'List git tags instead of releases.',
+              default: false,
+            },
+            token: {
+              type: 'string',
+              description:
+                'GitHub PAT. Falls back to GITHUB_TOKEN env var.',
+            },
+          },
+          required: ['repo'],
+        },
+      },
     ],
   };
 });
@@ -563,6 +603,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const manifestPath = args?.manifest ? path.resolve(args.manifest) : undefined;
         const info = getCacheInfo(manifestPath);
         return textResult(JSON.stringify(info, null, 2));
+      }
+
+      case 'list_releases': {
+        if (!args?.repo) return errorResult('Missing required "repo" field', -32602);
+        const token = args?.token || process.env.GITHUB_TOKEN || null;
+        const limit = args?.limit || 10;
+
+        let entries;
+        if (args?.tags) {
+          entries = await listTags(args.repo, { token, limit });
+        } else {
+          entries = await listReleases(args.repo, { token, limit, includeAssets: args?.includeAssets });
+        }
+
+        return textResult(JSON.stringify(entries, null, 2));
       }
 
       default:
