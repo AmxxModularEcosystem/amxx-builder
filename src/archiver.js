@@ -1,6 +1,6 @@
 const fs      = require('fs');
 const path    = require('path');
-const archiver = require('archiver');
+const { ZipArchive } = require('archiver');
 const logger  = require('./logger');
 const { createBar } = require('./progress');
 
@@ -28,7 +28,7 @@ async function createArchive(manifest, buildDir) {
   const archivePath = path.join(path.resolve(out.dir), archiveName);
 
   const output  = fs.createWriteStream(archivePath);
-  const archive = archiver('zip', { zlib: { level: 9 } });
+  const archive = new ZipArchive({ zlib: { level: 9 } });
 
   const fileList = [];
 
