@@ -26,6 +26,7 @@ const { buildDepTree }   = require('./src/deps-tree');
 const { validateManifestFile } = require('./src/validate');
 const { getCacheInfo, dirSize, fmtSize, parseCacheKey } = require('./src/cache-info');
 const { listReleases, listTags } = require('./src/release-lister');
+const { checkForUpdate } = require('./src/update-check');
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
 const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
@@ -34,6 +35,16 @@ program
   .name('amxx-builder')
   .description('Build and package AMX Mod X server plugins')
   .version(require('./package.json').version);
+
+program.hook('preAction', async () => {
+  try {
+    const latest = await checkForUpdate();
+    if (latest) {
+      logger.info(`Доступна новая версия: ${latest} (текущая: ${require('./package.json').version})`);
+      logger.dim(`  Обновить: npm install -g github:AmxxModularEcosystem/amxx-builder`);
+    }
+  } catch { /* update check never blocks */ }
+});
 
 // ─── build ───────────────────────────────────────────────────────────────────
 
