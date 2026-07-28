@@ -1,0 +1,407 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json",
+  "title": "amxx-builder manifest",
+  "description": "Manifest file for the amxb build tool (amxx-builder)",
+  "type": "object",
+  "required": ["name"],
+  "additionalProperties": true,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Project name. Used as a {name} placeholder in archive_name and amxmodx_path."
+    },
+    "version": {
+      "type": "string",
+      "description": "Project version. Used as a {version} placeholder in archive_name. Can be overridden via --set version=X or the action 'version' input. Must be quoted in YAML to avoid number coercion (e.g. version: \"1.0\")."
+    },
+    "platform": {
+      "type": "string",
+      "description": "Target deployment platform. Affects which amxmodx base package is downloaded for asset sources. Defaults to the host platform.",
+      "enum": ["linux", "windows", "mac"]
+    },
+    "amxmodx": {
+      "type": "object",
+      "description": "AMX Mod X compiler settings.",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "amxxpc compiler version to use. Format: major.minor.build (e.g. \"1.10.5428\"). Omit to use the latest available.",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "examples": ["1.10.5428", "1.9.0"]
+        },
+        "dir": {
+          "type": "string",
+          "description": "Name of the amxmodx directory inside each repo (default: \"amxmodx\").",
+          "default": "amxmodx"
+        },
+        "defines": {
+          "type": "array",
+          "description": "Compiler preprocessor defines passed to all plugin compilations (e.g. [\"DEBUG\", \"VERSION=1.2.3\"]). Appended to defines from --define CLI flag.",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+    "github": {
+      "type": "object",
+      "description": "GitHub authentication and clone settings.",
+      "additionalProperties": false,
+      "properties": {
+        "token_env": {
+          "type": "string",
+          "description": "Name of the environment variable holding the GitHub PAT (default: \"GITHUB_TOKEN\").",
+          "default": "GITHUB_TOKEN"
+        },
+        "ssh": {
+          "type": "boolean",
+          "description": "Use SSH instead of HTTPS for git clone (default: false).",
+          "default": false
+        }
+      }
+    },
+    "plugins_ini_postfix": {
+      "type": "string",
+      "description": "Global postfix appended to generated plugins-<postfix>.ini filenames. Each repo gets its own INI file."
+    },
+    "deps": {
+      "type": "array",
+      "description": "Global include dependencies (.inc files) applied to all plugin compilations.",
+      "items": { "$ref": "#/definitions/depEntry" }
+    },
+    "repos": {
+      "type": "array",
+      "description": "GitHub repositories to pull AMX Mod X content from.",
+      "items": { "$ref": "#/definitions/repoEntry" }
+    },
+    "deploy": {
+      "type": "object",
+      "description": "Local deploy settings. Defaults read from env vars (AMXB_DEPLOY_*). Values support ${VAR} interpolation.",
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Server root directory to deploy into. Falls back to $AMXB_DEPLOY_PATH."
+        },
+        "amxmodx_path": {
+          "type": "string",
+          "description": "Path relative to deploy.path where amxmodx content goes. Defaults to output.amxmodx_path.",
+          "examples": ["addons/amxmodx", "{name}/addons/amxmodx"]
+        },
+        "assets_path": {
+          "type": "string",
+          "description": "Path relative to deploy.path where assets go. Defaults to deploy root."
+        },
+        "watch_debounce_ms": {
+          "type": "integer",
+          "description": "Milliseconds of file-write stability before triggering a watch rebuild (default: 500).",
+          "default": 500,
+          "minimum": 100
+        },
+        "exclude": {
+          "type": "array",
+          "description": "Paths relative to deploy.path to skip during deploy. Entire directory subtrees are excluded when a directory path is given. Useful for preserving default configs on the server.",
+          "items": { "type": "string" },
+          "examples": [["addons/amxmodx/configs/"], ["addons/amxmodx/configs/amxx.cfg"]]
+        },
+        "rcon": {
+          "type": "object",
+          "description": "GoldSrc (HL1/CS 1.6) UDP RCON settings. Falls back to AMXB_DEPLOY_RCON_* env vars.",
+          "additionalProperties": true,
+          "properties": {
+            "host": {
+              "type": "string",
+              "description": "RCON host. Falls back to $AMXB_DEPLOY_RCON_HOST."
+            },
+            "port": {
+              "type": "integer",
+              "description": "RCON port (default: 27015). Falls back to $AMXB_DEPLOY_RCON_PORT.",
+              "default": 27015
+            },
+            "password": {
+              "type": "string",
+              "description": "RCON password. Falls back to $AMXB_DEPLOY_RCON_PASSWORD."
+            },
+            "command": {
+              "type": "string",
+              "description": "RCON command to run after deploy. {plugin} is replaced with the plugin name. Falls back to $AMXB_DEPLOY_RCON_CMD. Leave empty to skip RCON.",
+              "examples": ["amxx load {plugin}", "amxx reload {plugin}"]
+            }
+          }
+        }
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "description": "Rules for filtering and categorizing local plugins (amxmodx/scripting/**/*.sma). Applies only to local plugins; repo plugins use their per-repo plugins_ini_postfix. First matching rule wins.",
+      "items": { "$ref": "#/definitions/pluginRule" }
+    },
+    "assets": {
+      "type": "object",
+      "description": "Remote asset sources to include in the build.",
+      "additionalProperties": true,
+      "properties": {
+        "on_conflict": {
+          "type": "string",
+          "description": "How to handle duplicate files among remote sources. Local assets always win regardless of this setting (default: \"last_wins\").",
+          "enum": ["last_wins", "first_wins"],
+          "default": "last_wins"
+        },
+        "sources": {
+          "type": "array",
+          "description": "List of remote asset sources.",
+          "items": { "$ref": "#/definitions/assetSource" }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "description": "Output packaging settings.",
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "type": "string",
+          "description": "Directory to write the output archive or copied files (default: \"./dist\").",
+          "default": "./"
+        },
+        "archive_name": {
+          "type": "string",
+          "description": "Archive filename. Supports {name} and {version} placeholders (default: \"{name}-{version}.zip\").",
+          "default": "{name}.zip",
+          "examples": ["{name}.zip", "{name}-{version}.zip"]
+        },
+        "amxmodx_path": {
+          "type": "string",
+          "description": "Path of the amxmodx directory inside the archive (default: \"addons/amxmodx\").",
+          "default": "addons/amxmodx",
+          "examples": ["{name}/addons/amxmodx", "addons/amxmodx"]
+        },
+        "assets_path": {
+          "type": "string",
+          "description": "Local directory whose contents are copied to the archive root alongside amxmodx_path."
+        },
+        "readme": {
+          "type": "boolean",
+          "description": "Include the project README.md in the archive root (default: false).",
+          "default": false
+        },
+        "generate_ini": {
+          "type": "boolean",
+          "description": "Generate plugins-*.ini files listing compiled plugins (default: true).",
+          "default": true
+        },
+        "pack": {
+          "type": "boolean",
+          "description": "Create a zip archive. Set to false to copy files to output.dir instead — useful for CI artifacts (default: true).",
+          "default": true
+        },
+        "on_conflict": {
+          "type": "string",
+          "description": "How to handle duplicate files when multiple repos provide the same path (default: \"last_wins\").",
+          "enum": ["last_wins", "first_wins", "error"],
+          "default": "last_wins"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "pluginRule": {
+      "type": "object",
+      "description": "A rule matching local .sma files by glob pattern.",
+      "required": ["match"],
+      "additionalProperties": false,
+      "properties": {
+        "match": {
+          "type": "string",
+          "description": "Glob pattern relative to scripting/ (e.g. \"VipM/*.sma\", \"**/*.sma\").",
+          "examples": ["*.sma", "VipM/*.sma", "legacy/**/*.sma"]
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Set to false to skip compilation and deploy for matching plugins (default: true).",
+          "default": true
+        },
+        "ini": {
+          "description": "plugins-*.ini postfix for matching plugins. Overrides the global plugins_ini_postfix. Set to false to compile but exclude from all INI files.",
+          "oneOf": [
+            { "type": "string", "description": "Postfix for plugins-<ini>.ini. Empty string generates plugins.ini.", "examples": ["vipm", "extra", ""] },
+            { "type": "boolean", "enum": [false], "description": "Compile but do not add to any INI file." }
+          ]
+        }
+      }
+    },
+    "depEntry": {
+      "description": "An include dependency. Either a shorthand string or an object.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Shorthand: \"owner/repo@ref\" or \"owner/repo@ref:include_path\"",
+          "pattern": "^[^@\\s]+@[^:\\s]+(:.+)?$",
+          "examples": [
+            "rehlds/ReAPI@5.29.0.358",
+            "someorg/amxmodx-dev@v1.9.0:scripting/include"
+          ]
+        },
+        {
+          "type": "object",
+          "required": ["repo", "ref"],
+          "additionalProperties": false,
+          "properties": {
+            "repo": {
+              "type": "string",
+              "description": "GitHub repository in \"owner/repo\" format."
+            },
+            "ref": {
+              "type": "string",
+              "description": "Tag, branch, or commit SHA."
+            },
+            "include_path": {
+              "type": "string",
+              "description": "Path inside the repo or release asset where .inc files are located."
+            },
+            "source": {
+              "type": "string",
+              "description": "How to fetch the dependency: \"git\" clones the repo, \"release\" downloads a release asset (default: \"git\").",
+              "enum": ["git", "release"],
+              "default": "git"
+            },
+            "asset": {
+              "description": "For source=release: which release asset to download.",
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "Glob pattern matching the release asset filename (e.g. \"*-include*.zip\")."
+                },
+                {
+                  "type": "integer",
+                  "description": "Zero-based index of the release asset.",
+                  "minimum": 0
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "repoEntry": {
+      "description": "A GitHub repository to include. Either a shorthand string or an object.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Shorthand: \"owner/repo\" or \"owner/repo@ref\"",
+          "pattern": "^[^\\s]+(/[^\\s@]+)?(@[^\\s]+)?$",
+          "examples": [
+            "AmxxModularEcosystem/VipModular",
+            "AmxxModularEcosystem/VipModular@5.0.0"
+          ]
+        },
+        {
+          "type": "object",
+          "required": ["repo"],
+          "additionalProperties": false,
+          "properties": {
+            "repo": {
+              "type": "string",
+              "description": "GitHub repository in \"owner/repo\" format."
+            },
+            "ref": {
+              "type": "string",
+              "description": "Tag, branch, commit SHA, or \"latest\" (resolves to the latest GitHub release).",
+              "examples": ["main", "v1.2.3", "latest", "abc1234"]
+            },
+            "amxmodx_dir": {
+              "type": "string",
+              "description": "Override the amxmodx directory name for this repo (defaults to manifest.amxmodx.dir)."
+            },
+            "plugins_ini_postfix": {
+              "type": "string",
+              "description": "Override the INI postfix for this repo."
+            },
+            "exclude": {
+              "type": "array",
+              "description": "Glob patterns for paths to exclude when copying content from this repo.",
+              "items": { "type": "string" }
+            },
+            "exclude_files": {
+              "type": "array",
+              "description": "Specific filenames to exclude from this repo.",
+              "items": { "type": "string" }
+            },
+            "deps_override": {
+              "type": "array",
+              "description": "Explicit dep list for this repo, replacing the auto-detected DEPS_LIST file.",
+              "items": { "$ref": "#/definitions/depEntry" }
+            }
+          }
+        }
+      ]
+    },
+    "assetMapEntry": {
+      "type": "object",
+      "description": "A single from→to mapping for an asset source.",
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Path inside the source (archive root or single file). Trailing slash means \"take contents\"; no trailing slash means \"take the item itself\". Omit to take everything."
+        },
+        "to": {
+          "type": "string",
+          "description": "Destination path in the asset tree. Trailing slash means \"place inside this folder\". Omit to place at asset root. For a single file without trailing slash, acts as a rename."
+        }
+      }
+    },
+    "assetSource": {
+      "type": "object",
+      "description": "A remote asset source.",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Built-in source type:\n- \"local\": local assets/ directory next to the manifest (included by default)\n- \"amxmodx\": base amxmodx package (uses manifest.platform and amxmodx.version)\n- \"release\": GitHub release asset, shares cache with deps (requires repo + ref)",
+          "enum": ["local", "amxmodx", "release"]
+        },
+        "repo": {
+          "type": "string",
+          "description": "For source=release: GitHub repository in \"owner/repo\" format."
+        },
+        "ref": {
+          "type": "string",
+          "description": "For source=release: tag, or \"latest\" to resolve the latest GitHub release."
+        },
+        "asset": {
+          "description": "For source=release: which release asset to download (same as deps asset selector).",
+          "oneOf": [
+            { "type": "string", "description": "Glob pattern matching the asset filename." },
+            { "type": "integer", "description": "Zero-based index of the asset.", "minimum": 0 }
+          ]
+        },
+        "url": {
+          "type": "string",
+          "description": "URL of a file or archive to download. Supported: .zip, .tar.gz, .tar.bz2, and single files.",
+          "format": "uri"
+        },
+        "from": {
+          "type": "string",
+          "description": "Path inside the source to extract. Shorthand for a single map entry. Trailing slash = take contents; no trailing slash = take the item itself."
+        },
+        "to": {
+          "type": "string",
+          "description": "Destination in the asset tree. Shorthand for a single map entry. Trailing slash = place inside folder; no trailing slash on single file = rename."
+        },
+        "map": {
+          "type": "array",
+          "description": "Multiple from→to extraction rules for this source. Takes precedence over top-level from/to.",
+          "items": { "$ref": "#/definitions/assetMapEntry" }
+        },
+        "cache": {
+          "type": "string",
+          "description": "Caching strategy for this source (default: \"none\").\n- none: download to build/ on every build\n- local: cache in .amxb-cache/ next to the manifest\n- global: cache in the global amxx-builder cache directory",
+          "enum": ["none", "local", "global"],
+          "default": "none"
+        }
+      }
+    }
+  }
+}
