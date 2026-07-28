@@ -27,7 +27,7 @@
     "dotenv": "^17.4.2",
     "enquirer": "^2.4.1",
     "fast-glob": "^3.3.2",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.3.0",
     "simple-git": "^3.22.0"
   },
   "devDependencies": {
