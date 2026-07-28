@@ -24,12 +24,7 @@
 const fs   = require('fs');
 const path = require('path');
 const glob = require('fast-glob');
-const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
-const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
-const {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} = require('@modelcontextprotocol/sdk/types.js');
+const { McpServer } = require('./mcp-server');
 
 // ─── Project modules ────────────────────────────────────────────────────────
 
@@ -168,15 +163,13 @@ const SERVER_INFO = {
   version: '1.0.0',
 };
 
-const server = new Server(SERVER_INFO, {
-  capabilities: {
-    tools: {},
-  },
+const server = new McpServer(SERVER_INFO, {
+  tools: {},
 });
 
 // ─── Tool: list_dep_incs ────────────────────────────────────────────────────
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+server.setRequestHandler('ListTools', async () => {
   return {
     tools: [
       {
@@ -457,7 +450,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 // ─── Tool: get_dep_interface ─────────────────────────────────────────────────
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler('CallTool', async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
@@ -666,8 +659,7 @@ function resolveManifestPath(explicit) {
 // ─── Start ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await server.connect();
 }
 
 main().catch((err) => {
