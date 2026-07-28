@@ -267,6 +267,15 @@ program
     }
   });
 
+// ─── version ──────────────────────────────────────────────────────────────────
+
+program
+  .command('version')
+  .description('Show current version')
+  .action(() => {
+    console.log(require('./package.json').version);
+  });
+
 program.parse(process.argv);
 
 // ─── build implementation ────────────────────────────────────────────────────
