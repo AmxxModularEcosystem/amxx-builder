@@ -121,4 +121,4 @@ function countIncFiles(dir) {
   return n;
 }
 
-module.exports = { resolveDeps };
+module.exports = { resolveDeps, readDepsListFile };

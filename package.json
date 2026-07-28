@@ -5,17 +5,19 @@
   "main": "index.js",
   "bin": {
     "amxx-builder": "./index.js",
-    "amxb": "./index.js"
+    "amxb": "./index.js",
+    "amxx-dep-resolver": "./mcp/dep-resolver.js"
   },
   "engines": {
     "node": ">=16"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "bundle": "ncc build action-entry.js -o dist --minify --license licenses.txt"
   },
   "dependencies": {
     "@actions/core": "1.11.1",
-    "adm-zip": "^0.5.12",
+    "adm-zip": "^0.6.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "archiver": "^7.0.1",
@@ -32,5 +34,17 @@
   },
   "devDependencies": {
     "@vercel/ncc": "^0.38.4"
-  }
+  },
+  "files": [
+    "index.js",
+    "mcp/",
+    "src/",
+    "action.yml",
+    "action-entry.js",
+    "templates/",
+    "defaults/",
+    "package.json",
+    "README.md",
+    "AGENTS.md"
+  ]
 }

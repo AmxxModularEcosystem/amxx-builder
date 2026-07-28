@@ -8,7 +8,7 @@ const path = require('path');
 
 const logger             = require('./src/logger');
 const { setVerbose }     = logger;
-const { parseManifest }  = require('./src/manifest');
+const { parseManifest, applyOverrides, resolveManifest } = require('./src/manifest');
 const { fetchCompiler }  = require('./src/compiler-fetcher');
 const { fetchRepo, resolveRef } = require('./src/repo-fetcher');
 const { resolveDeps }    = require('./src/deps-resolver');
@@ -22,6 +22,11 @@ const { fetchAssets }    = require('./src/asset-fetcher');
 const { buildIniFiles }  = require('./src/ini-builder');
 const { createArchive, copyOutput } = require('./src/archiver');
 const { getCacheDir }    = require('./src/cache-dir');
+const { buildDepTree }   = require('./src/deps-tree');
+const { validateManifestFile } = require('./src/validate');
+const { getCacheInfo, dirSize, fmtSize, parseCacheKey } = require('./src/cache-info');
+const { listReleases, listTags } = require('./src/release-lister');
+const { checkForUpdate } = require('./src/update-check');
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
 const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
@@ -30,6 +35,16 @@ program
   .name('amxx-builder')
   .description('Build and package AMX Mod X server plugins')
   .version(require('./package.json').version);
+
+program.hook('preAction', async () => {
+  try {
+    const latest = await checkForUpdate();
+    if (latest) {
+      logger.info(`Доступна новая версия: ${latest} (текущая: ${require('./package.json').version})`);
+      logger.dim(`  Обновить: npm install -g github:AmxxModularEcosystem/amxx-builder`);
+    }
+  } catch { /* update check never blocks */ }
+});
 
 // ─── build ───────────────────────────────────────────────────────────────────
 
@@ -104,6 +119,78 @@ cacheCmd
     }
   });
 
+// ─── deps-tree ────────────────────────────────────────────────────────────────
+
+program
+  .command('deps-tree')
+  .description('Show recursive dependency tree for manifest or inline deps')
+  .option('--manifest <path>', 'Path to manifest file')
+  .option('--depth <n>',       'Max recursion depth (0 = unlimited)', parseInt)
+  .option('--json',            'Output as JSON instead of tree view')
+  .option('--cycle-only',      'Show only cycles')
+  .option('--no-fetch',        'Use cached repos without re-cloning')
+  .action(async (options) => {
+    try {
+      await runDepsTree(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── resolve-manifest ──────────────────────────────────────────────────────────
+
+program
+  .command('resolve-manifest')
+  .description('Parse and fully resolve manifest (defaults + overrides)')
+  .option('--manifest <path>', 'Path to manifest file')
+  .option('--set <key=value...>', 'Override manifest field (dot notation)')
+  .option('--define <flag...>', 'Add compiler define')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    try {
+      await runResolveManifest(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── validate ──────────────────────────────────────────────────────────────────
+
+program
+  .command('validate')
+  .description('Validate manifest and show diagnostics')
+  .option('--manifest <path>', 'Path to manifest file')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    try {
+      await runValidate(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── releases ──────────────────────────────────────────────────────────────────
+
+program
+  .command('releases')
+  .description('List GitHub releases or tags for a repository')
+  .argument('<repo>', 'Repository in format owner/repo')
+  .option('--limit <n>', 'Max results (default: 10)', parseInt)
+  .option('--tags', 'List git tags instead of releases')
+  .option('--assets', 'Include asset details')
+  .option('--json', 'Output as JSON')
+  .action(async (repo, options) => {
+    try {
+      await runReleases(repo, options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
 // ─── deploy ──────────────────────────────────────────────────────────────────
 
 program
@@ -164,6 +251,7 @@ program
   .option('--ci',           'Alias for --workflow')
   .option('--plugin <name>', 'Create amxmodx/scripting/<name>.sma')
   .option('--gitignore',     'Create .gitignore')
+  .option('--opencode',      'Create .opencode/opencode.json with amxx-dep-resolver MCP config')
   .option('--deploy',        'Create .env with deploy stubs (AMXB_DEPLOY_*)')
   .option('-i, --interactive', 'Interactive mode with prompts')
   .action(async (options) => {
@@ -177,6 +265,15 @@ program
       logger.error(err.message);
       process.exit(1);
     }
+  });
+
+// ─── version ──────────────────────────────────────────────────────────────────
+
+program
+  .command('version')
+  .description('Show current version')
+  .action(() => {
+    console.log(require('./package.json').version);
   });
 
 program.parse(process.argv);
@@ -482,92 +579,49 @@ async function runWatch(options) {
 
 // ─── cache implementation ─────────────────────────────────────────────────────
 
-function dirSize(dir) {
-  if (!fs.existsSync(dir)) return 0;
-  let total = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, entry.name);
-    total += entry.isDirectory() ? dirSize(p) : fs.statSync(p).size;
-  }
-  return total;
-}
-
-function fmtSize(bytes) {
-  if (bytes < 1024)        return `${bytes} B`;
-  if (bytes < 1024 ** 2)  return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 ** 3)  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-}
-
-function parseCacheKey(key) {
-  // owner__repo__ref  →  owner/repo @ ref
-  const parts = key.split('__');
-  if (parts.length < 3) return key;
-  return `${parts.slice(0, -1).join('/')} @ ${parts[parts.length - 1]}`;
-}
-
 function runCacheInfo(options = {}) {
-  const cacheRoot = getCacheDir();
-  const compDir   = path.join(cacheRoot, 'amxxpc');
-  const reposDir  = path.join(cacheRoot, 'repos');
-  const depsDir   = path.join(cacheRoot, 'release-deps');
+  const manifestPath = options.manifest ? path.resolve(options.manifest) : undefined;
+  const info = getCacheInfo(manifestPath);
 
-  const total = dirSize(cacheRoot);
-  logger.info(`Cache: ${cacheRoot} (${fmtSize(total)} total)`);
+  logger.info(`Cache: ${info.cacheDir} (${info.totalSizeHuman} total)`);
 
-  if (!fs.existsSync(cacheRoot) || total === 0) {
+  if (info.totalSize === 0) {
     logger.dim('  (empty)');
     return;
   }
 
-  if (fs.existsSync(compDir)) {
-    const versions = fs.readdirSync(compDir, { withFileTypes: true }).filter(e => e.isDirectory());
-    if (versions.length) {
-      logger.info('\nCompiler (amxxpc):');
-      for (const ver of versions) {
-        const verDir    = path.join(compDir, ver.name);
-        const platforms = fs.readdirSync(verDir, { withFileTypes: true }).filter(e => e.isDirectory());
-        for (const plat of platforms) {
-          const size = dirSize(path.join(verDir, plat.name));
-          logger.dim(`  ${ver.name.padEnd(14)} ${plat.name.padEnd(10)} ${fmtSize(size)}`);
-        }
+  // Compiler
+  if (info.compiler.versions.length) {
+    logger.info('\nCompiler (amxxpc):');
+    for (const ver of info.compiler.versions) {
+      for (const [platform, size] of Object.entries(ver.platforms)) {
+        logger.dim(`  ${ver.version.padEnd(14)} ${platform.padEnd(10)} ${fmtSize(size)}`);
       }
     }
   }
 
-  if (fs.existsSync(reposDir)) {
-    const entries = fs.readdirSync(reposDir, { withFileTypes: true }).filter(e => e.isDirectory());
-    if (entries.length) {
-      logger.info(`\nRepos (${entries.length}, ${fmtSize(dirSize(reposDir))} total):`);
-      for (const e of entries) {
-        const label = parseCacheKey(e.name);
-        const size  = dirSize(path.join(reposDir, e.name));
-        logger.dim(`  ${label.padEnd(52)} ${fmtSize(size)}`);
-      }
+  // Repos
+  if (info.repos.count) {
+    logger.info(`\nRepos (${info.repos.count}, ${info.repos.totalSizeHuman} total):`);
+    for (const e of info.repos.entries) {
+      const label = parseCacheKey(e.key);
+      logger.dim(`  ${label.padEnd(52)} ${fmtSize(e.size)}`);
     }
   }
 
-  if (fs.existsSync(depsDir)) {
-    const entries = fs.readdirSync(depsDir, { withFileTypes: true }).filter(e => e.isDirectory());
-    if (entries.length) {
-      logger.info(`\nRelease deps (${entries.length}, ${fmtSize(dirSize(depsDir))} total):`);
-      for (const e of entries) {
-        const label = parseCacheKey(e.name);
-        const size  = dirSize(path.join(depsDir, e.name));
-        logger.dim(`  ${label.padEnd(52)} ${fmtSize(size)}`);
-      }
+  // Release deps
+  if (info.releaseDeps.count) {
+    logger.info(`\nRelease deps (${info.releaseDeps.count}, ${info.releaseDeps.totalSizeHuman} total):`);
+    for (const e of info.releaseDeps.entries) {
+      const label = parseCacheKey(e.key);
+      logger.dim(`  ${label.padEnd(52)} ${fmtSize(e.size)}`);
     }
   }
 
-  // Local .amxb-cache/ next to manifest
-  const manifestPath = resolveManifestPath(options.manifest);
-  const localCacheDir = path.join(path.dirname(path.resolve(manifestPath)), '.amxb-cache', 'assets');
-  if (fs.existsSync(localCacheDir)) {
-    const entries = fs.readdirSync(localCacheDir, { withFileTypes: true }).filter(e => e.isDirectory());
-    if (entries.length) {
-      logger.info(`\nLocal asset cache (${entries.length}, ${fmtSize(dirSize(localCacheDir))}):`)
-      logger.dim(`  ${localCacheDir}`);
-    }
+  // Local asset cache
+  if (info.localAssetCache) {
+    logger.info(`\nLocal asset cache (${info.localAssetCache.count}, ${info.localAssetCache.totalSizeHuman}):`);
+    logger.dim(`  ${info.localAssetCache.path}`);
   }
 }
 
@@ -670,6 +724,207 @@ async function runDoctor(options) {
   }
 }
 
+// ─── deps-tree implementation ─────────────────────────────────────────────────
+
+async function runDepsTree(options) {
+  const manifestPath = options.manifest ? path.resolve(options.manifest) : resolveManifestPath(undefined);
+  const manifestDir  = path.dirname(path.resolve(manifestPath));
+
+  require('dotenv').config({ path: path.join(manifestDir, '.env'), override: true });
+
+  const noFetch = options.fetch === false;
+  const asJson  = options.json || false;
+  const cycleOnly = options.cycleOnly || false;
+
+  // Parse manifest to extract root deps (repos + global deps)
+  const manifest = parseManifest(manifestPath);
+
+  // Resolve refs for manifest repos (needed for deps resolution)
+  await Promise.all(manifest.repos.map(async (repoConfig) => {
+    repoConfig._resolvedRef = await resolveRef(
+      repoConfig.repo, repoConfig.ref, manifest.github.token
+    );
+  }));
+
+  // Build root dep list: global deps + each repo as a dep
+  // Repo deps have lower priority than global deps, but both are tree roots
+  // The deps_override from manifest repos is wired via getDepsOverride
+  const rootDeps = [];
+
+  for (const repoConfig of manifest.repos) {
+    rootDeps.push({
+      repo:  repoConfig.repo,
+      ref:   repoConfig.ref,
+      _from: 'repo',
+    });
+  }
+
+  // Global deps
+  for (const dep of manifest.globalDeps) {
+    rootDeps.push({ ...dep, _from: 'manifest' });
+  }
+
+  // deps_override callback: only applies to repos listed in manifest.repos
+  const getDepsOverride = (repo) => {
+    const config = manifest.repos.find(r => r.repo === repo);
+    return config ? config.deps_override : null;
+  };
+
+  const tree = await buildDepTree(rootDeps, {
+    token:   manifest.github.token,
+    noFetch,
+    depth:   0,
+    from:    'manifest',
+    getDepsOverride,
+  });
+
+  // Filter cycles only
+  const filtered = cycleOnly ? filterCycles(tree) : tree;
+
+  if (asJson) {
+    process.stdout.write(JSON.stringify(filtered, null, 2) + '\n');
+    return;
+  }
+
+  printTree(filtered);
+}
+
+function printTree(tree) {
+  if (!tree.dependencies || tree.dependencies.length === 0) {
+    logger.info('No dependencies');
+    return;
+  }
+  logger.info('Dependency tree:');
+  for (const node of tree.dependencies) {
+    printNode(node, '', true);
+  }
+}
+
+function printNode(node, prefix, isLast) {
+  const connector = isLast ? '└── ' : '├── ';
+  const childPrefix = isLast ? '    ' : '│   ';
+
+  const tag = buildNodeTag(node);
+  logger.dim(`${prefix}${connector}${node.repo}@${node.ref || 'HEAD'}${tag}`);
+
+  if (node.cycle) return; // don't expand cycles
+
+  for (let i = 0; i < node.dependencies.length; i++) {
+    printNode(node.dependencies[i], prefix + childPrefix, i === node.dependencies.length - 1);
+  }
+}
+
+function buildNodeTag(node) {
+  const parts = [];
+  if (node.from)           parts.push(`from ${node.from}`);
+  if (node.resolvedRef && node.ref !== node.resolvedRef) {
+    parts.push(`→ ${node.resolvedRef}`);
+  }
+  if (node.cycle)          parts.push('⚠ cycle');
+  if (node.error)          parts.push(`✗ ${node.error}`);
+  return parts.length ? `  (${parts.join(', ')})` : '';
+}
+
+function filterCycles(tree) {
+  const collect = [];
+  function walk(nodes) {
+    for (const n of nodes) {
+      if (n.cycle) collect.push(n);
+      else walk(n.dependencies);
+    }
+  }
+  walk(tree.dependencies || []);
+  return { dependencies: collect };
+}
+
+// ─── resolve-manifest implementation ─────────────────────────────────────────
+
+async function runResolveManifest(options) {
+  const manifestPath = options.manifest ? path.resolve(options.manifest) : resolveManifestPath(undefined);
+  require('dotenv').config({ path: path.join(path.dirname(path.resolve(manifestPath)), '.env'), override: true });
+
+  const manifest = resolveManifest(manifestPath, {
+    set:    options.set,
+    define: options.define,
+  });
+
+  if (options.json) {
+    process.stdout.write(JSON.stringify(manifest, null, 2) + '\n');
+    return;
+  }
+
+  logger.info('Resolved manifest:');
+  logger.dim(JSON.stringify(manifest, null, 2));
+}
+
+// ─── validate implementation ─────────────────────────────────────────────────
+
+async function runValidate(options) {
+  const manifestPath = options.manifest ? path.resolve(options.manifest) : resolveManifestPath(undefined);
+  const result = validateManifestFile(manifestPath);
+
+  if (options.json) {
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    if (!result.valid) process.exitCode = 1;
+    return;
+  }
+
+  if (result.valid) {
+    logger.success('Manifest is valid');
+    return;
+  }
+
+  logger.error(`Manifest has ${result.errors.length} error(s) and ${result.warnings.length} warning(s):`);
+  for (const err of result.errors) {
+    logger.dim(`  ${err.path}: ${err.message}`);
+  }
+  for (const warn of result.warnings) {
+    logger.warn(`  ${warn.path}: ${warn.message}`);
+  }
+  process.exitCode = 1;
+}
+
+// ─── releases implementation ────────────────────────────────────────────────
+
+async function runReleases(repo, options) {
+  require('dotenv').config({ override: true });
+  const token = process.env.GITHUB_TOKEN || null;
+  const limit = options.limit || 10;
+  const asJson = options.json || false;
+
+  let entries;
+  if (options.tags) {
+    entries = await listTags(repo, { token, limit });
+  } else {
+    entries = await listReleases(repo, { token, limit, includeAssets: options.assets });
+  }
+
+  if (asJson) {
+    process.stdout.write(JSON.stringify(entries, null, 2) + '\n');
+    return;
+  }
+
+  if (entries.length === 0) {
+    logger.info(`No ${options.tags ? 'tags' : 'releases'} found for ${repo}`);
+    return;
+  }
+
+  const label = options.tags ? 'Tags' : 'Releases';
+  logger.info(`${label} for ${repo} (${entries.length}):`);
+  for (const e of entries) {
+    const line = options.tags
+      ? `  ${e.name}`
+      : `  ${e.tagName}  ${e.prerelease ? '(pre) ' : ''}${e.publishedAt ? `— ${e.publishedAt.slice(0, 10)}` : ''}`;
+    logger.dim(line);
+
+    if (e.assets && e.assets.length > 0) {
+      for (const a of e.assets) {
+        logger.dim(`    └ assets/${a.name}  (${(a.size / 1024).toFixed(0)} KB)`);
+      }
+    }
+  }
+}
+
 // ─── dry-run ─────────────────────────────────────────────────────────────────
 
 function printDryRun(manifest) {
@@ -732,31 +987,6 @@ function printDryRun(manifest) {
   logger.info(`\n=== END DRY RUN ===`);
 }
 
-// ─── manifest overrides ───────────────────────────────────────────────────────
-
-function applyOverrides(manifest, pairs) {
-  for (const pair of pairs) {
-    const eqIdx = pair.indexOf('=');
-    if (eqIdx === -1) throw new Error(`--set: invalid format "${pair}" (expected key=value)`);
-    const keys  = pair.slice(0, eqIdx).trim().split('.');
-    const value = parseOverrideValue(pair.slice(eqIdx + 1));
-    let node = manifest;
-    for (let i = 0; i < keys.length - 1; i++) {
-      if (node[keys[i]] == null) node[keys[i]] = {};
-      node = node[keys[i]];
-    }
-    node[keys[keys.length - 1]] = value;
-  }
-}
-
-function parseOverrideValue(str) {
-  if (str === 'true')  return true;
-  if (str === 'false') return false;
-  if (str === 'null')  return null;
-  if (/^\d+$/.test(str)) return parseInt(str, 10);
-  return str;
-}
-
 // ─── init ─────────────────────────────────────────────────────────────────────
 
 async function runInitInteractive(options) {
@@ -804,6 +1034,12 @@ async function runInitInteractive(options) {
     initial: false,
   }).run();
 
+  const doOpencode = await new Confirm({
+    name: 'opencode',
+    message: 'Create .opencode/opencode.json with amxx-dep-resolver MCP config?',
+    initial: false,
+  }).run();
+
   // Collect info for summary
   const actions = [];
   actions.push(`amxbuild.yml`);
@@ -811,6 +1047,7 @@ async function runInitInteractive(options) {
   if (pluginName) actions.push(`amxmodx/scripting/${pluginName}.sma`);
   if (doGitignore) actions.push('.gitignore');
   if (doDeploy) actions.push('.env');
+  if (doOpencode) actions.push('.opencode/opencode.json');
 
   logger.info('Creating:');
   for (const a of actions) logger.dim(`  ${a}`);
@@ -843,6 +1080,10 @@ async function runInitInteractive(options) {
   if (doDeploy) {
     writeIfAbsent('.env', renderTemplate('init-deploy.env'));
   }
+
+  if (doOpencode) {
+    writeOpencodeConfig();
+  }
 }
 
 function runInit(options) {
@@ -873,6 +1114,10 @@ function runInit(options) {
   if (options.deploy) {
     writeIfAbsent('.env', renderTemplate('init-deploy.env'));
   }
+
+  if (options.opencode) {
+    writeOpencodeConfig();
+  }
 }
 
 function writeIfAbsent(filePath, content) {
@@ -882,6 +1127,48 @@ function writeIfAbsent(filePath, content) {
   }
   fs.writeFileSync(filePath, content);
   logger.success(`Created ${filePath}`);
+}
+
+function writeOpencodeConfig() {
+  const dir   = '.opencode';
+  const file  = path.join(dir, 'opencode.json');
+  const mcpKey = 'amxx-dep-resolver';
+  const mcpConfig = {
+    type: 'local',
+    command: ['amxx-dep-resolver'],
+    enabled: true,
+  };
+
+  if (!fs.existsSync(file)) {
+    // Create new
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      $schema: 'https://opencode.ai/config.json',
+      mcp: { [mcpKey]: mcpConfig },
+    }, null, 2) + '\n');
+    logger.success(`Created ${file}`);
+    return;
+  }
+
+  // Merge into existing config
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    logger.warn(`${file} exists but is invalid JSON, skipping merge`);
+    return;
+  }
+
+  if (cfg.mcp?.[mcpKey]) {
+    logger.warn(`${file} already has amxx-dep-resolver MCP config, skipping`);
+    return;
+  }
+
+  cfg.mcp = cfg.mcp || {};
+  cfg.mcp[mcpKey] = mcpConfig;
+  cfg.$schema = cfg.$schema || 'https://opencode.ai/config.json';
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  logger.success(`Updated ${file} with amxx-dep-resolver MCP config`);
 }
 
 function renderTemplate(name, vars = {}) {

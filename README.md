@@ -393,6 +393,68 @@ repos:
 
 Все доступные опции: [`example/amxbuild.yml`](example/amxbuild.yml).
 
+## MCP сервер для opencode
+
+`amxx-dep-resolver` — MCP сервер для [opencode](https://opencode.ai), который предоставляет агенту информацию о публичном интерфейсе зависимостей AMX Mod X. По элементу из `deps` манифеста сервер скачивает (если ещё не кэшировано) и возвращает содержимое `.inc` файлов — чтобы агент мог видеть функции, константы и определения конкретной зависимости.
+
+### Установка
+
+Устанавливается вместе с основным пакетом — отдельная установка не требуется.
+После `amxb` команда `amxx-dep-resolver` также доступна глобально.
+
+### Подключение в opencode
+
+В `.opencode/opencode.json` любого проекта:
+
+```json
+{
+  "mcp": {
+    "amxx-dep-resolver": {
+      "type": "local",
+      "command": ["amxx-dep-resolver"],
+      "enabled": true
+    }
+  }
+}
+```
+
+После перезапуска opencode агенту будут доступны инструменты `get_dep_interface` и `list_dep_incs`.
+
+### Инструменты
+
+#### `get_dep_interface`
+
+Скачивает зависимость (из кэша или с GitHub) и возвращает содержимое всех `.inc` файлов. Используй, когда агенту нужно понять публичный API — функции, константы, стоки, типы.
+
+**Параметры:**
+
+| Поле | Тип | Обязательный | Описание |
+|------|-----|:---:|---------|
+| `dep` | `string` | ✓ | Зависимость в формате `owner/repo@ref` или `owner/repo@ref:include_path` |
+| `source` | `"git" \| "release"` | — | Способ загрузки. По умолчанию `"git"` |
+| `include_path` | `string` | — | Переопределить путь к `.inc` файлам |
+| `asset` | `string \| number` | — | Для `source: release` — селектор ассета (glob или индекс) |
+| `token` | `string` | — | GitHub PAT (спадает на `GITHUB_TOKEN` env) |
+| `no_fetch` | `boolean` | — | Только кэш, без сетевых запросов |
+
+**Примеры запросов агента:**
+
+```
+— Покажи API зависимости AmxxModularEcosystem/ParamsController
+— Какие функции есть в rehlds/ReAPI?
+— Найди константы в AmxxModularEcosystem/CustomWeaponsAPI
+```
+
+#### `list_dep_incs`
+
+Только список `.inc` файлов без содержимого — быстрая проверка наличия.
+
+**Пример:**
+
+```
+— Какие .inc файлы есть в AmxxModularEcosystem/ParamsController@1.4.0?
+```
+
 ## Приоритеты
 
 | Что | Порядок (↑ выше) |
