@@ -14,11 +14,36 @@
 $ErrorActionPreference = 'Stop'
 
 $REPO   = 'AmxxModularEcosystem/amxx-builder'   # <-- replace with actual GitHub owner/repo
-$BRANCH = 'master'
 
 function Write-Step { param([string]$msg) Write-Host "[amxx-builder] $msg" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$msg) Write-Host "[amxx-builder] $msg" -ForegroundColor Green }
 function Write-Fail { param([string]$msg) Write-Error "[amxx-builder] $msg" }
+
+# ── Version resolution ──────────────────────────────────────────────────────────
+#   $env:AMXB_VERSION  — explicit tag, branch, or commit hash
+#   (unset)            — resolve latest GitHub release, fallback to master
+function Resolve-Version {
+    $version = $env:AMXB_VERSION
+    if ($version) {
+        return $version
+    }
+
+    Write-Step "Resolving latest release for $REPO ..."
+    $apiUrl = "https://api.github.com/repos/$REPO/releases/latest"
+    $headers = @{ Accept = 'application/vnd.github+json' }
+    $token = $env:GITHUB_TOKEN
+    if ($token) { $headers.Authorization = "Bearer $token" }
+
+    try {
+        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+        $tag = $response.tag_name
+        Write-Step "Latest release: $tag"
+        return $tag
+    } catch {
+        Write-Step "Could not resolve latest release ($($_.Exception.Message)), falling back to master"
+        return 'master'
+    }
+}
 
 # ── 1. Check Node.js ──────────────────────────────────────────────────────────
 Write-Step 'Checking prerequisites...'
@@ -30,10 +55,13 @@ Write-Step "Node.js $nodeRaw OK"
 
 try { & npm --version | Out-Null } catch { Write-Fail 'npm not found. Reinstall Node.js from https://nodejs.org' }
 
-# ── 2. Install via npm ────────────────────────────────────────────────────────
-Write-Step "Installing amxb from github:$REPO ..."
+# ── 2. Resolve version ──────────────────────────────────────────────────────────
+$VERSION = Resolve-Version
 
-$npmArgs = @('install', '-g', "github:$REPO")
+# ── 3. Install via npm ──────────────────────────────────────────────────────────
+Write-Step "Installing amxb from github:${REPO}#${VERSION} ..."
+
+$npmArgs = @('install', '-g', "github:${REPO}#${VERSION}")
 
 # Pass token if set (for private repos)
 $token = $env:GITHUB_TOKEN

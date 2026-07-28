@@ -8,11 +8,40 @@
 set -euo pipefail
 
 REPO="AmxxModularEcosystem/amxx-builder"   # <-- replace with actual GitHub owner/repo
-BRANCH="master"
 
 step()  { echo -e "\033[36m[amxx-builder]\033[0m $*"; }
 ok()    { echo -e "\033[32m[amxx-builder]\033[0m $*"; }
 fail()  { echo -e "\033[31m[amxx-builder]\033[0m ERROR: $*" >&2; exit 1; }
+
+# ── Version resolution ──────────────────────────────────────────────────────────
+#   AMXB_VERSION  — explicit tag, branch, or commit hash
+#   (unset)       — resolve latest GitHub release, fallback to master
+resolve_version() {
+  if [ -n "${AMXB_VERSION:-}" ]; then
+    echo "$AMXB_VERSION"
+    return
+  fi
+
+  step "Resolving latest release for $REPO ..."
+  local api_url="https://api.github.com/repos/$REPO/releases/latest"
+  local tag
+
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    tag=$(curl -sfL -H "Authorization: Bearer $GITHUB_TOKEN" "$api_url" 2>/dev/null \
+      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)",*/\1/')
+  else
+    tag=$(curl -sfL "$api_url" 2>/dev/null \
+      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)",*/\1/')
+  fi
+
+  if [ -n "$tag" ]; then
+    step "Latest release: $tag"
+    echo "$tag"
+  else
+    step "Could not resolve latest release, falling back to master"
+    echo "master"
+  fi
+}
 
 # ── 1. Check Node.js ──────────────────────────────────────────────────────────
 step "Checking prerequisites..."
@@ -26,14 +55,17 @@ if [ "$NODE_MAJOR" -lt 16 ]; then
 fi
 step "Node.js $(node --version) OK"
 
-# ── 2. Install via npm ────────────────────────────────────────────────────────
-step "Installing amxb from github:$REPO ..."
+# ── 2. Resolve version ──────────────────────────────────────────────────────────
+VERSION=$(resolve_version)
+
+# ── 3. Install via npm ──────────────────────────────────────────────────────────
+step "Installing amxb from github:$REPO#${VERSION} ..."
 
 if [ -n "${GITHUB_TOKEN:-}" ]; then
     export GH_TOKEN="$GITHUB_TOKEN"
 fi
 
-npm install -g "github:$REPO"
+npm install -g "github:$REPO#${VERSION}"
 
 # ── 3. Verify ────────────────────────────────────────────────────────────────
 step "Verifying installation..."

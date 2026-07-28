@@ -22,6 +22,24 @@ curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/m
 $env:GITHUB_TOKEN="ghp_xxx"; irm .../install.ps1 | iex
 ```
 
+Конкретная версия (тэг, ветка, коммит):
+
+```bash
+# По умолчанию — последний релиз
+curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/install.sh | bash
+
+# Конкретная версия
+AMXB_VERSION=v1.2.3 curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/install.sh | bash
+```
+
+```powershell
+# По умолчанию — последний релиз
+irm https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/install.ps1 | iex
+
+# Конкретная версия
+$env:AMXB_VERSION="v1.2.3"; irm https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/install.ps1 | iex
+```
+
 Требования: **Node.js 16+**, **git**.
 
 ## Использование
