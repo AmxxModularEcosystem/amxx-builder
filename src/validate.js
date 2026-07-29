@@ -3,19 +3,9 @@
 const fs   = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
-const Ajv     = require('ajv');
-const addFormats = require('ajv-formats');
 
+const { validateManifest: validateSchema } = require('./schema');
 const { loadDefaultsRaw, deepMerge } = require('./manifest');
-
-const SCHEMA_PATH = path.join(__dirname, '..', 'schema', 'amxbuild.schema.json');
-
-let schemaCache = null;
-try {
-  if (fs.existsSync(SCHEMA_PATH)) {
-    schemaCache = JSON.parse(fs.readFileSync(SCHEMA_PATH, 'utf8'));
-  }
-} catch { /* no schema — skip AJV validation */ }
 
 /**
  * Validate a manifest file and return structured diagnostics.
@@ -55,24 +45,10 @@ function validateManifestFile(manifestPath) {
   const defaults = loadDefaultsRaw();
   const raw = deepMerge(defaults, projectRaw);
 
-  // 5. AJV schema validation
-  if (schemaCache) {
-    try {
-      const ajv = new Ajv({ allErrors: true });
-      addFormats(ajv);
-      const validate = ajv.compile(schemaCache);
-      const valid = validate(raw);
-      if (!valid) {
-        for (const e of validate.errors) {
-          errors.push({
-            path: e.instancePath || '(root)',
-            message: e.message,
-          });
-        }
-      }
-    } catch (err) {
-      errors.push({ path: '(root)', message: `Schema validation error: ${err.message}` });
-    }
+  // 5. AJV schema validation (via shared schema module)
+  const schemaResult = validateSchema(raw);
+  for (const e of schemaResult.errors) {
+    errors.push(e);
   }
 
   // 6. version must be a string (common mistake: YAML parses unquoted as number)

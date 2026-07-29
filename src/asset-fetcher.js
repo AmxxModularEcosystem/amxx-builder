@@ -5,9 +5,9 @@ const path   = require('path');
 const crypto = require('crypto');
 const axios  = require('axios');
 const AdmZip = require('adm-zip');
-const { execSync } = require('child_process');
 
 const chalk = require('chalk');
+const { safeExtractTar } = require('./fs-utils');
 const logger = require('./logger');
 const { getCacheDir }        = require('./cache-dir');
 const { withRetry }          = require('./retry');
@@ -149,9 +149,8 @@ function extractArchive(data, filename, destDir) {
   }
   const tmpFile = path.join(destDir, filename);
   fs.writeFileSync(tmpFile, data);
-  const flag = /\.bz2$/i.test(filename) ? 'xjf' : 'xzf';
   try {
-    execSync(`tar ${flag} "${tmpFile}" -C "${destDir}"`, { stdio: 'pipe' });
+    safeExtractTar(tmpFile, destDir);
   } finally {
     fs.rmSync(tmpFile, { force: true });
   }
@@ -207,6 +206,9 @@ function applyMapEntry(baseDir, destBase, { from, to }, label, onConflict, origi
     const relKey = path.relative(destBase, fileDest).replace(/\\/g, '/');
     if (origins.has(relKey)) {
       const prev = origins.get(relKey);
+      if (onConflict === 'error') {
+        throw new Error(`Asset conflict: "${relKey}" — provided by both "${prev}" and "${label}"`);
+      }
       if (onConflict === 'first_wins') {
         logger.warn(`Asset conflict (kept "${prev}"): ${relKey}`);
         return;
@@ -233,6 +235,9 @@ function copyDirWithConflict(srcDir, destDir, trackBase, label, onConflict, orig
       const relKey = path.relative(trackBase, destPath).replace(/\\/g, '/');
       if (origins.has(relKey)) {
         const prev = origins.get(relKey);
+        if (onConflict === 'error') {
+          throw new Error(`Asset conflict: "${relKey}" — provided by both "${prev}" and "${label}"`);
+        }
         if (onConflict === 'first_wins') {
           logger.warn(`Asset conflict (kept "${prev}"): ${relKey}`);
           continue;

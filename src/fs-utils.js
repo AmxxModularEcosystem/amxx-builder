@@ -2,6 +2,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 /**
  * Recursively copy all contents from srcDir to destDir.
@@ -36,4 +37,18 @@ function countFiles(dir) {
   return count;
 }
 
-module.exports = { copyDirContents, countFiles };
+/**
+ * Safe tar extraction — uses spawnSync to avoid shell injection.
+ * Supports .tar.gz / .tgz and .tar.bz2 archives.
+ * Throws on non-zero exit.
+ */
+function safeExtractTar(archivePath, destDir) {
+  const flag = archivePath.endsWith('.tar.bz2') ? 'j' : 'z';
+  const result = spawnSync('tar', ['-x', flag, '-f', archivePath, '-C', destDir], { stdio: 'pipe' });
+  if (result.status !== 0) {
+    const msg = (result.stderr || result.stdout || '').toString().trim();
+    throw new Error(`tar extraction failed for ${path.basename(archivePath)}: ${msg || 'unknown error'}`);
+  }
+}
+
+module.exports = { copyDirContents, countFiles, safeExtractTar };

@@ -1,12 +1,10 @@
 const fs   = require('fs');
 const yaml = require('js-yaml');
 const path = require('path');
-const Ajv     = require('ajv');
-const addFormats = require('ajv-formats');
+
+const { validateManifest: validateSchema } = require('./schema');
 
 const DEFAULTS_PATH  = path.join(__dirname, '..', 'defaults', 'amxbuild.defaults.yml');
-const SCHEMA_PATH    = path.join(__dirname, '..', 'schema', 'amxbuild.schema.json');
-const SCHEMA_CACHE   = loadSchemaOnce();
 
 function loadDefaultsRaw() {
   if (!fs.existsSync(DEFAULTS_PATH)) return {};
@@ -27,24 +25,10 @@ function deepMerge(base, overlay) {
   return overlay;
 }
 
-function loadSchemaOnce() {
-  try {
-    if (!fs.existsSync(SCHEMA_PATH)) return null;
-    return JSON.parse(fs.readFileSync(SCHEMA_PATH, 'utf8'));
-  } catch { return null; }
-}
-
 function validateManifest(raw) {
-  if (!SCHEMA_CACHE) return;
-  const ajv = new Ajv({ allErrors: true });
-  addFormats(ajv);
-  const validate = ajv.compile(SCHEMA_CACHE);
-  const valid = validate(raw);
-  if (!valid) {
-    const errors = validate.errors.map(e => {
-      const path = e.instancePath || '(root)';
-      return `  ${path}: ${e.message}`;
-    });
+  const result = validateSchema(raw);
+  if (!result.valid) {
+    const errors = result.errors.map(e => `  ${e.path}: ${e.message}`);
     throw new Error(`Manifest validation failed:\n${errors.join('\n')}`);
   }
 }

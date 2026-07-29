@@ -90,9 +90,7 @@ async function sendRconForPlugins(deployConfig, pluginNames) {
   if (!command) return;
 
   if (command.includes('{plugin}')) {
-    for (const name of pluginNames) {
-      await sendRconCommand(deployConfig, name);
-    }
+    await Promise.all(pluginNames.map((name) => sendRconCommand(deployConfig, name)));
   } else {
     await sendRconCommand(deployConfig, '');
   }

@@ -2,10 +2,10 @@ const fs   = require('fs');
 const path = require('path');
 const axios = require('axios');
 const AdmZip = require('adm-zip');
-const { execSync } = require('child_process');
 const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
+const { safeExtractTar } = require('./fs-utils');
 const { withRetry } = require('./retry');
 
 /**
@@ -189,8 +189,7 @@ function extractArchive(archivePath, destDir) {
   if (archivePath.endsWith('.zip')) {
     new AdmZip(archivePath).extractAllTo(destDir, true);
   } else {
-    const flag = archivePath.endsWith('.tar.bz2') ? 'xjf' : 'xzf';
-    execSync(`tar ${flag} "${archivePath}" -C "${destDir}"`, { stdio: 'pipe' });
+    safeExtractTar(archivePath, destDir);
   }
 }
 

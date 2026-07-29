@@ -2,11 +2,10 @@ const fs   = require('fs');
 const path = require('path');
 const axios = require('axios');
 const AdmZip = require('adm-zip');
-const { execSync } = require('child_process');
 const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
-const { copyDirContents } = require('./fs-utils');
+const { copyDirContents, safeExtractTar } = require('./fs-utils');
 const { withRetry } = require('./retry');
 
 const AMXX_DROP = 'https://www.amxmodx.org/amxxdrop/';
@@ -41,7 +40,10 @@ async function fetchCompiler(version) {
   const archivePath = path.join(cacheDir, path.basename(downloadUrl));
 
   await downloadFile(downloadUrl, archivePath);
-  extractScripting(archivePath, cacheDir, platform);
+  extractWithPrefix(archivePath, cacheDir, {
+    prefix: 'addons/amxmodx/scripting/',
+    onDone: (d) => makeBinaryExecutable(d, platform),
+  });
   fs.rmSync(archivePath, { force: true });
 
   if (!fs.existsSync(binaryPath)) {
@@ -159,7 +161,7 @@ async function getAmxmodxFullDir(version, platform) {
   const archivePath = path.join(cacheDir, path.basename(downloadUrl));
 
   await downloadFile(downloadUrl, archivePath);
-  extractAddons(archivePath, cacheDir, platform);
+  extractWithPrefix(archivePath, cacheDir, { prefix: 'addons/', destSubdir: 'addons' });
   fs.rmSync(archivePath, { force: true });
   fs.writeFileSync(sentinel, '');
 
@@ -167,33 +169,49 @@ async function getAmxmodxFullDir(version, platform) {
   return cacheDir;
 }
 
-function extractAddons(archivePath, destDir, platform) {
-  const ADDONS_PREFIX = 'addons/';
+/**
+ * Filtered extraction from an AMXX base archive.
+ *
+ * For .zip: iterates entries matching `prefix`, strips prefix, saves to destDir.
+ * For .tar.*: extracts to temp dir, finds `findDirName`, copies contents.
+ *
+ * @param {string} archivePath  — path to the archive
+ * @param {string} destDir      — destination directory
+ * @param {object} opts
+ * @param {string} opts.prefix      — entry path prefix to filter (zip) / find in tar
+ * @param {string} [opts.destSubdir] — optional sub-path under destDir for zip entries
+ * @param {string} [opts.tmpSuffix]  — suffix for temp extraction dir (default: prefix-derived)
+ * @param {function} [opts.onDone]   — called after extraction with (destDir)
+ */
+function extractWithPrefix(archivePath, destDir, opts) {
+  const { prefix, destSubdir, tmpSuffix, onDone } = opts;
 
   if (archivePath.endsWith('.zip')) {
     const zip = new AdmZip(archivePath);
     for (const entry of zip.getEntries()) {
       const name = entry.entryName.replace(/\\/g, '/');
-      if (entry.isDirectory || !name.startsWith(ADDONS_PREFIX)) continue;
-      const rel  = name.slice(ADDONS_PREFIX.length);
+      if (entry.isDirectory || !name.startsWith(prefix)) continue;
+      const rel  = name.slice(prefix.length);
       if (!rel) continue;
-      const dest = path.join(destDir, 'addons', rel);
+      const dest = destSubdir ? path.join(destDir, destSubdir, rel) : path.join(destDir, rel);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, entry.getData());
     }
   } else {
-    const tmpDir = destDir + '_addons_tmp';
+    const findName = prefix.replace(/\/$/, '').split('/').pop();
+    const tmpDir   = destDir + '_' + (tmpSuffix || prefix.replace(/[\/]+/g, '_').replace(/_$/, ''));
     try {
       fs.mkdirSync(tmpDir, { recursive: true });
-      const flag = archivePath.endsWith('.tar.bz2') ? 'xjf' : 'xzf';
-      execSync(`tar ${flag} "${archivePath}" -C "${tmpDir}"`, { stdio: 'pipe' });
-      const addonsSrc = findDir(tmpDir, 'addons');
-      if (!addonsSrc) throw new Error(`addons/ dir not found in amxmodx archive`);
-      copyDirContents(addonsSrc, path.join(destDir, 'addons'));
+      safeExtractTar(archivePath, tmpDir);
+      const src = findDir(tmpDir, findName);
+      if (!src) throw new Error(`${findName}/ dir not found in archive ${path.basename(archivePath)}`);
+      copyDirContents(src, destSubdir ? path.join(destDir, destSubdir) : destDir);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }
+
+  if (onDone) onDone(destDir);
 }
 
 async function downloadFile(url, dest) {
@@ -216,39 +234,7 @@ async function downloadFile(url, dest) {
   fs.writeFileSync(dest, Buffer.from(response.data));
 }
 
-/**
- * Extracts only addons/amxmodx/scripting/ from the base archive into destDir.
- * Result: destDir/amxxpc[.exe], destDir/include/*.inc, etc.
- */
-function extractScripting(archivePath, destDir, platform) {
-  const SCRIPTING_PREFIX = 'addons/amxmodx/scripting/';
-
-  if (archivePath.endsWith('.zip')) {
-    const zip = new AdmZip(archivePath);
-    for (const entry of zip.getEntries()) {
-      const name = entry.entryName.replace(/\\/g, '/');
-      if (entry.isDirectory || !name.startsWith(SCRIPTING_PREFIX)) continue;
-      const rel  = name.slice(SCRIPTING_PREFIX.length);
-      if (!rel) continue;
-      const dest = path.join(destDir, rel);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, entry.getData());
-    }
-  } else {
-    const tmpDir = destDir + '_tmp';
-    try {
-      fs.mkdirSync(tmpDir, { recursive: true });
-      const flag = archivePath.endsWith('.tar.bz2') ? 'xjf' : 'xzf';
-      execSync(`tar ${flag} "${archivePath}" -C "${tmpDir}"`, { stdio: 'pipe' });
-
-      const scriptingSrc = findDir(tmpDir, 'scripting');
-      if (!scriptingSrc) throw new Error(`scripting/ dir not found in archive ${path.basename(archivePath)}`);
-      copyDirContents(scriptingSrc, destDir);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  }
-
+function makeBinaryExecutable(destDir, platform) {
   const binaryName = platform === 'windows' ? 'amxxpc.exe' : 'amxxpc';
   const binaryPath = path.join(destDir, binaryName);
   if (fs.existsSync(binaryPath) && platform !== 'windows') {
