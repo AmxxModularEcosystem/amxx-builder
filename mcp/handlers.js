@@ -6,6 +6,7 @@ const glob = require('fast-glob');
 
 const { fetchRepo, resolveRef } = require('../src/repo-fetcher');
 const { fetchReleaseDep }       = require('../src/release-fetcher');
+const { fetchCompiler, fetchLatestVersion } = require('../src/compiler-fetcher');
 const { parseDepsLines, resolveManifest } = require('../src/manifest');
 const { parseManifest }         = require('../src/manifest');
 const { validateManifestFile }  = require('../src/validate');
@@ -281,6 +282,204 @@ async function handleListReleasesTool(args, token) {
   return textResult(JSON.stringify(entries, null, 2));
 }
 
+// ─── AMXX standard include helpers ────────────────────────────────────────────
+
+/**
+ * Resolve the AMX Mod X version to use for standard includes.
+ * Priority: explicit `version` arg → manifest `amxmodx.version` → latest.
+ */
+async function resolveAmxmodxVersion(args) {
+  if (args?.version) return args.version;
+
+  const manifestPathStr = args?.manifest;
+  const manifestPath = resolveManifestPath(manifestPathStr || undefined);
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const manifest = parseManifest(manifestPath);
+      if (manifest.amxmodx?.version) return manifest.amxmodx.version;
+    } catch (_) {} // ignore parse errors, fall through to latest
+  }
+
+  return fetchLatestVersion();
+}
+
+async function handleListAmxmodxIncs(args, token, noFetch) {
+  const version = await resolveAmxmodxVersion(args);
+  const pattern = args?.pattern || '*.inc';
+
+  const { includeDir } = await fetchCompiler(version);
+  if (!includeDir) {
+    return textResult(
+      `No standard include directory found for AMX Mod X ${version}.`
+    );
+  }
+
+  const files = await glob(pattern, { cwd: includeDir, dot: false });
+  files.sort();
+
+  if (files.length === 0) {
+    return textResult(
+      `No .inc files matching "${pattern}" in AMX Mod X ${version} includes.`
+    );
+  }
+
+  const listing = files.map((f) => `  ${f}`).join('\n');
+  return textResult(
+    `AMX Mod X ${version} — ${files.length} standard include file(s):\n\n${listing}`
+  );
+}
+
+async function handleGetAmxmodxInclude(args, token, noFetch) {
+  const version = await resolveAmxmodxVersion(args);
+  const pattern = args?.file || args?.pattern || '*.inc';
+
+  const { includeDir } = await fetchCompiler(version);
+  if (!includeDir) {
+    return textResult(
+      `No standard include directory found for AMX Mod X ${version}.`
+    );
+  }
+
+  const files = await glob(pattern, { cwd: includeDir, dot: false });
+  files.sort();
+
+  if (files.length === 0) {
+    return textResult(
+      `No .inc files matching "${pattern}" in AMX Mod X ${version} includes.`
+    );
+  }
+
+  const contents = files
+    .map(
+      (rel) =>
+        `──── ${rel} ────\n${readFileSafe(path.join(includeDir, rel))}${readFileSafe(path.join(includeDir, rel)).endsWith('\n') ? '' : '\n'}`
+    )
+    .join('\n');
+
+  return textResult(
+    `AMX Mod X ${version} — ${files.length} standard include file(s):\n\n${contents}`
+  );
+}
+
+// ─── Include resolution ─────────────────────────────────────────────────────────
+
+/**
+ * Parse a preprocessor include directive into a filename + search mode.
+ *
+ * Accepted forms:
+ *   #include <file>      — global search only (<> equivalent)
+ *   #include "file"      — local (sma dir) first, then global
+ *   #include file        — bare filename, equivalent to <>
+ *   <file>, "file", file — directive prefix is optional
+ *
+ * Extension defaults to .inc if missing.
+ */
+function parseIncludeDirective(raw) {
+  let input = String(raw || '').trim();
+  if (!input) throw new Error('Empty include directive');
+
+  input = input.replace(/^#include\s+/, '');
+
+  let localFirst = false;
+
+  if (input.startsWith('"') && input.endsWith('"')) {
+    input = input.slice(1, -1);
+    localFirst = true;
+  } else if (input.startsWith('<') && input.endsWith('>')) {
+    input = input.slice(1, -1);
+  }
+
+  if (!path.extname(input)) input += '.inc';
+
+  return { filename: input, localFirst };
+}
+
+/**
+ * Case-insensitive file search inside a directory.
+ * Returns the first match (by readdir order) or null.
+ */
+function findCaseInsensitive(dir, filename) {
+  try {
+    const lower = filename.toLowerCase();
+    for (const entry of fs.readdirSync(dir)) {
+      if (entry.toLowerCase() === lower) return path.join(dir, entry);
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * Search for a file in a list of { path, label } search targets.
+ * Checks exact match first, then case-insensitive fallback.
+ *
+ * Returns { foundPath, label } or null.
+ */
+function searchIncludeFile(filename, searchPaths) {
+  for (const { path: sp, label } of searchPaths) {
+    const exact = path.join(sp, filename);
+    if (fs.existsSync(exact)) return { foundPath: exact, label };
+    const ci = findCaseInsensitive(sp, filename);
+    if (ci) return { foundPath: ci, label };
+  }
+  return null;
+}
+
+async function handleResolveInclude(args, token, noFetch) {
+  let parsed;
+  try {
+    parsed = parseIncludeDirective(args?.directive || args?.include);
+  } catch (err) {
+    return errorResult(err.message);
+  }
+
+  const { filename, localFirst } = parsed;
+  const searchPaths = [];
+
+  if (localFirst && args?.sma_file) {
+    const smaDir = path.dirname(path.resolve(args.sma_file));
+    searchPaths.push({ path: smaDir, label: `local (${path.basename(args.sma_file)})` });
+  }
+
+  const version = await resolveAmxmodxVersion(args);
+  const { includeDir } = await fetchCompiler(version);
+  if (includeDir) {
+    searchPaths.push({ path: includeDir, label: `AMXX stdlib ${version}` });
+  }
+
+  const manifestPath = resolveManifestPath(args?.manifest || undefined);
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const manifest = parseManifest(manifestPath);
+      for (const dep of manifest.globalDeps) {
+        try {
+          const depDir = await fetchDepIncludeDir(dep, token, noFetch);
+          searchPaths.push({ path: depDir, label: `${dep.repo}@${dep.ref}` });
+        } catch (_) {} // skip unresolvable
+      }
+    } catch (_) {} // skip deps on parse error
+  }
+
+  const result = searchIncludeFile(filename, searchPaths);
+
+  if (!result) {
+    return textResult(
+      `Include "${filename}" not found.\n\n` +
+      `Searched:\n` +
+      searchPaths.map((s) => `  ${s.label}`).join('\n') +
+      '\n\nTip: provide a manifest with deps, or ensure the compiler is cached.'
+    );
+  }
+
+  const content = readFileSafe(result.foundPath);
+
+  return textResult(
+    `Include "${parsed.filename}" resolved to:\n` +
+    `  Source: ${result.label}\n` +
+    `  Path:   ${result.foundPath}\n\n` +
+    `──── ${parsed.filename} ────\n${content}${content.endsWith('\n') ? '' : '\n'}`
+  );
+}
+
 // ─── Dispatch ──────────────────────────────────────────────────────────────────
 
 const HANDLERS = {
@@ -291,6 +490,9 @@ const HANDLERS = {
   validate_manifest:    handleValidateManifestTool,
   get_cache_info:       handleGetCacheInfo,
   list_releases:        handleListReleasesTool,
+  list_amxmodx_incs:    handleListAmxmodxIncs,
+  get_amxmodx_include:  handleGetAmxmodxInclude,
+  resolve_include:      handleResolveInclude,
 };
 
 async function callTool(name, args) {

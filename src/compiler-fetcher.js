@@ -253,4 +253,4 @@ function findDir(root, name) {
   return null;
 }
 
-module.exports = { fetchCompiler, getAmxmodxFullDir, getHostPlatform };
+module.exports = { fetchCompiler, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion };

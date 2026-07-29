@@ -5,11 +5,15 @@
  * MCP server: AMXX Dependency Interface Resolver
  *
  * Provides tools for the opencode agent to fetch and inspect .inc files
- * from AMX Mod X dependencies (git repos or GitHub release assets).
+ * from AMX Mod X dependencies (git repos or GitHub release assets) and
+ * the standard AMXX compiler bundle.
  *
  * Tools:
  *   - get_dep_interface  → fetch dep, return .inc file contents
  *   - list_dep_incs      → list available .inc files without reading them
+ *   - resolve_include    → resolve an #include directive against stdlib + deps
+ *   - list_amxmodx_incs  → list standard AMXX includes (stdlib)
+ *   - get_amxmodx_include → get standard AMXX include file contents
  *
  * Register in opencode.json:
  *   "mcp": {
@@ -267,6 +271,121 @@ server.setRequestHandler('ListTools', async () => {
                 'Optional path to manifest to also check local .amxb-cache/ assets.',
             },
           },
+        },
+      },
+      {
+        name: 'list_amxmodx_incs',
+        title: 'List standard AMX Mod X include files',
+        description:
+          'List available .inc files from the standard AMXX bundle (amxmodx.inc, ' +
+          'core.inc, float.inc, etc.).\n\n' +
+          'By default uses the version from amxbuild.yml (amxmodx.version), ' +
+          'or the latest available compiler version if no manifest is found.\n\n' +
+          'Supports optional glob pattern filtering.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            manifest: {
+              type: 'string',
+              description:
+                'Path to amxbuild.yml. If omitted, auto-detects in the working directory.',
+            },
+            version: {
+              type: 'string',
+              description:
+                'AMX Mod X version override (e.g. "1.10.5428"). ' +
+                'Default: from manifest amxmodx.version, or latest.',
+            },
+            pattern: {
+              type: 'string',
+              description:
+                'Glob pattern to filter include files. Example: "core.*" or "*.inc".',
+              default: '*.inc',
+            },
+          },
+        },
+      },
+      {
+        name: 'get_amxmodx_include',
+        title: 'Get standard AMX Mod X include file contents',
+        description:
+          'Download (if not cached) the AMXX compiler bundle and return the contents ' +
+          'of standard .inc files — functions, constants, defines from the AMXX stdlib.\n\n' +
+          'By default uses the version from amxbuild.yml (amxmodx.version), ' +
+          'or the latest available compiler version if no manifest is found.\n\n' +
+          'The `file` parameter supports glob patterns (e.g. "core.inc" or "cs*.inc"). ' +
+          'Omit to return all standard includes.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            manifest: {
+              type: 'string',
+              description:
+                'Path to amxbuild.yml. If omitted, auto-detects in the working directory.',
+            },
+            version: {
+              type: 'string',
+              description:
+                'AMX Mod X version override (e.g. "1.10.5428"). ' +
+                'Default: from manifest amxmodx.version, or latest.',
+            },
+            file: {
+              type: 'string',
+              description:
+                'Include file name or glob pattern. Examples: "amxmodx.inc", "core.*", "*.inc". ' +
+                'Default: "*.inc" (all).',
+              default: '*.inc',
+            },
+          },
+        },
+      },
+      {
+        name: 'resolve_include',
+        title: 'Resolve an `#include` directive against stdlib and deps',
+        description:
+          'Resolve an AMXX preprocessor `#include` directive — find which file it ' +
+          'refers to and return its contents.\n\n' +
+          'Accepts:\n' +
+          '  - `#include <file>` — global search (stdlib + deps)\n' +
+          '  - `#include "file"` — local (sma dir) first, then global\n' +
+          '  - `#include file`   — bare, equivalent to <>\n' +
+          '  - The `#include` prefix is optional; just `<file>`, `"file"`, or `file` works.\n\n' +
+          'Extension defaults to `.inc` if omitted. Case-sensitive first, ' +
+          'then case-insensitive fallback.\n\n' +
+          'Search order: sma dir (for `""`, with sma_file) → stdlib → manifest deps.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            directive: {
+              type: 'string',
+              description:
+                'The include directive to resolve. Examples:\n' +
+                '  "#include <amxmodx>"\n' +
+                '  "#include \\"ColorChat\\""\n' +
+                '  "#include file"\n' +
+                '  "<amxmodx>" or "amxmodx"',
+            },
+            sma_file: {
+              type: 'string',
+              description:
+                'Path to the .sma file containing the directive. ' +
+                'Required for `""` includes to search the local directory first.',
+            },
+            manifest: {
+              type: 'string',
+              description:
+                'Path to amxbuild.yml. Optional — auto-detects amxbuild.yml / ' +
+                'amxbuild.yaml / manifest.yml in the working directory. ' +
+                'When found, searches manifest globalDeps for the include file.',
+            },
+            version: {
+              type: 'string',
+              description:
+                'AMX Mod X version override for stdlib lookup ' +
+                '(default: from manifest or latest).',
+            },
+          },
+          required: ['directive'],
         },
       },
       {
