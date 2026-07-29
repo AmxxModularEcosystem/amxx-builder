@@ -6,6 +6,7 @@ const { execSync } = require('child_process');
 const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
+const { copyDirContents } = require('./fs-utils');
 const { withRetry } = require('./retry');
 
 const AMXX_DROP = 'https://www.amxmodx.org/amxxdrop/';
@@ -264,19 +265,6 @@ function findDir(root, name) {
     if (nested) return nested;
   }
   return null;
-}
-
-function copyDirContents(src, dest) {
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath  = path.join(src,  entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      fs.mkdirSync(destPath, { recursive: true });
-      copyDirContents(srcPath, destPath);
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
 }
 
 module.exports = { fetchCompiler, getAmxmodxFullDir, getHostPlatform };

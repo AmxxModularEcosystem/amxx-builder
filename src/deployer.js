@@ -6,8 +6,8 @@ const logger = require('./logger');
 
 function expand(manifest, tpl) {
   return tpl
-    .replace('{name}',    manifest.name)
-    .replace('{version}', manifest.version);
+    .replaceAll('{name}',    manifest.name)
+    .replaceAll('{version}', manifest.version);
 }
 
 function resolveDeployDirs(manifest) {

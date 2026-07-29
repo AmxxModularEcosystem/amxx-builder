@@ -3,6 +3,7 @@ const path    = require('path');
 const { ZipArchive } = require('archiver');
 const logger  = require('./logger');
 const { createBar } = require('./progress');
+const { countFiles, copyDirContents } = require('./fs-utils');
 
 /**
  * Creates the output .zip.
@@ -17,8 +18,8 @@ async function createArchive(manifest, buildDir) {
   const out = manifest.output;
 
   const expand = (tpl) => tpl
-    .replace('{name}',    manifest.name)
-    .replace('{version}', manifest.version);
+    .replaceAll('{name}',    manifest.name)
+    .replaceAll('{version}', manifest.version);
 
   const archiveName  = expand(out.archive_name);
   const amxmodxDest  = expand(out.amxmodx_path).replace(/\/?$/, '/');
@@ -102,8 +103,8 @@ function printFileListing(files) {
 function copyOutput(manifest, buildDir) {
   const out    = manifest.output;
   const expand = (tpl) => tpl
-    .replace('{name}',    manifest.name)
-    .replace('{version}', manifest.version);
+    .replaceAll('{name}',    manifest.name)
+    .replaceAll('{version}', manifest.version);
 
   const outDir     = path.resolve(out.dir);
   const amxmodxDst = path.join(outDir, expand(out.amxmodx_path));
@@ -112,10 +113,10 @@ function copyOutput(manifest, buildDir) {
     : outDir;
 
   const amxmodxSrc = path.join(buildDir, 'amxmodx');
-  if (fs.existsSync(amxmodxSrc)) copyDirSync(amxmodxSrc, amxmodxDst);
+  if (fs.existsSync(amxmodxSrc)) copyDirContents(amxmodxSrc, amxmodxDst);
 
   const assetsSrc = path.join(buildDir, 'assets');
-  if (fs.existsSync(assetsSrc)) copyDirSync(assetsSrc, assetsDst);
+  if (fs.existsSync(assetsSrc)) copyDirContents(assetsSrc, assetsDst);
 
   if (out.readme) {
     const readmeSrc = path.join(path.dirname(manifest._path), 'README.md');
@@ -127,36 +128,6 @@ function copyOutput(manifest, buildDir) {
   }
 
   logger.success(`Output dir: ${out.dir}`);
-}
-
-function countFiles(dir) {
-  let count = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, entry.name);
-    if (entry.isDirectory()) count += countFiles(p);
-    else count++;
-  }
-  return count;
-}
-
-function countFiles(dir) {
-  let count = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, entry.name);
-    if (entry.isDirectory()) count += countFiles(p);
-    else count++;
-  }
-  return count;
-}
-
-function copyDirSync(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const s = path.join(src,  entry.name);
-    const d = path.join(dest, entry.name);
-    if (entry.isDirectory()) copyDirSync(s, d);
-    else fs.copyFileSync(s, d);
-  }
 }
 
 module.exports = { createArchive, copyOutput };
