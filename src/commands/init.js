@@ -55,7 +55,7 @@ async function runInitInteractive(options) {
 
   const doOpencode = await new Confirm({
     name: 'opencode',
-    message: 'Create .opencode/opencode.json with amxx-dep-resolver MCP config?',
+    message: 'Create .opencode/opencode.json with MCP config (amxb mcp)?',
     initial: false,
   }).run();
 
@@ -151,7 +151,7 @@ function writeOpencodeConfig() {
   const mcpKey = 'amxx-dep-resolver';
   const mcpConfig = {
     type: 'local',
-    command: ['amxx-dep-resolver'],
+    command: ['amxb', 'mcp'],
     enabled: true,
   };
 
@@ -174,7 +174,7 @@ function writeOpencodeConfig() {
   }
 
   if (cfg.mcp?.[mcpKey]) {
-    logger.warn(`${file} already has amxx-dep-resolver MCP config, skipping`);
+    logger.warn(`${file} already has MCP config (amxx-dep-resolver), skipping`);
     return;
   }
 
@@ -182,7 +182,7 @@ function writeOpencodeConfig() {
   cfg.mcp[mcpKey] = mcpConfig;
   cfg.$schema = cfg.$schema || 'https://opencode.ai/config.json';
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
-  logger.success(`Updated ${file} with amxx-dep-resolver MCP config`);
+  logger.success(`Updated ${file} with MCP config (amxb mcp)`);
 }
 
 function renderTemplate(name, vars = {}) {

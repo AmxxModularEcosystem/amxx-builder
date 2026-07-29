@@ -5,8 +5,7 @@
   "main": "index.js",
   "bin": {
     "amxx-builder": "./index.js",
-    "amxb": "./index.js",
-    "amxx-dep-resolver": "./mcp/dep-resolver.js"
+    "amxb": "./index.js"
   },
   "engines": {
     "node": ">=16"

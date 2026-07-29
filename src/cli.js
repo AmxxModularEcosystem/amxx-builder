@@ -17,6 +17,7 @@ const { runResolveManifest }  = require('./commands/resolve-manifest');
 const { runValidate }         = require('./commands/validate');
 const { runReleases }         = require('./commands/releases');
 const { runInit, runInitInteractive } = require('./commands/init');
+const { runMcp }                     = require('./commands/mcp');
 
 program
   .name('amxx-builder')
@@ -240,7 +241,7 @@ program
   .option('--ci',           'Alias for --workflow')
   .option('--plugin <name>', 'Create amxmodx/scripting/<name>.sma')
   .option('--gitignore',     'Create .gitignore')
-  .option('--opencode',      'Create .opencode/opencode.json with amxx-dep-resolver MCP config')
+  .option('--opencode',      'Create .opencode/opencode.json with MCP config (amxb mcp)')
   .option('--deploy',        'Create .env with deploy stubs (AMXB_DEPLOY_*)')
   .option('-i, --interactive', 'Interactive mode with prompts')
   .action(async (options) => {
@@ -250,6 +251,20 @@ program
       } else {
         runInit(options);
       }
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── mcp ──────────────────────────────────────────────────────────────────────
+
+program
+  .command('mcp')
+  .description('Start the MCP (Model Context Protocol) server for AMXX dependency resolution (stdio transport)')
+  .action(async () => {
+    try {
+      await runMcp();
     } catch (err) {
       logger.error(err.message);
       process.exit(1);

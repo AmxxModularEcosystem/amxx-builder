@@ -56,10 +56,10 @@ This is automated in `.github/workflows/release.yml` on `v*.*.*` tags.
 ## MCP dep-resolver server
 - Source: `mcp/dep-resolver.js` (reuses `src/repo-fetcher.js`, `src/release-fetcher.js`, `src/cache-dir.js`)
 - Runs directly from source — no bundling needed (installed alongside main package)
-- Registered as `bin.amxx-dep-resolver` in root `package.json`
-- Depends on `@modelcontextprotocol/sdk` (declared in root `package.json`)
-- Register in any project's `.opencode/opencode.json` via `"command": ["amxx-dep-resolver"]`
-- Exposes two MCP tools: `get_dep_interface` (returns .inc contents) and `list_dep_incs` (lists .inc files)
+- Started via `amxb mcp` (registered as subcommand in `src/cli.js` → `src/commands/mcp.js`)
+- Uses a custom lightweight `McpServer` from `mcp/mcp-server.js` (no external SDK dependency)
+- Register in any project's `.opencode/opencode.json` via `"command": ["amxb", "mcp"]`
+- Exposes tools: `get_dep_interface`, `list_dep_incs`, `get_dep_tree`, `resolve_manifest`, `validate_manifest`, `get_cache_info`, `list_amxmodx_incs`, `get_amxmodx_include`, `resolve_include`, `list_releases`
 
 ## Cache
 - Win: `%LOCALAPPDATA%\amxx-builder`, Unix: `~/.cache/amxx-builder`
