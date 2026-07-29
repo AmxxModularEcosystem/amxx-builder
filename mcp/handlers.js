@@ -124,6 +124,53 @@ function readFileSafe(absPath) {
   }
 }
 
+/**
+ * Grep content with configurable before/after context lines.
+ *
+ * @param {string} content  - File content to search in.
+ * @param {string} pattern  - Substring to match (case-insensitive).
+ * @param {number} [before=0] - Lines of context before each match.
+ * @param {number} [after=0]  - Lines of context after each match.
+ * @returns {string} Formatted grep result or "No matches found." message.
+ */
+function grepContent(content, pattern, before = 0, after = 0) {
+  if (!pattern) return content;
+  const lines = content.split('\n');
+  const matches = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].toLowerCase().includes(pattern.toLowerCase())) {
+      const start = Math.max(0, i - before);
+      const end   = Math.min(lines.length - 1, i + after);
+      matches.push({ matchLine: i, start, end });
+    }
+  }
+
+  if (matches.length === 0) return `[grep: no matches for "${pattern}"]`;
+
+  // Merge overlapping ranges
+  const merged = [];
+  for (const m of matches) {
+    if (merged.length > 0 && m.start <= merged[merged.length - 1].end + 1) {
+      merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, m.end);
+    } else {
+      merged.push({ ...m });
+    }
+  }
+
+  const parts = merged.map((range, ri) => {
+    const chunk = [];
+    if (ri > 0) chunk.push('┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄');
+    for (let ln = range.start; ln <= range.end; ln++) {
+      const marker = ln === range.matchLine ? '>' : ' ';
+      chunk.push(`${marker} ${String(ln + 1).padStart(4, ' ')} │ ${lines[ln]}`);
+    }
+    return chunk.join('\n');
+  });
+
+  return parts.join('\n');
+}
+
 function resolveManifestPath(explicit) {
   if (explicit) return explicit;
   const cwd = process.cwd();
@@ -156,9 +203,13 @@ async function handleGetDepInterface(args, token, noFetch) {
     );
   }
 
+  const grep   = args?.grep;
+  const before = args?.before || 0;
+  const after  = args?.after || 0;
+
   const files = incFiles.map((f) => ({
     path: f.rel,
-    content: readFileSafe(f.abs),
+    content: grep ? grepContent(readFileSafe(f.abs), grep, before, after) : readFileSafe(f.abs),
   }));
 
   return textResult(
@@ -332,6 +383,9 @@ async function handleListAmxmodxIncs(args, token, noFetch) {
 async function handleGetAmxmodxInclude(args, token, noFetch) {
   const version = await resolveAmxmodxVersion(args);
   const pattern = args?.file || args?.pattern || '*.inc';
+  const grep    = args?.grep;
+  const before  = args?.before || 0;
+  const after   = args?.after || 0;
 
   const { includeDir } = await fetchCompiler(version);
   if (!includeDir) {
@@ -350,10 +404,11 @@ async function handleGetAmxmodxInclude(args, token, noFetch) {
   }
 
   const contents = files
-    .map(
-      (rel) =>
-        `──── ${rel} ────\n${readFileSafe(path.join(includeDir, rel))}${readFileSafe(path.join(includeDir, rel)).endsWith('\n') ? '' : '\n'}`
-    )
+    .map((rel) => {
+      const raw = readFileSafe(path.join(includeDir, rel));
+      const processed = grep ? grepContent(raw, grep, before, after) : raw;
+      return `──── ${rel} ────\n${processed}${processed.endsWith('\n') ? '' : '\n'}`;
+    })
     .join('\n');
 
   return textResult(
@@ -435,9 +490,14 @@ async function handleResolveInclude(args, token, noFetch) {
   const { filename, localFirst } = parsed;
   const searchPaths = [];
 
-  if (localFirst && args?.sma_file) {
-    const smaDir = path.dirname(path.resolve(args.sma_file));
-    searchPaths.push({ path: smaDir, label: `local (${path.basename(args.sma_file)})` });
+  if (localFirst) {
+    const smaDir = args?.sma_file
+      ? path.dirname(path.resolve(args.sma_file))
+      : process.cwd();
+    const label = args?.sma_file
+      ? `local (${path.basename(args.sma_file)})`
+      : 'local (current directory)';
+    searchPaths.push({ path: smaDir, label });
   }
 
   const version = await resolveAmxmodxVersion(args);
@@ -471,12 +531,16 @@ async function handleResolveInclude(args, token, noFetch) {
   }
 
   const content = readFileSafe(result.foundPath);
+  const grep   = args?.grep;
+  const before = args?.before || 0;
+  const after  = args?.after || 0;
+  const displayed = grep ? grepContent(content, grep, before, after) : content;
 
   return textResult(
     `Include "${parsed.filename}" resolved to:\n` +
     `  Source: ${result.label}\n` +
     `  Path:   ${result.foundPath}\n\n` +
-    `──── ${parsed.filename} ────\n${content}${content.endsWith('\n') ? '' : '\n'}`
+    `──── ${parsed.filename} ────\n${displayed}${displayed.endsWith('\n') ? '' : '\n'}`
   );
 }
 

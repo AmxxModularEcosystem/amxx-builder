@@ -98,6 +98,25 @@ function createServer() {
                   'Throws if the dep is not cached.',
                 default: false,
               },
+              grep: {
+                type: 'string',
+                description:
+                  'Optional substring (case-insensitive) to search for within include files. ' +
+                  'When set, only matching lines with surrounding context are returned. ' +
+                  'Use with `before` and `after` to control how many context lines to show.',
+              },
+              before: {
+                type: 'number',
+                description:
+                  'Lines of context to show before each grep match. Default: 0.',
+                default: 0,
+              },
+              after: {
+                type: 'number',
+                description:
+                  'Lines of context to show after each grep match. Default: 0.',
+                default: 0,
+              },
             },
             required: ['dep'],
           },
@@ -341,6 +360,25 @@ function createServer() {
                   'Default: "*.inc" (all).',
                 default: '*.inc',
               },
+              grep: {
+                type: 'string',
+                description:
+                  'Optional substring (case-insensitive) to search for within include files. ' +
+                  'When set, only matching lines with surrounding context are returned. ' +
+                  'Use with `before` and `after` to control how many context lines to show.',
+              },
+              before: {
+                type: 'number',
+                description:
+                  'Lines of context to show before each grep match. Default: 0.',
+                default: 0,
+              },
+              after: {
+                type: 'number',
+                description:
+                  'Lines of context to show after each grep match. Default: 0.',
+                default: 0,
+              },
             },
           },
         },
@@ -357,7 +395,7 @@ function createServer() {
             '  - The `#include` prefix is optional; just `<file>`, `"file"`, or `file` works.\n\n' +
             'Extension defaults to `.inc` if omitted. Case-sensitive first, ' +
             'then case-insensitive fallback.\n\n' +
-            'Search order: sma dir (for `""`, with sma_file) → stdlib → manifest deps.',
+             'Search order: sma dir (for `""`, via sma_file or cwd) → stdlib → manifest deps.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -374,7 +412,9 @@ function createServer() {
                 type: 'string',
                 description:
                   'Path to the .sma file containing the directive. ' +
-                  'Required for `""` includes to search the local directory first.',
+                  'Optional — if omitted, uses the current working directory. ' +
+                  'Useful when the include is declared in another include and ' +
+                  'the originating .sma is unknown.',
               },
               manifest: {
                 type: 'string',
@@ -388,6 +428,25 @@ function createServer() {
                 description:
                   'AMX Mod X version override for stdlib lookup ' +
                   '(default: from manifest or latest).',
+              },
+              grep: {
+                type: 'string',
+                description:
+                  'Optional substring (case-insensitive) to search for within the resolved include file. ' +
+                  'When set, only matching lines with surrounding context are returned. ' +
+                  'Use with `before` and `after` to control how many context lines to show.',
+              },
+              before: {
+                type: 'number',
+                description:
+                  'Lines of context to show before each grep match. Default: 0.',
+                default: 0,
+              },
+              after: {
+                type: 'number',
+                description:
+                  'Lines of context to show after each grep match. Default: 0.',
+                default: 0,
               },
             },
             required: ['directive'],
