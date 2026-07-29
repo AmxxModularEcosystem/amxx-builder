@@ -453,6 +453,72 @@ function createServer() {
           },
         },
         {
+          name: 'build_include_tree',
+          title: 'Build #include dependency tree',
+          description:
+            'Build a bidirectional #include tree for an AMXX project. ' +
+            'Parses all .sma files (local + repos), resolves #include directives, ' +
+            'detects include guards, and returns a tree in the requested direction.\n\n' +
+            'Direction:\n' +
+            '  - "down" (default for .sma): show everything the target file #includes (transitively)\n' +
+            '  - "up"   (default for .inc): show everything that #includes the target (transitively)\n' +
+            '  - "both" or "auto": auto-select based on file extension\n\n' +
+            'Include guards (#if defined … #endinput … #define) are detected and ' +
+            'used to avoid re-expanding guarded files within the same compilation unit. ' +
+            'The tree also tracks <angle> vs "quoted" include style and annotates ' +
+            'each node with its origin (stdlib, dep, local, repo).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              file: {
+                type: 'string',
+                description:
+                  'Path to the .sma or .inc file to build the tree from. ' +
+                  'Required. Relative paths are resolved from the working directory.',
+              },
+              manifest: {
+                type: 'string',
+                description:
+                  'Path to amxbuild.yml. Auto-detected if omitted ' +
+                  '(searches for amxbuild.yml / amxbuild.yaml / manifest.yml in cwd).',
+              },
+              direction: {
+                type: 'string',
+                description:
+                  '"down" — show includes (default for .sma)\n' +
+                  '"up"   — show includers (default for .inc)\n' +
+                  '"auto" — auto-detect from file extension',
+                default: 'auto',
+                enum: ['auto', 'down', 'up'],
+              },
+              depth: {
+                type: 'number',
+                description:
+                  'Max tree depth (0 = unlimited). Useful for limiting large trees.',
+                default: 0,
+              },
+              format: {
+                type: 'string',
+                description: 'Output format: "text" (tree with box-drawing) or "json".',
+                default: 'text',
+                enum: ['text', 'json'],
+              },
+              no_fetch: {
+                type: 'boolean',
+                description:
+                  'If true, skip network fetches (compiler, repos, deps). ' +
+                  'Only use what is already cached.',
+                default: false,
+              },
+              token: {
+                type: 'string',
+                description: 'GitHub PAT. Falls back to GITHUB_TOKEN env var.',
+              },
+            },
+            required: ['file'],
+          },
+        },
+        {
           name: 'list_releases',
           title: 'List GitHub releases or tags for a repository',
           description:

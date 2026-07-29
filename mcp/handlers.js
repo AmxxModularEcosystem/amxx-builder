@@ -12,6 +12,7 @@ const { parseManifest }         = require('../src/manifest');
 const { validateManifestFile }  = require('../src/validate');
 const { getCacheInfo }          = require('../src/cache-info');
 const { buildDepTree }          = require('../src/deps-tree');
+const { buildIncludeTree }      = require('../src/include-tree');
 const { listReleases, listTags } = require('../src/release-lister');
 
 // ─── Response formatters ───────────────────────────────────────────────────────
@@ -333,6 +334,27 @@ async function handleListReleasesTool(args, token) {
   return textResult(JSON.stringify(entries, null, 2));
 }
 
+async function handleBuildIncludeTree(args, token, noFetch) {
+  if (!args?.file) return errorResult('Missing required "file" parameter', -32602);
+
+  try {
+    const result = await buildIncludeTree(
+      args.manifest || undefined,
+      args.file,
+      {
+        direction: args.direction || 'auto',
+        depth:     args.depth     || 0,
+        format:    args.format    || 'text',
+        token,
+        noFetch:   noFetch || args?.no_fetch === true,
+      }
+    );
+    return textResult(result.text);
+  } catch (err) {
+    return errorResult(err.message);
+  }
+}
+
 // ─── AMXX standard include helpers ────────────────────────────────────────────
 
 /**
@@ -554,6 +576,7 @@ const HANDLERS = {
   validate_manifest:    handleValidateManifestTool,
   get_cache_info:       handleGetCacheInfo,
   list_releases:        handleListReleasesTool,
+  build_include_tree:   handleBuildIncludeTree,
   list_amxmodx_incs:    handleListAmxmodxIncs,
   get_amxmodx_include:  handleGetAmxmodxInclude,
   resolve_include:      handleResolveInclude,
