@@ -43,7 +43,7 @@ function countFiles(dir) {
  * Throws on non-zero exit.
  */
 function safeExtractTar(archivePath, destDir) {
-  const flag = archivePath.endsWith('.tar.bz2') ? 'j' : 'z';
+  const flag = archivePath.endsWith('.tar.bz2') ? '-j' : '-z';
   const result = spawnSync('tar', ['-x', flag, '-f', archivePath, '-C', destDir], { stdio: 'pipe' });
   if (result.status !== 0) {
     const msg = (result.stderr || result.stdout || '').toString().trim();
