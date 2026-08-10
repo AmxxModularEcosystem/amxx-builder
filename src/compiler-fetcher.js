@@ -10,6 +10,11 @@ const { withRetry } = require('./retry');
 
 const AMXX_DROP = 'https://www.amxmodx.org/amxxdrop/';
 
+const LATEST_VERSION_TTL_MS = 60 * 60 * 1000; // 1 hour — amxxdrop updates rarely
+
+let _latestMem   = null; // { version, at } — process-lifetime cache
+let _latestFetch = null; // in-flight promise, dedupes concurrent calls
+
 /**
  * Ensures the amxxpc compiler is available locally.
  * Downloads from amxmodx.org/amxxdrop/ (official nightly drop, no auth needed).
@@ -76,7 +81,47 @@ function buildDownloadUrl(major, minor, build, platform) {
   return `${AMXX_DROP}${major}.${minor}/amxmodx-${major}.${minor}.0-git${build}-base-${platform}.${ext}`;
 }
 
-async function fetchLatestVersion() {
+async function fetchLatestVersion(options = {}) {
+  const { noFetch } = options;
+  const now = Date.now();
+
+  if (_latestMem && now - _latestMem.at < LATEST_VERSION_TTL_MS) {
+    return _latestMem.version;
+  }
+
+  const cacheFile = path.join(getCacheDir(), 'amxxpc', '.latest-version');
+  try {
+    const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    if (cached && cached.version && now - cached.at < LATEST_VERSION_TTL_MS) {
+      _latestMem = cached;
+      return cached.version;
+    }
+  } catch (_) {} // no/invalid cache file — resolve from web
+
+  if (noFetch) {
+    throw new Error(
+      'Latest amxmodx version is not cached and no-fetch is set.\n' +
+      'Run once without --no-fetch (or set amxmodx.version explicitly) to populate the cache.'
+    );
+  }
+
+  if (_latestFetch) return _latestFetch;
+
+  _latestFetch = resolveLatestVersionFromWeb().then((version) => {
+    _latestMem = { version, at: Date.now() };
+    try {
+      fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+      fs.writeFileSync(cacheFile, JSON.stringify(_latestMem));
+    } catch (_) {} // cache write is best-effort
+    return version;
+  }).finally(() => {
+    _latestFetch = null;
+  });
+
+  return _latestFetch;
+}
+
+async function resolveLatestVersionFromWeb() {
   logger.step('Compiler: resolving latest amxmodx version...');
   const platform = getPlatform();
 

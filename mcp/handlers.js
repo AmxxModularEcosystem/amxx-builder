@@ -14,6 +14,7 @@ const { getCacheInfo }          = require('../src/cache-info');
 const { buildDepTree }          = require('../src/deps-tree');
 const { buildIncludeTree }      = require('../src/include-tree');
 const { listReleases, listTags } = require('../src/release-lister');
+const logger                    = require('../src/logger');
 
 // ─── Response formatters ───────────────────────────────────────────────────────
 
@@ -29,6 +30,34 @@ function errorResult(message, code = -32603) {
     isError: true,
     _meta: code ? { code } : undefined,
   };
+}
+
+// ─── Output limits ─────────────────────────────────────────────────────────────
+
+const DEFAULT_MAX_OUTPUT_BYTES = 200 * 1024; // 200 KB
+const DEFAULT_MAX_FILES        = 50;
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function applyOutputLimit(text, args, maxBytes = DEFAULT_MAX_OUTPUT_BYTES) {
+  if (args?.full_output) return text;
+  const size = Buffer.byteLength(text, 'utf8');
+  if (size <= maxBytes) return text;
+  const cut = Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8');
+  return (
+    cut +
+    `\n… [truncated ${formatBytes(size)} → ${formatBytes(maxBytes)}; ` +
+    `pass full_output=true for the complete output]`
+  );
+}
+
+function limitFiles(files, args) {
+  if (args?.full_output || files.length <= DEFAULT_MAX_FILES) return files;
+  return files.slice(0, DEFAULT_MAX_FILES);
 }
 
 // ─── Dep parsing helpers ───────────────────────────────────────────────────────
@@ -213,15 +242,18 @@ async function handleGetDepInterface(args, token, noFetch) {
     content: grep ? grepContent(readFileSafe(f.abs), grep, before, after) : readFileSafe(f.abs),
   }));
 
-  return textResult(
+  const shown    = limitFiles(files, args);
+  const skipped  = files.length - shown.length;
+  let out =
     `Found ${files.length} .inc file(s) in ${dep.repo}@${resolvedRef}:\n\n` +
-    files
+    shown
       .map(
         (f) =>
           `──── ${f.path} ────\n${f.content}${f.content.endsWith('\n') ? '' : '\n'}`
       )
-      .join('\n')
-  );
+      .join('\n');
+  if (skipped > 0) out += `\n… [${skipped} more file(s); pass full_output=true to list them]`;
+  return textResult(applyOutputLimit(out, args));
 }
 
 async function handleListDepIncs(args, token, noFetch) {
@@ -248,7 +280,7 @@ async function handleListDepIncs(args, token, noFetch) {
   const listing = incFiles.map((f) => `  ${f.rel}`).join('\n');
 
   return textResult(
-    `Dependency ${dep.repo}@${resolvedRef} — ${incFiles.length} .inc file(s):\n\n${listing}`
+    applyOutputLimit(`Dependency ${dep.repo}@${resolvedRef} — ${incFiles.length} .inc file(s):\n\n${listing}`, args)
   );
 }
 
@@ -292,7 +324,7 @@ async function handleGetDepTree(args, token, noFetch) {
     getDepsOverride,
   });
 
-  return textResult(JSON.stringify(tree, null, 2));
+  return textResult(applyOutputLimit(JSON.stringify(tree, null, 2), args));
 }
 
 async function handleResolveManifestTool(args) {
@@ -305,19 +337,19 @@ async function handleResolveManifestTool(args) {
     define: args?.define,
   });
 
-  return textResult(JSON.stringify(manifest, null, 2));
+  return textResult(applyOutputLimit(JSON.stringify(manifest, null, 2), args));
 }
 
 async function handleValidateManifestTool(args) {
   const manifestPath = resolveManifestPath(args?.manifest);
   const result = validateManifestFile(manifestPath);
-  return textResult(JSON.stringify(result, null, 2));
+  return textResult(applyOutputLimit(JSON.stringify(result, null, 2), args));
 }
 
 async function handleGetCacheInfo(args) {
   const manifestPath = args?.manifest ? path.resolve(args.manifest) : undefined;
   const info = getCacheInfo(manifestPath);
-  return textResult(JSON.stringify(info, null, 2));
+  return textResult(applyOutputLimit(JSON.stringify(info, null, 2), args));
 }
 
 async function handleListReleasesTool(args, token) {
@@ -331,7 +363,7 @@ async function handleListReleasesTool(args, token) {
     entries = await listReleases(args.repo, { token, limit, includeAssets: args?.includeAssets });
   }
 
-  return textResult(JSON.stringify(entries, null, 2));
+  return textResult(applyOutputLimit(JSON.stringify(entries, null, 2), args));
 }
 
 async function handleBuildIncludeTree(args, token, noFetch) {
@@ -349,7 +381,7 @@ async function handleBuildIncludeTree(args, token, noFetch) {
         noFetch:   noFetch || args?.no_fetch === true,
       }
     );
-    return textResult(result.text);
+    return textResult(applyOutputLimit(result.text, args));
   } catch (err) {
     return errorResult(err.message);
   }
@@ -361,7 +393,7 @@ async function handleBuildIncludeTree(args, token, noFetch) {
  * Resolve the AMX Mod X version to use for standard includes.
  * Priority: explicit `version` arg → manifest `amxmodx.version` → latest.
  */
-async function resolveAmxmodxVersion(args) {
+async function resolveAmxmodxVersion(args, noFetch) {
   if (args?.version) return args.version;
 
   const manifestPathStr = args?.manifest;
@@ -370,14 +402,16 @@ async function resolveAmxmodxVersion(args) {
     try {
       const manifest = parseManifest(manifestPath);
       if (manifest.amxmodx?.version) return manifest.amxmodx.version;
-    } catch (_) {} // ignore parse errors, fall through to latest
+    } catch (err) {
+      logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
+    }
   }
 
-  return fetchLatestVersion();
+  return fetchLatestVersion({ noFetch });
 }
 
 async function handleListAmxmodxIncs(args, token, noFetch) {
-  const version = await resolveAmxmodxVersion(args);
+  const version = await resolveAmxmodxVersion(args, noFetch);
   const pattern = args?.pattern || '*.inc';
 
   const { includeDir } = await fetchCompiler(version);
@@ -398,12 +432,12 @@ async function handleListAmxmodxIncs(args, token, noFetch) {
 
   const listing = files.map((f) => `  ${f}`).join('\n');
   return textResult(
-    `AMX Mod X ${version} — ${files.length} standard include file(s):\n\n${listing}`
+    applyOutputLimit(`AMX Mod X ${version} — ${files.length} standard include file(s):\n\n${listing}`, args)
   );
 }
 
 async function handleGetAmxmodxInclude(args, token, noFetch) {
-  const version = await resolveAmxmodxVersion(args);
+  const version = await resolveAmxmodxVersion(args, noFetch);
   const pattern = args?.file || args?.pattern || '*.inc';
   const grep    = args?.grep;
   const before  = args?.before || 0;
@@ -425,16 +459,19 @@ async function handleGetAmxmodxInclude(args, token, noFetch) {
     );
   }
 
-  const contents = files
+  const shown    = limitFiles(files, args);
+  const skipped  = files.length - shown.length;
+  const contents = shown
     .map((rel) => {
       const raw = readFileSafe(path.join(includeDir, rel));
       const processed = grep ? grepContent(raw, grep, before, after) : raw;
       return `──── ${rel} ────\n${processed}${processed.endsWith('\n') ? '' : '\n'}`;
     })
-    .join('\n');
+    .join('\n')
+    + (skipped > 0 ? `\n… [${skipped} more file(s); pass full_output=true to list them]` : '');
 
   return textResult(
-    `AMX Mod X ${version} — ${files.length} standard include file(s):\n\n${contents}`
+    applyOutputLimit(`AMX Mod X ${version} — ${files.length} standard include file(s):\n\n${contents}`, args)
   );
 }
 
@@ -522,13 +559,14 @@ async function handleResolveInclude(args, token, noFetch) {
     searchPaths.push({ path: smaDir, label });
   }
 
-  const version = await resolveAmxmodxVersion(args);
+  const version = await resolveAmxmodxVersion(args, noFetch);
   const { includeDir } = await fetchCompiler(version);
   if (includeDir) {
     searchPaths.push({ path: includeDir, label: `AMXX stdlib ${version}` });
   }
 
   const manifestPath = resolveManifestPath(args?.manifest || undefined);
+  const depErrors = [];
   if (fs.existsSync(manifestPath)) {
     try {
       const manifest = parseManifest(manifestPath);
@@ -536,20 +574,29 @@ async function handleResolveInclude(args, token, noFetch) {
         try {
           const depDir = await fetchDepIncludeDir(dep, token, noFetch);
           searchPaths.push({ path: depDir, label: `${dep.repo}@${dep.ref}` });
-        } catch (_) {} // skip unresolvable
+        } catch (err) {
+          depErrors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
+        }
       }
-    } catch (_) {} // skip deps on parse error
+    } catch (err) {
+      depErrors.push(`manifest ${manifestPath}: ${err.message}`);
+    }
   }
 
   const result = searchIncludeFile(filename, searchPaths);
 
   if (!result) {
-    return textResult(
+    let msg =
       `Include "${filename}" not found.\n\n` +
       `Searched:\n` +
-      searchPaths.map((s) => `  ${s.label}`).join('\n') +
-      '\n\nTip: provide a manifest with deps, or ensure the compiler is cached.'
-    );
+      searchPaths.map((s) => `  ${s.label}`).join('\n');
+    if (depErrors.length) {
+      msg +=
+        `\n\nFailed to resolve:\n` +
+        depErrors.map((e) => `  ${e}`).join('\n');
+    }
+    msg += '\n\nTip: provide a manifest with deps, or ensure the compiler is cached.';
+    return textResult(msg);
   }
 
   const content = readFileSafe(result.foundPath);
@@ -558,12 +605,15 @@ async function handleResolveInclude(args, token, noFetch) {
   const after  = args?.after || 0;
   const displayed = grep ? grepContent(content, grep, before, after) : content;
 
-  return textResult(
+  let out =
     `Include "${parsed.filename}" resolved to:\n` +
     `  Source: ${result.label}\n` +
     `  Path:   ${result.foundPath}\n\n` +
-    `──── ${parsed.filename} ────\n${displayed}${displayed.endsWith('\n') ? '' : '\n'}`
-  );
+    `──── ${parsed.filename} ────\n${displayed}${displayed.endsWith('\n') ? '' : '\n'}`;
+  if (depErrors.length) {
+    out += `\nNote — some deps failed to resolve:\n` + depErrors.map((e) => `  ${e}`).join('\n');
+  }
+  return textResult(applyOutputLimit(out, args));
 }
 
 // ─── Dispatch ──────────────────────────────────────────────────────────────────
@@ -582,16 +632,4 @@ const HANDLERS = {
   resolve_include:      handleResolveInclude,
 };
 
-async function callTool(name, args) {
-  const handler = HANDLERS[name];
-  if (!handler) {
-    return errorResult(`Unknown tool: ${name}`, -32601);
-  }
-
-  const token = args?.token || process.env.GITHUB_TOKEN || null;
-  const noFetch = args?.no_fetch === true;
-
-  return handler(args, token, noFetch);
-}
-
-module.exports = { callTool };
+module.exports = { HANDLERS };
