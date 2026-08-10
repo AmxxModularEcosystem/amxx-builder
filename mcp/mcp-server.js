@@ -36,6 +36,8 @@ class McpServer {
     this._initialized = false;
     this._rl = null;
     this._closed = false;
+    // EPIPE when the client dies — exit cleanly instead of crashing.
+    process.stdout.on('error', () => process.exit(0));
   }
 
   /**
@@ -81,6 +83,9 @@ class McpServer {
         }
       }
     }
+
+    // stdin EOF — client closed the pipe; exit so we don't hang on open stdout.
+    process.exit(0);
   }
 
   close() {

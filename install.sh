@@ -28,10 +28,10 @@ resolve_version() {
 
   if [ -n "${GITHUB_TOKEN:-}" ]; then
     tag=$(curl -sfL -H "Authorization: Bearer $GITHUB_TOKEN" "$api_url" 2>/dev/null \
-      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)",*/\1/')
+      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)",*/\1/' || true)
   else
     tag=$(curl -sfL "$api_url" 2>/dev/null \
-      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)",*/\1/')
+      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)",*/\1/' || true)
   fi
 
   if [ -n "$tag" ]; then
@@ -48,10 +48,11 @@ step "Checking prerequisites..."
 
 command -v node >/dev/null 2>&1 || fail "Node.js not found. Install from https://nodejs.org"
 command -v npm  >/dev/null 2>&1 || fail "npm not found. Reinstall Node.js from https://nodejs.org"
+command -v curl >/dev/null 2>&1 || fail "curl not found. Install curl first"
 
 NODE_MAJOR=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))")
-if [ "$NODE_MAJOR" -lt 16 ]; then
-    fail "Node.js 16+ required (found $(node --version))"
+if [ "$NODE_MAJOR" -lt 18 ]; then
+    fail "Node.js 18+ required (found $(node --version))"
 fi
 step "Node.js $(node --version) OK"
 

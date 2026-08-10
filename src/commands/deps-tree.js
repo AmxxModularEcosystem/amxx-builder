@@ -46,7 +46,7 @@ async function runDepsTree(options) {
   const tree = await buildDepTree(rootDeps, {
     token:   manifest.github.token,
     noFetch,
-    depth:   0,
+    depth:   Number.isInteger(options.depth) ? options.depth : 0,
     from:    'manifest',
     getDepsOverride,
   });

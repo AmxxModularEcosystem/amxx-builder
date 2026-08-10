@@ -21,7 +21,7 @@ async function createArchive(manifest, buildDir) {
     .replaceAll('{name}',    manifest.name)
     .replaceAll('{version}', manifest.version);
 
-  const archiveName  = expand(out.archive_name);
+  const archiveName  = sanitizeArchiveName(expand(out.archive_name));
   const amxmodxDest  = expand(out.amxmodx_path).replace(/\/?$/, '/');
   const assetsDest   = expand(out.assets_path);  // '' = root
 
@@ -82,8 +82,15 @@ async function createArchive(manifest, buildDir) {
   printFileListing(fileList);
 }
 
-function printFileListing(files) {
-  const grouped = new Map();
+// Keeps the archive filename inside out.dir: strips any directory components
+// (both / and \ separators) and removes characters illegal on Windows.
+function sanitizeArchiveName(name) {
+  const base = String(name).replace(/\\/g, '/').split('/').pop() || '';
+  if (!base || base === '.' || base === '..') return 'archive.zip';
+  return base.replace(/[<>:"|?*]/g, '_');
+}
+
+function printFileListing(files) {  const grouped = new Map();
   for (const f of files) {
     const parts = f.split('/');
     const key   = parts.length > 1 ? parts.slice(0, parts.length - 1).join('/') : '.';

@@ -20,6 +20,10 @@ function makePacket(str) {
 }
 
 async function sendRcon({ host, port, password, command }, timeoutMs = 5000) {
+  if (typeof password === 'string' && password.includes('"')) {
+    throw new Error('RCON password must not contain double quotes');
+  }
+
   return new Promise((resolve, reject) => {
     const sock = dgram.createSocket('udp4');
     let settled = false;

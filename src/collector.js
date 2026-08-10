@@ -7,8 +7,9 @@ const logger = require('./logger');
  * Copies everything from each repo's amxmodx_dir into build/amxmodx/,
  * then merges local amxmodx/ and assets/ directories (next to amxbuild.yml).
  *
- * .sma files are NOT copied — they are compiled; .amxx output is written by the
- * compiler step that runs after this one, overwriting any pre-built plugins.
+ * .sma files ARE copied as-is (like any other file); the compiler step
+ * recompiles them and overwrites the .amxx outputs. Exclude sources from a
+ * repo via its exclude_files patterns if they should not be shipped.
  *
  * Repo-vs-repo file conflicts are handled according to output.on_conflict:
  *   last_wins  (default) — later repo in list wins, warning emitted

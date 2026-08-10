@@ -46,9 +46,10 @@ function createServer() {
   return server;
 }
 
-// Load project .env like the CLI does; keep stdout free for JSON-RPC
+// Load project .env like the CLI does; keep stdout free for JSON-RPC.
+// No override: real process env (client-provided GITHUB_TOKEN etc.) wins.
 function prepareEnvironment() {
-  dotenv.config({ path: path.join(process.cwd(), '.env'), override: true, quiet: true });
+  dotenv.config({ path: path.join(process.cwd(), '.env'), quiet: true });
   logger.setStderr(true);
   progress.setEnabled(false);
 }

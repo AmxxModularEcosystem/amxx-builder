@@ -42,7 +42,7 @@ async function runBuild(options) {
 
   const hasRepos = manifest.repos.length > 0;
 
-  const { compilerPath, includeDir: compilerIncludeDir } = await fetchCompiler(manifest.amxmodx.version);
+  const { compilerPath, includeDir: compilerIncludeDir } = await fetchCompiler(manifest.amxmodx.version, { noFetch });
 
   const repoLocalDirs = {};
   if (hasRepos) {

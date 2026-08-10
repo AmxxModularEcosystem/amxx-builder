@@ -1,6 +1,8 @@
 'use strict';
 
 const axios = require('axios');
+// Default for API calls; download sites pass their own longer timeout.
+axios.defaults.timeout = 30000;
 
 /**
  * List releases for a GitHub repository.
@@ -15,9 +17,10 @@ const axios = require('axios');
 async function listReleases(repo, options = {}) {
   const { token, limit = 10, includeAssets = false } = options;
   const headers = buildHeaders(token);
+  const perPage = Math.min(100, Math.max(1, limit)); // GitHub caps per_page at 100
 
   const { data } = await axios.get(
-    `https://api.github.com/repos/${repo}/releases?per_page=${limit}`,
+    `https://api.github.com/repos/${repo}/releases?per_page=${perPage}`,
     { headers }
   );
 
@@ -54,9 +57,10 @@ async function listReleases(repo, options = {}) {
 async function listTags(repo, options = {}) {
   const { token, limit = 10 } = options;
   const headers = buildHeaders(token);
+  const perPage = Math.min(100, Math.max(1, limit)); // GitHub caps per_page at 100
 
   const { data } = await axios.get(
-    `https://api.github.com/repos/${repo}/tags?per_page=${limit}`,
+    `https://api.github.com/repos/${repo}/tags?per_page=${perPage}`,
     { headers }
   );
 

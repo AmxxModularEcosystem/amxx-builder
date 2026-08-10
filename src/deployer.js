@@ -14,18 +14,22 @@ function resolveDeployDirs(manifest) {
   const deploy = manifest.deploy;
   const out    = manifest.output;
 
+  // Absolute root: exclusion matching (isExcluded) compares against the deploy
+  // root, so a relative deploy.path would break path.relative on every dest.
+  const deployRoot = path.resolve(deploy.path);
+
   const amxmodxDest = path.join(
-    deploy.path,
+    deployRoot,
     expand(manifest, deploy.amxmodx_path)
   );
 
   const assetsDest = deploy.assets_path != null
-    ? path.join(deploy.path, expand(manifest, deploy.assets_path))
+    ? path.join(deployRoot, expand(manifest, deploy.assets_path))
     : out.assets_path
-      ? path.join(deploy.path, expand(manifest, out.assets_path))
-      : deploy.path; // root
+      ? path.join(deployRoot, expand(manifest, out.assets_path))
+      : deployRoot; // root
 
-  return { amxmodxDest, assetsDest };
+  return { amxmodxDest, assetsDest, deployRoot };
 }
 
 /**
@@ -35,13 +39,12 @@ function resolveDeployDirs(manifest) {
 async function deployBuild(manifest, buildDir, { incremental = false } = {}) {
   assertDeployPath(manifest);
 
-  const { amxmodxDest, assetsDest } = resolveDeployDirs(manifest);
+  const { amxmodxDest, assetsDest, deployRoot } = resolveDeployDirs(manifest);
 
   logger.step(`Deploying to ${manifest.deploy.path}${incremental ? ' (incremental)' : ''}...`);
 
   let count = 0;
 
-  const deployRoot     = manifest.deploy.path;
   const excludePatterns = manifest.deploy.exclude || [];
 
   const amxmodxSrc = path.join(buildDir, 'amxmodx');
@@ -65,7 +68,7 @@ async function deployBuild(manifest, buildDir, { incremental = false } = {}) {
 function deployPlugin(manifest, buildDir, amxxName) {
   if (!manifest.deploy.path) return null;
 
-  const { amxmodxDest } = resolveDeployDirs(manifest);
+  const { amxmodxDest, deployRoot } = resolveDeployDirs(manifest);
   const src  = path.join(buildDir, 'amxmodx', 'plugins', amxxName);
   const dest = path.join(amxmodxDest, 'plugins', amxxName);
 
@@ -74,7 +77,7 @@ function deployPlugin(manifest, buildDir, amxxName) {
     return null;
   }
 
-  if (isExcluded(dest, manifest.deploy.path, manifest.deploy.exclude || [])) {
+  if (isExcluded(dest, deployRoot, manifest.deploy.exclude || [])) {
     logger.verbose(`  skip (excluded): ${amxxName}`);
     return null;
   }
@@ -93,7 +96,7 @@ function deployPlugin(manifest, buildDir, amxxName) {
 function deployFile(manifest, buildDir, relPath, section) {
   if (!manifest.deploy.path) return;
 
-  const { amxmodxDest, assetsDest } = resolveDeployDirs(manifest);
+  const { amxmodxDest, assetsDest, deployRoot } = resolveDeployDirs(manifest);
 
   const srcBase  = path.join(buildDir, section === 'assets' ? 'assets' : 'amxmodx');
   const destBase = section === 'assets' ? assetsDest : amxmodxDest;
@@ -102,7 +105,7 @@ function deployFile(manifest, buildDir, relPath, section) {
   const dest = path.join(destBase, relPath);
 
   if (!fs.existsSync(src)) return;
-  if (isExcluded(dest, manifest.deploy.path, manifest.deploy.exclude || [])) {
+  if (isExcluded(dest, deployRoot, manifest.deploy.exclude || [])) {
     logger.verbose(`  skip (excluded): ${relPath}`);
     return;
   }
@@ -155,7 +158,9 @@ function isUpToDate(src, dest) {
   if (!fs.existsSync(dest)) return false;
   const s = fs.statSync(src);
   const d = fs.statSync(dest);
-  return s.size === d.size && s.mtimeMs <= d.mtimeMs;
+  // Equal mtimes (coarse FAT/exFAT granularity) must NOT be treated as
+  // up-to-date — a recompiled file in the same 2s tick would be skipped.
+  return s.size === d.size && s.mtimeMs < d.mtimeMs;
 }
 
 function assertDeployPath(manifest) {

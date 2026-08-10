@@ -65,12 +65,14 @@ function fetchLatestTag() {
       let body = '';
       res.on('data', (chunk) => { body += chunk; });
       res.on('end', () => {
+        if (res.statusCode !== 200) return resolve(null);
         try {
           const data = JSON.parse(body);
           if (data.tag_name) return resolve(data.tag_name);
         } catch { /* ignore parse errors */ }
         resolve(null);
       });
+      res.on('error', () => resolve(null));
     });
     req.on('error', () => resolve(null));
     req.on('timeout', () => { req.destroy(); resolve(null); });

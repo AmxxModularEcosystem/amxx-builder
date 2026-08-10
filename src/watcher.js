@@ -55,6 +55,20 @@ function startWatch(manifest, manifestPath, handlers) {
     },
   });
 
+  const caseNorm = process.platform === 'win32' ? (p) => p.toLowerCase() : (p) => p;
+
+  // Invoke a watch handler without letting a rejection/throw kill the process.
+  const safeCall = (fn) => {
+    try {
+      const p = fn();
+      if (p && typeof p.catch === 'function') {
+        p.catch((err) => logger.error(`Watch handler error: ${err.message}`));
+      }
+    } catch (err) {
+      logger.error(`Watch handler error: ${err.message}`);
+    }
+  };
+
   watcher.on('all', (event, filePath) => {
     if (!['add', 'change'].includes(event)) return;
 
@@ -66,29 +80,29 @@ function startWatch(manifest, manifestPath, handlers) {
     // Manifest changed → full rebuild
     if (absPath === path.resolve(manifestPath)) {
       logger.step(`Manifest changed → full rebuild`);
-      handlers.onManifestChange();
+      safeCall(() => handlers.onManifestChange());
       return;
     }
 
-    const inAmxmodx = absPath.startsWith(localAmxmodxDir + path.sep);
+    const inAmxmodx = caseNorm(absPath).startsWith(caseNorm(localAmxmodxDir) + path.sep);
     const section   = inAmxmodx ? 'amxmodx' : 'assets';
     const baseDir   = inAmxmodx ? localAmxmodxDir : localAssetsDir;
     const relToBase = path.relative(baseDir, absPath);
 
-    if (inAmxmodx && filePath.endsWith('.sma')) {
+    if (inAmxmodx && caseNorm(filePath).endsWith('.sma')) {
       logger.step(`Changed: ${rel}`);
-      handlers.onSmaChange(absPath);
+      safeCall(() => handlers.onSmaChange(absPath));
       return;
     }
 
-    if (inAmxmodx && filePath.endsWith('.inc')) {
+    if (inAmxmodx && caseNorm(filePath).endsWith('.inc')) {
       logger.step(`Include changed: ${rel}`);
-      handlers.onIncChange(absPath);
+      safeCall(() => handlers.onIncChange(absPath));
       return;
     }
 
     logger.step(`Changed: ${rel}`);
-    handlers.onFileChange(relToBase, section);
+    safeCall(() => handlers.onFileChange(relToBase, section));
   });
 
   watcher.on('error', (err) => logger.warn(`Watcher error: ${err.message}`));

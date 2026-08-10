@@ -1,6 +1,8 @@
 const fs   = require('fs');
 const path = require('path');
 const axios = require('axios');
+// Default for API calls; download sites pass their own longer timeout.
+axios.defaults.timeout = 30000;
 const AdmZip = require('adm-zip');
 const chalk = require('chalk');
 const logger = require('./logger');
@@ -22,8 +24,8 @@ let _latestFetch = null; // in-flight promise, dedupes concurrent calls
  * Returns { compilerPath, includeDir } where includeDir points to the
  * bundled standard includes (amxmodx.inc etc.) extracted alongside the binary.
  */
-async function fetchCompiler(version) {
-  const resolvedVersion = version || await fetchLatestVersion();
+async function fetchCompiler(version, options = {}) {
+  const resolvedVersion = version || await fetchLatestVersion(options);
   const platform        = getPlatform();
   const cacheDir        = path.join(getCacheDir(), 'amxxpc', resolvedVersion, platform);
   const binaryName      = platform === 'windows' ? 'amxxpc.exe' : 'amxxpc';
@@ -89,7 +91,7 @@ async function fetchLatestVersion(options = {}) {
     return _latestMem.version;
   }
 
-  const cacheFile = path.join(getCacheDir(), 'amxxpc', '.latest-version');
+  const cacheFile = path.join(getCacheDir(), 'amxxpc', `.latest-version-${getPlatform()}`);
   try {
     const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
     if (cached && cached.version && now - cached.at < LATEST_VERSION_TTL_MS) {
@@ -237,7 +239,7 @@ function extractWithPrefix(archivePath, destDir, opts) {
       const name = entry.entryName.replace(/\\/g, '/');
       if (entry.isDirectory || !name.startsWith(prefix)) continue;
       const rel  = name.slice(prefix.length);
-      if (!rel) continue;
+      if (!rel || rel.split('/').includes('..')) continue; // zip-slip guard
       const dest = destSubdir ? path.join(destDir, destSubdir, rel) : path.join(destDir, rel);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, entry.getData());
@@ -267,6 +269,7 @@ async function downloadFile(url, dest) {
     () => axios.get(url, {
       responseType: 'arraybuffer',
       maxRedirects: 5,
+      timeout: 600000, // large archives — allow slow links, still bound hangs
       onDownloadProgress: (e) => {
         if (bar && e.total) {
           bar.update(Math.round(e.loaded / e.total * 100));

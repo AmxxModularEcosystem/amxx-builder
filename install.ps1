@@ -50,7 +50,7 @@ Write-Step 'Checking prerequisites...'
 
 try { $nodeRaw = & node --version 2>&1 } catch { Write-Fail 'Node.js not found. Install from https://nodejs.org (LTS recommended)' }
 $nodeMajor = [int]($nodeRaw -replace 'v(\d+)\..*', '$1')
-if ($nodeMajor -lt 16) { Write-Fail "Node.js 16+ required (found $nodeRaw)" }
+if ($nodeMajor -lt 18) { Write-Fail "Node.js 18+ required (found $nodeRaw)" }
 Write-Step "Node.js $nodeRaw OK"
 
 try { & npm --version | Out-Null } catch { Write-Fail 'npm not found. Reinstall Node.js from https://nodejs.org' }

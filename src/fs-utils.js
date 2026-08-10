@@ -45,6 +45,9 @@ function countFiles(dir) {
 function safeExtractTar(archivePath, destDir) {
   const flag = archivePath.endsWith('.tar.bz2') ? 'j' : 'z';
   const result = spawnSync('tar', ['-x' + flag, '-f', archivePath, '-C', destDir], { stdio: 'pipe' });
+  if (result.error) {
+    throw new Error(`tar extraction failed for ${path.basename(archivePath)}: ${result.error.message}`);
+  }
   if (result.status !== 0) {
     const msg = (result.stderr || result.stdout || '').toString().trim();
     throw new Error(`tar extraction failed for ${path.basename(archivePath)}: ${msg || 'unknown error'}`);

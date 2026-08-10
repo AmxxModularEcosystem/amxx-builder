@@ -4,6 +4,8 @@ const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
 const axios  = require('axios');
+// Default for API calls; download sites pass their own longer timeout.
+axios.defaults.timeout = 30000;
 const AdmZip = require('adm-zip');
 
 const chalk = require('chalk');
@@ -97,6 +99,7 @@ async function resolveUrlSource(source, manifestDir, buildDir, noFetch) {
       () => axios.get(source.url, {
         responseType: 'arraybuffer',
         maxRedirects: 5,
+        timeout: 600000, // large archives — allow slow links, still bound hangs
         onDownloadProgress: (e) => {
           if (bar && e.total) {
             bar.update(Math.round(e.loaded / e.total * 100));
@@ -119,7 +122,10 @@ async function resolveUrlSource(source, manifestDir, buildDir, noFetch) {
     logger.info(`Assets: ${filename} ready`);
     return cacheDir;
   } catch (err) {
-    fs.rmSync(cacheDir, { recursive: true, force: true });
+    // Never rmSync the whole cache dir: it may be a shared 'global' entry used
+    // by parallel sources or other projects. Invalidate the sentinel only and
+    // leave the content to be overwritten on the next fetch.
+    try { fs.rmSync(sentinel, { force: true }); } catch (_) {}
     throw new Error(`Failed to fetch asset ${source.url}: ${err.message}`);
   }
 }
@@ -134,7 +140,10 @@ function getCacheDirForUrl(url, cacheType, manifestDir, buildDir) {
 // ─── archive detection & extraction ──────────────────────────────────────────
 
 function getFilenameFromUrl(url) {
-  try { return path.basename(new URL(url).pathname) || 'download'; } catch { return 'download'; }
+  try {
+    const base = path.basename(new URL(url).pathname) || 'download';
+    try { return decodeURIComponent(base); } catch { return base; }
+  } catch { return 'download'; }
 }
 
 function isArchive(filename, contentType) {

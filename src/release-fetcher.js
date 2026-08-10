@@ -1,6 +1,8 @@
 const fs   = require('fs');
 const path = require('path');
 const axios = require('axios');
+// Default for API calls; download sites pass their own longer timeout.
+axios.defaults.timeout = 30000;
 const AdmZip = require('adm-zip');
 const chalk = require('chalk');
 const logger = require('./logger');
@@ -36,7 +38,11 @@ async function getReleaseCacheDir(source, token, noFetch) {
 
 async function ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, label) {
   const resolvedRef  = await resolveReleaseTag(repo, ref, token);
-  const cacheKey     = repo.replace('/', '__') + '__' + resolvedRef.replace(/[^a-zA-Z0-9._-]/g, '_');
+  // Include the asset selector in the key: the same repo@tag with different
+  // assets must not share a cache dir (first-extracted content would win).
+  const assetKey = assetSelector == null ? '' : '--' + String(assetSelector).replace(/[^a-zA-Z0-9._-]/g, '_');
+  const cacheKey = repo.toLowerCase().replace('/', '__') + '__' +
+    resolvedRef.replace(/[^a-zA-Z0-9._-]/g, '_') + assetKey;
   const cacheDir     = path.join(getCacheDir(), 'release-deps', cacheKey);
   const sentinelFile = path.join(cacheDir, '.extracted');
 
@@ -173,6 +179,7 @@ async function downloadAsset(url, dest, headers) {
       headers: { ...headers, Accept: 'application/octet-stream' },
       responseType: 'arraybuffer',
       maxRedirects: 5,
+      timeout: 600000, // large assets — allow slow links, still bound hangs
       onDownloadProgress: (e) => {
         if (bar && e.total) {
           bar.update(Math.round(e.loaded / e.total * 100));

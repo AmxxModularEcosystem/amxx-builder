@@ -1,14 +1,22 @@
 const fs   = require('fs');
 const path = require('path');
 const axios = require('axios');
+// Default for API calls; download sites pass their own longer timeout.
+axios.defaults.timeout = 30000;
 const simpleGit = require('simple-git');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
 
 function getRepoCacheDir(repo, ref) {
-  const key = repo.replace('/', '__') + '__' + String(ref).replace(/[^a-zA-Z0-9._-]/g, '_');
+  // Lowercased key: GitHub repo names are case-insensitive, but filesystems
+  // (NTFS/APFS) and the repo/ref dedup may not be — normalize to avoid
+  // duplicate clones on Linux and dir collisions on Windows/macOS.
+  const key = repo.toLowerCase().replace('/', '__') + '__' + String(ref).replace(/[^a-zA-Z0-9._-]/g, '_');
   return path.join(getCacheDir(), 'repos', key);
 }
+
+// Matches full or abbreviated commit SHAs (7-40 hex chars).
+const SHA_REF_RE = /^[0-9a-f]{7,40}$/i;
 
 /**
  * Resolves "latest" ref to the actual release tag via GitHub API.
@@ -59,14 +67,25 @@ async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
   logger.step(`Cloning ${repo} @ ${cacheKey} ...`);
 
   const cloneUrl  = buildCloneUrl(repo, token, ssh);
-  const cloneArgs = ['--depth=1'];
-  if (resolvedRef) cloneArgs.push('--branch', resolvedRef);
+  const isShaRef  = SHA_REF_RE.test(resolvedRef || '');
+  // Windows: allow >260-char paths and keep file contents identical across OSes
+  // (core.autocrlf would rewrite .sma/.inc/.cfg to CRLF and break hashing/output).
+  const cloneArgs = ['--depth=1', '-c', 'core.longpaths=true', '-c', 'core.autocrlf=false'];
+  // Shallow clones cannot fetch arbitrary SHAs via --branch; clone the default
+  // branch and fetch/checkout the SHA explicitly afterwards.
+  if (resolvedRef && !isShaRef) cloneArgs.push('--branch', resolvedRef);
 
   fs.mkdirSync(cacheDir, { recursive: true });
 
   try {
-    const git = simpleGit({ env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' } });
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' };
+    const git = simpleGit({ env });
     await git.clone(cloneUrl, cacheDir, cloneArgs);
+    if (isShaRef) {
+      const shaGit = simpleGit({ baseDir: cacheDir, env });
+      await shaGit.fetch(['--depth=1', 'origin', resolvedRef]);
+      await shaGit.checkout(resolvedRef);
+    }
   } catch (err) {
     try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (_) {}
     const msg = err.message || '';

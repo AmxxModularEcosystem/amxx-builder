@@ -55,7 +55,11 @@ function applyOutputLimit(text, args, maxBytes = DEFAULT_MAX_OUTPUT_BYTES) {
   if (args?.full_output) return text;
   const size = Buffer.byteLength(text, 'utf8');
   if (size <= maxBytes) return text;
-  const cut = Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8');
+  const buf = Buffer.from(text, 'utf8').subarray(0, maxBytes);
+  // Walk back past any UTF-8 continuation bytes so we never split a character.
+  let cutLen = buf.length;
+  while (cutLen > 0 && (buf[cutLen - 1] & 0xc0) === 0x80) cutLen--;
+  const cut = buf.subarray(0, cutLen).toString('utf8');
   return (
     cut +
     `\n… [truncated ${formatBytes(size)} → ${formatBytes(maxBytes)}; ` +
@@ -123,7 +127,10 @@ async function fetchDepIncludeDir(dep, token, noFetch) {
     );
   }
 
-  const repoDir = await fetchRepo(dep.repo, dep.ref, token, noFetch, false);
+  const resolvedRef = dep.ref === 'latest'
+    ? await resolveRef(dep.repo, dep.ref, token)
+    : dep.ref;
+  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, false);
   const candidates = dep.include_path
     ? [dep.include_path]
     : ['scripting/include', 'amxmodx/scripting/include', 'include', '.'];
@@ -629,7 +636,7 @@ async function handleResolveInclude(args, token, noFetch) {
 async function handleBuildPlan(args) {
   const manifestPath = resolveManifestPath(args?.manifest);
   const fullPath = path.resolve(manifestPath);
-  require('dotenv').config({ path: path.join(path.dirname(fullPath), '.env'), override: true, quiet: true });
+  require('dotenv').config({ path: path.join(path.dirname(fullPath), '.env'), quiet: true });
 
   try {
     const manifest = resolveManifest(fullPath, { set: args?.set, define: args?.define });
@@ -647,7 +654,10 @@ async function fetchDepRoot(args, token, noFetch) {
     dep = parseDep(args.dep);
   } else {
     if (!args?.repo) throw new Error('Provide either "dep" or "repo"');
-    dep = { repo: args.repo, ref: args.ref || null, source: args.source || 'git', include_path: args.include_path || null, asset: args.asset ?? null };
+    const source = args.source || 'git';
+    // Release deps need a ref — default to 'latest' when omitted.
+    const ref = args.ref || (source === 'release' ? 'latest' : null);
+    dep = { repo: args.repo, ref, source, include_path: args.include_path || null, asset: args.asset ?? null };
   }
   if (args?.source)        dep.source = args.source;
   if (args?.include_path)  dep.include_path = args.include_path;
@@ -658,7 +668,10 @@ async function fetchDepRoot(args, token, noFetch) {
     return { rootDir: dir, label: `${dep.repo}@${dep.ref} (release)` };
   }
 
-  const repoDir = await fetchRepo(dep.repo, dep.ref, token, noFetch, false);
+  const resolvedRef = dep.ref === 'latest'
+    ? await resolveRef(dep.repo, dep.ref, token)
+    : dep.ref;
+  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, false);
   if (dep.include_path) {
     const sub = path.join(repoDir, dep.include_path);
     if (!fs.existsSync(sub)) {
@@ -745,10 +758,12 @@ async function runCompiler(cmd, args) {
       : compilerDir;
   }
   try {
-    const { stdout, stderr } = await execFileP(cmd, args, { env, maxBuffer: 10 * 1024 * 1024 });
+    const { stdout, stderr } = await execFileP(cmd, args, { env, maxBuffer: 10 * 1024 * 1024, windowsHide: true });
     return { status: 0, output: stdout + stderr };
   } catch (err) {
-    return { status: err.code ?? 1, output: (err.stdout || '') + (err.stderr || '') };
+    // err.code is a string ('ENOENT') on spawn failure — never let it leak as status.
+    const status = Number.isInteger(err.code) ? err.code : 1;
+    return { status, output: (err.stdout || '') + (err.stderr || '') };
   }
 }
 
@@ -896,9 +911,13 @@ async function handleSearchSymbol(args, token, noFetch) {
 
   if (scope === 'all' || scope === 'stdlib') {
     jobs.push((async () => {
-      const version = await resolveAmxmodxVersion(args, noFetch);
-      const { includeDir } = await fetchCompiler(version);
-      if (includeDir) await addSource(`stdlib ${version}`, [includeDir], '**/*.inc');
+      try {
+        const version = await resolveAmxmodxVersion(args, noFetch);
+        const { includeDir } = await fetchCompiler(version);
+        if (includeDir) await addSource(`stdlib ${version}`, [includeDir], '**/*.inc');
+      } catch (err) {
+        errors.push(`stdlib: ${err.message}`);
+      }
     })());
   }
 

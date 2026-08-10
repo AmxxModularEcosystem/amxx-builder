@@ -27,6 +27,8 @@ program
 // ─── Update check ──────────────────────────────────────────────────────────────
 
 program.hook('preAction', async () => {
+  // The MCP server owns stdout (JSON-RPC); an update notice would corrupt it.
+  if (program.args[0] === 'mcp') return;
   try {
     const latest = await checkForUpdate();
     if (latest) {

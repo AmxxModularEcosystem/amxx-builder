@@ -40,7 +40,7 @@ irm https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/i
 $env:AMXB_VERSION="v1.2.3"; irm https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/install.ps1 | iex
 ```
 
-Требования: **Node.js 16+**, **git**.
+Требования: **Node.js 18+**, **git**.
 
 ## Использование
 

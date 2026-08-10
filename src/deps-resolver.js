@@ -3,7 +3,7 @@ const path = require('path');
 const glob = require('fast-glob');
 const logger = require('./logger');
 const { parseDepsLines } = require('./manifest');
-const { fetchRepo } = require('./repo-fetcher');
+const { fetchRepo, resolveRef } = require('./repo-fetcher');
 const { fetchReleaseDep } = require('./release-fetcher');
 
 /**
@@ -57,7 +57,10 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
     if (dep.source === 'release') {
       srcDir = await fetchReleaseDep(dep, token, noFetch);
     } else {
-      const depDir = await fetchRepo(dep.repo, dep.ref, token, noFetch, manifest.github.ssh);
+      const resolvedDepRef = dep.ref === 'latest'
+        ? await resolveRef(dep.repo, dep.ref, token)
+        : dep.ref;
+      const depDir = await fetchRepo(dep.repo, resolvedDepRef, token, noFetch, manifest.github.ssh);
       srcDir = resolveIncludePath(depDir, dep.include_path, dep.repo);
     }
 

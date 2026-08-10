@@ -10,8 +10,13 @@ function dirSize(dir) {
   if (!fs.existsSync(dir)) return 0;
   let total = 0;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) continue; // avoid loops and broken links
     const p = path.join(dir, entry.name);
-    total += entry.isDirectory() ? dirSize(p) : fs.statSync(p).size;
+    if (entry.isDirectory()) {
+      total += dirSize(p);
+    } else {
+      try { total += fs.statSync(p).size; } catch { /* unreadable file */ }
+    }
   }
   return total;
 }

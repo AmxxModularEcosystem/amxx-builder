@@ -5,7 +5,7 @@ CLI + GitHub Action for building/packaging AMX Mod X servers from an `amxbuild.y
 Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesises `process.argv` → requires `index.js`.
 
 ## Tech
-- Node.js 16+, pure **CommonJS** (`require`), no ESM.
+- Node.js 18+, pure **CommonJS** (`require`), no ESM.
 - Only dev dep: `@vercel/ncc` for bundling the GitHub Action.
 - No test framework, linter, or type checker configured.
 
@@ -43,7 +43,7 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 - `ref: latest` resolves to the latest GitHub release tag automatically.
 - Plugin rules (`plugins:`) apply **only to local** `.sma` files, not repo plugins.
 - Local `amxmodx/` always wins over repo files (intentional override layer, no conflict warning).
-- `.sma` files are never copied during collect — always compiled fresh.
+- `.sma` files ARE copied during collect (like any other file) and are also compiled; exclude them per-repo via `exclude_files` if sources should not ship.
 
 ## GitHub Action release flow
 ```bash
