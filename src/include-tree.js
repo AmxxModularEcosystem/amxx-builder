@@ -26,7 +26,7 @@ const fs   = require('fs');
 const path = require('path');
 const glob = require('fast-glob');
 
-const { parseManifest }     = require('./manifest');
+const { parseManifest, parseDepsLines } = require('./manifest');
 const { fetchCompiler, fetchLatestVersion } = require('./compiler-fetcher');
 const { fetchRepo, resolveRef } = require('./repo-fetcher');
 const { fetchReleaseDep }   = require('./release-fetcher');
@@ -548,6 +548,7 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
 
   // ── 1. Resolve manifest ──────────────────────────────────────────────
   const mPath = resolveManifestPath(manifestPath);
+  require('./commands/shared').loadEnv(mPath); // .env tokens (GITHUB_TOKEN etc.)
   const manifest = parseManifest(mPath);
   const manifestDir = path.dirname(mPath);
 
@@ -555,8 +556,40 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
   const graph = new IncludeGraph();
 
   // ── 3. Build include directories list ────────────────────────────────
+  // Dep includes come BEFORE the stdlib, matching the real build's search
+  // order (src/commands/build.js: deps first, then the compiler bundle).
 
-  // 3a. Standard AMXX includes (compiler bundle)
+  // 3a. Dependency includes — globalDeps + per-repo DEPS_LIST/deps_override
+  const depEntries = [...manifest.globalDeps];
+  for (const repoConfig of manifest.repos) {
+    if (repoConfig.deps_override) {
+      depEntries.push(...repoConfig.deps_override);
+      continue;
+    }
+    try {
+      const resolvedRef = repoConfig.ref === 'latest'
+        ? await resolveRef(repoConfig.repo, repoConfig.ref, token)
+        : repoConfig.ref;
+      const repoDir = await fetchRepo(repoConfig.repo, resolvedRef, token, noFetch, manifest.github.ssh);
+      const depsPath = path.join(repoDir, 'DEPS_LIST');
+      if (fs.existsSync(depsPath)) {
+        depEntries.push(...parseDepsLines(fs.readFileSync(depsPath, 'utf8').split(/\r?\n/)));
+      }
+    } catch (_) { /* skip unresolvable repos */ }
+  }
+
+  const seenDeps = new Set();
+  for (const dep of depEntries) {
+    const key = `${String(dep.repo).toLowerCase()}@${dep.ref}`;
+    if (seenDeps.has(key)) continue;
+    seenDeps.add(key);
+    try {
+      const depDir = await fetchDepIncludeDirCached(dep, token, noFetch, manifest.github.ssh);
+      graph.includeDirs.push({ path: depDir, label: `dep: ${dep.repo}@${dep.ref}` });
+    } catch (_) { /* skip unresolvable */ }
+  }
+
+  // 3b. Standard AMXX includes (compiler bundle)
   const amxVersion = manifest.amxmodx.version || await fetchLatestVersion();
   try {
     const { includeDir } = await fetchCompiler(amxVersion);
@@ -564,14 +597,6 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
       graph.includeDirs.push({ path: includeDir, label: 'AMXX stdlib ' + amxVersion });
     }
   } catch (_) { /* compiler not available */ }
-
-  // 3b. Dependency includes
-  for (const dep of manifest.globalDeps) {
-    try {
-      const depDir = await fetchDepIncludeDirCached(dep, token, noFetch);
-      graph.includeDirs.push({ path: depDir, label: `dep: ${dep.repo}@${dep.ref}` });
-    } catch (_) { /* skip unresolvable */ }
-  }
 
   // 3c. Local scripting/ and scripting/include/ — added per-root later
 
@@ -692,7 +717,7 @@ function resolveManifestPath(explicit) {
 /**
  * Fetch a dependency's include directory, using cache where possible.
  */
-async function fetchDepIncludeDirCached(dep, token, noFetch) {
+async function fetchDepIncludeDirCached(dep, token, noFetch, ssh = false) {
   if (dep.source === 'release') {
     return fetchReleaseDep(
       { repo: dep.repo, ref: dep.ref, include_path: dep.include_path, asset: dep.asset },
@@ -704,7 +729,7 @@ async function fetchDepIncludeDirCached(dep, token, noFetch) {
   const resolvedRef = dep.ref === 'latest'
     ? await resolveRef(dep.repo, dep.ref, token)
     : dep.ref;
-  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, false);
+  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, ssh);
   const candidates = dep.include_path
     ? [dep.include_path]
     : ['scripting/include', 'amxmodx/scripting/include', 'include', '.'];

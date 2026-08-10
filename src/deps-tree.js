@@ -45,12 +45,13 @@ async function buildDepTree(rootDeps, options = {}) {
     getDepsOverride = null,
   } = options;
 
-  const visited = new Set(); // Set<"owner/repo@resolvedRef">
+  const visited   = new Set(); // Set<"owner/repo@resolvedRef"> — already expanded globally
+  const pathStack = new Set(); // current recursion path — a dep seen here is a TRUE cycle
   const tree = [];
 
   for (const dep of rootDeps) {
     const node = await walkDep(dep, {
-      token, noFetch, depth, visited,
+      token, noFetch, depth, visited, pathStack,
       from: rootFrom,
       currentDepth: 0,
       getDepsOverride,
@@ -64,7 +65,7 @@ async function buildDepTree(rootDeps, options = {}) {
 // ─── Recursive walk ────────────────────────────────────────────────────────────
 
 async function walkDep(dep, ctx) {
-  const { token, noFetch, depth, visited, getDepsOverride } = ctx;
+  const { token, noFetch, depth, visited, pathStack, getDepsOverride } = ctx;
 
   const repo = dep.repo;
   const ref  = dep.ref || 'HEAD';
@@ -79,17 +80,20 @@ async function walkDep(dep, ctx) {
     refError = err.message;
   }
 
-  // ── Cycle detection (using resolvedRef to catch "latest" dups) ──────────
+  // ── Cycle vs shared detection ───────────────────────────────────────────
   const normRepo  = repo.toLowerCase();
   const visitedKey = resolvedRef
     ? `${normRepo}@${resolvedRef}`
     : `${normRepo}@${ref}`; // if resolve failed, use original ref
 
-  const isCycle = visited.has(visitedKey);
+  const isCycle  = pathStack.has(visitedKey); // on the current path → real cycle
+  const isShared = visited.has(visitedKey);   // expanded elsewhere → diamond/shared dep
+  const skipExpand = isCycle || isShared;
 
-  // Mark visited before deeper recursion (even if resolve failed, prevents
-  // infinite retry of unresolvable deps)
-  if (resolvedRef) visited.add(visitedKey);
+  if (resolvedRef) {
+    pathStack.add(visitedKey);
+    visited.add(visitedKey);
+  }
 
   // ── Check depth ─────────────────────────────────────────────────────────
   const currentDepth = ctx.currentDepth || 0;
@@ -99,7 +103,7 @@ async function walkDep(dep, ctx) {
   let subDeps = [];
   let fetchError = null;
 
-  if (!isCycle && !atDepthLimit && resolvedRef && dep.source !== 'release') {
+  if (!skipExpand && !atDepthLimit && resolvedRef && dep.source !== 'release') {
     try {
       const result = await getSubDeps(dep, resolvedRef, token, noFetch, getDepsOverride);
       for (const subDep of result.deps) {
@@ -115,6 +119,8 @@ async function walkDep(dep, ctx) {
     }
   }
 
+  if (resolvedRef) pathStack.delete(visitedKey);
+
   // ── Build node ──────────────────────────────────────────────────────────
   return {
     repo,
@@ -126,6 +132,7 @@ async function walkDep(dep, ctx) {
     from:        ctx.from,
     error:       refError || fetchError || null,
     cycle:       isCycle,
+    shared:      isShared,
     dependencies: subDeps,
   };
 }

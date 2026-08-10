@@ -7,7 +7,7 @@ const logger                = require('../logger');
 const { parseManifest }     = require('../manifest');
 const { fetchCompiler }     = require('../compiler-fetcher');
 const { compileSingle, applyPluginRule } = require('../compiler');
-const { deployBuild, deployPlugin, deployFile } = require('../deployer');
+const { deployBuild, deployPlugin, deployFile, removeDeployedFile } = require('../deployer');
 const { sendRconForPlugins } = require('../rcon');
 const { DepGraph }           = require('../dep-graph');
 const { startWatch }         = require('../watcher');
@@ -24,121 +24,157 @@ async function runWatch(options) {
   logger.info('Running initial build...');
   await runBuild({ manifest: manifestPath, buildDir: options.buildDir });
 
-  let manifest = parseManifest(manifestPath);
   if (options.verbose) logger.setVerbose(true);
 
-  const { compilerPath, includeDir: compilerIncludeDir } = await fetchCompiler(manifest.amxmodx.version);
-  const depsIncludeRoot = path.join(buildDir, '_includes');
-  const depsDirs = fs.existsSync(depsIncludeRoot)
-    ? fs.readdirSync(depsIncludeRoot, { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => path.join(depsIncludeRoot, e.name))
-    : [];
-  const includeDirs = [
-    ...depsDirs,
-    ...(compilerIncludeDir ? [compilerIncludeDir] : []),
-  ];
+  // Mutable watch state — rebuilt after every manifest-triggered full rebuild
+  // so the compiler version, include dirs and dep graph never go stale.
+  let state = null;
 
-  const manifestDir      = path.dirname(path.resolve(manifestPath));
-  const scriptingRootDir = path.join(manifestDir, manifest.amxmodx.dir, 'scripting');
+  async function buildWatchState() {
+    const manifest = parseManifest(manifestPath);
+    const { compilerPath, includeDir: compilerIncludeDir } = await fetchCompiler(manifest.amxmodx.version);
 
-  const localIncDir = path.join(scriptingRootDir, 'include');
-  const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
-  const graphIncludeDirs = [
-    scriptingRootDir,
-    ...(fs.existsSync(localIncDir)     ? [localIncDir]     : []),
-    ...(fs.existsSync(collectedIncDir) ? [collectedIncDir] : []),
-    ...includeDirs,
-  ];
-  const depGraph = new DepGraph(graphIncludeDirs);
+    const depsIncludeRoot = path.join(buildDir, '_includes');
+    const depsDirs = fs.existsSync(depsIncludeRoot)
+      ? fs.readdirSync(depsIncludeRoot, { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => path.join(depsIncludeRoot, e.name))
+      : [];
+    const includeDirs = [
+      ...depsDirs,
+      ...(compilerIncludeDir ? [compilerIncludeDir] : []),
+    ];
 
-  const glob = require('fast-glob');
-  if (fs.existsSync(scriptingRootDir)) {
-    const smaFiles = await glob('**/*.sma', { cwd: scriptingRootDir, absolute: true });
-    for (const f of smaFiles) depGraph.parseFile(f);
-    logger.dim(`  Dep graph: ${smaFiles.length} .sma file(s) indexed`);
+    const manifestDir      = path.dirname(path.resolve(manifestPath));
+    const scriptingRootDir = path.join(manifestDir, manifest.amxmodx.dir, 'scripting');
+
+    const localIncDir = path.join(scriptingRootDir, 'include');
+    const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
+    const graphIncludeDirs = [
+      scriptingRootDir,
+      ...(fs.existsSync(localIncDir)     ? [localIncDir]     : []),
+      ...(fs.existsSync(collectedIncDir) ? [collectedIncDir] : []),
+      ...includeDirs,
+    ];
+    const depGraph = new DepGraph(graphIncludeDirs);
+
+    const glob = require('fast-glob');
+    if (fs.existsSync(scriptingRootDir)) {
+      const smaFiles = await glob('**/*.sma', { cwd: scriptingRootDir, absolute: true });
+      for (const f of smaFiles) depGraph.parseFile(f);
+      logger.dim(`  Dep graph: ${smaFiles.length} .sma file(s) indexed`);
+    }
+
+    return { manifest, compilerPath, includeDirs, scriptingRootDir, manifestDir, depGraph };
   }
 
-  if (doDeploy && manifest.deploy.path) {
-    await deployBuild(manifest, buildDir, { incremental: true });
+  state = await buildWatchState();
+
+  if (doDeploy && state.manifest.deploy.path) {
+    await deployBuild(state.manifest, buildDir, { incremental: true });
   }
+
+  // Serialize incremental work; full rebuilds flush the queue before wiping build/.
+  let queue = Promise.resolve();
+  const enqueue = (fn) => {
+    queue = queue.then(() => fn()).catch((err) => logger.error(`Watch task error: ${err.message}`));
+    return queue;
+  };
+  const flushQueue = () => queue.catch(() => {});
 
   const handlers = {
-    async onSmaChange(smaPath) {
-      depGraph.update(smaPath);
-      const smaRel = path.relative(scriptingRootDir, smaPath).split(path.sep).join('/');
-      const pluginRule = applyPluginRule(smaRel, manifest.pluginRules, manifest.globalPostfix);
-      if (!pluginRule) {
-        logger.dim(`  Skipped by plugin rule: ${smaRel}`);
-        return;
-      }
-      const amxxName = await compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir);
-      if (!amxxName) return;
-      if (doDeploy && manifest.deploy.path) {
-        deployPlugin(manifest, buildDir, amxxName);
-        const pluginName = path.basename(amxxName).replace(/\.amxx$/, '');
-        await sendRconForPlugins(manifest.deploy, [pluginName]);
-      }
+    onSmaChange(smaPath) {
+      return enqueue(async () => {
+        state.depGraph.update(smaPath);
+        const smaRel = path.relative(state.scriptingRootDir, smaPath).split(path.sep).join('/');
+        const pluginRule = applyPluginRule(smaRel, state.manifest.pluginRules, state.manifest.globalPostfix);
+        if (!pluginRule) {
+          logger.dim(`  Skipped by plugin rule: ${smaRel}`);
+          return;
+        }
+        const amxxName = await compileSingle(state.manifest, smaPath, state.compilerPath, state.includeDirs, buildDir, state.scriptingRootDir);
+        if (!amxxName) return;
+        if (doDeploy && state.manifest.deploy.path) {
+          deployPlugin(state.manifest, buildDir, amxxName);
+          const pluginName = path.basename(amxxName).replace(/\.amxx$/, '');
+          await sendRconForPlugins(state.manifest.deploy, [pluginName]);
+        }
+      });
     },
 
-    async onIncChange(incPath) {
-      depGraph.update(incPath);
-      const affected = depGraph.getSmasDependingOn(incPath);
+    onIncChange(incPath) {
+      return enqueue(async () => {
+        state.depGraph.update(incPath);
+        const affected = state.depGraph.getSmasDependingOn(incPath);
 
-      if (affected.size === 0) {
-        logger.dim(`  No plugins depend on ${path.relative(manifestDir, incPath)}, skipping`);
-        return;
-      }
+        if (affected.size === 0) {
+          logger.dim(`  No plugins depend on ${path.relative(state.manifestDir, incPath)}, skipping`);
+          return;
+        }
 
-      try {
-        const compiled = [];
-        for (const smaPath of affected) {
-          const smaRel = path.relative(scriptingRootDir, smaPath).split(path.sep).join('/');
-          const pluginRule = applyPluginRule(smaRel, manifest.pluginRules, manifest.globalPostfix);
-          if (!pluginRule) {
-            logger.dim(`  Skipped by plugin rule: ${smaRel}`);
-            continue;
+        try {
+          const compiled = [];
+          for (const smaPath of affected) {
+            const smaRel = path.relative(state.scriptingRootDir, smaPath).split(path.sep).join('/');
+            const pluginRule = applyPluginRule(smaRel, state.manifest.pluginRules, state.manifest.globalPostfix);
+            if (!pluginRule) {
+              logger.dim(`  Skipped by plugin rule: ${smaRel}`);
+              continue;
+            }
+            const amxxName = await compileSingle(state.manifest, smaPath, state.compilerPath, state.includeDirs, buildDir, state.scriptingRootDir);
+            if (amxxName) compiled.push(amxxName);
           }
-          const amxxName = await compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir);
-          if (amxxName) compiled.push(amxxName);
-        }
-        if (doDeploy && manifest.deploy.path) {
-          const pluginNames = [];
-          for (const amxxName of compiled) {
-            deployPlugin(manifest, buildDir, amxxName);
-            pluginNames.push(path.basename(amxxName).replace(/\.amxx$/, ''));
+          if (doDeploy && state.manifest.deploy.path) {
+            const pluginNames = [];
+            for (const amxxName of compiled) {
+              deployPlugin(state.manifest, buildDir, amxxName);
+              pluginNames.push(path.basename(amxxName).replace(/\.amxx$/, ''));
+            }
+            await sendRconForPlugins(state.manifest.deploy, pluginNames);
           }
-          await sendRconForPlugins(manifest.deploy, pluginNames);
+        } catch (err) {
+          logger.error(err.message);
         }
-      } catch (err) {
-        logger.error(err.message);
-      }
+      });
     },
 
     onFileChange(relPath, section) {
-      if (doDeploy && manifest.deploy.path) {
-        deployFile(manifest, buildDir, relPath, section);
-      }
+      return enqueue(() => {
+        if (doDeploy && state.manifest.deploy.path) {
+          deployFile(state.manifest, buildDir, relPath, section);
+        }
+      });
     },
 
-    async onManifestChange() {
-      try {
-        logger.info('Rebuilding...');
-        await runBuild({ manifest: manifestPath, buildDir: options.buildDir });
-        manifest = parseManifest(manifestPath);
-        if (doDeploy && manifest.deploy.path) {
-          await deployBuild(manifest, buildDir, { incremental: true });
-          const pluginNames = gatherPluginNames(buildDir);
-          await sendRconForPlugins(manifest.deploy, pluginNames);
+    onFileDelete(relPath, section) {
+      return enqueue(() => {
+        if (doDeploy && state.manifest.deploy.path) {
+          removeDeployedFile(state.manifest, buildDir, relPath, section);
         }
-        logger.warn('Note: if new watch paths were added, restart amxb watch to pick them up');
-      } catch (err) {
-        logger.error(err.message);
-      }
+      });
+    },
+
+    onManifestChange() {
+      return (async () => {
+        try {
+          await flushQueue(); // let in-flight compiles finish before build/ is wiped
+          logger.info('Rebuilding...');
+          await runBuild({ manifest: manifestPath, buildDir: options.buildDir });
+          state = await buildWatchState();
+          if (doDeploy && state.manifest.deploy.path) {
+            await deployBuild(state.manifest, buildDir, { incremental: true });
+            const pluginNames = gatherPluginNames(buildDir);
+            await sendRconForPlugins(state.manifest.deploy, pluginNames);
+          }
+          logger.warn('Note: if new watch paths were added, restart amxb watch to pick them up');
+        } catch (err) {
+          logger.error(err.message);
+        }
+      })();
     },
   };
 
-  startWatch(manifest, manifestPath, handlers);
+  startWatch(state.manifest, manifestPath, handlers);
 }
 
 function gatherPluginNames(buildDir) {

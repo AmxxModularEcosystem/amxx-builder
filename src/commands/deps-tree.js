@@ -93,6 +93,7 @@ function buildNodeTag(node) {
     parts.push(`→ ${node.resolvedRef}`);
   }
   if (node.cycle)          parts.push('⚠ cycle');
+  if (node.shared)         parts.push('(shared)');
   if (node.error)          parts.push(`✗ ${node.error}`);
   return parts.length ? `  (${parts.join(', ')})` : '';
 }

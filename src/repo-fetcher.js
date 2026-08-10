@@ -18,11 +18,39 @@ function getRepoCacheDir(repo, ref) {
 // Matches full or abbreviated commit SHAs (7-40 hex chars).
 const SHA_REF_RE = /^[0-9a-f]{7,40}$/i;
 
+const LATEST_TAG_TTL_MS = 60 * 60 * 1000; // releases update rarely
+
+function latestTagIndexPath() {
+  return path.join(getCacheDir(), '.latest-tags.json');
+}
+
+function readLatestTagIndex() {
+  try { return JSON.parse(fs.readFileSync(latestTagIndexPath(), 'utf8')); } catch { return {}; }
+}
+
+function writeLatestTagIndex(index) {
+  try {
+    fs.mkdirSync(path.dirname(latestTagIndexPath()), { recursive: true });
+    const tmp = latestTagIndexPath() + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(index));
+    fs.renameSync(tmp, latestTagIndexPath());
+  } catch (_) { /* best-effort */ }
+}
+
 /**
  * Resolves "latest" ref to the actual release tag via GitHub API.
+ * Cached per-repo (1h TTL) so repeated builds don't burn the rate limit.
  */
 async function resolveRef(repo, ref, token) {
   if (ref !== 'latest') return ref;
+
+  const key = repo.toLowerCase();
+  const index = readLatestTagIndex();
+  const cached = index[key];
+  if (cached && Date.now() - cached.at < LATEST_TAG_TTL_MS) {
+    logger.dim(`  ${repo}: latest = ${cached.tag} (cached)`);
+    return cached.tag;
+  }
 
   logger.dim(`  ${repo}: resolving latest release tag...`);
   const headers = token ? { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } : {};
@@ -33,6 +61,8 @@ async function resolveRef(repo, ref, token) {
     );
     logger.dim(`  ${repo}: latest = ${data.tag_name}`);
     logger.verbose(`  ${repo}: resolved via GET /repos/${repo}/releases/latest`);
+    index[key] = { tag: data.tag_name, at: Date.now() };
+    writeLatestTagIndex(index);
     return data.tag_name;
   } catch (err) {
     throw new Error(`Failed to resolve latest release for ${repo}: ${err.message}`);
@@ -52,7 +82,7 @@ async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
   const cacheKey    = resolvedRef || 'HEAD';
   const cacheDir    = getRepoCacheDir(repo, cacheKey);
 
-  if (fs.existsSync(path.join(cacheDir, '.git'))) {
+  if (await isCacheValid(cacheDir, resolvedRef)) {
     logger.dim(`  ${repo} @ ${cacheKey} (cached)`);
     return cacheDir;
   }
@@ -75,20 +105,36 @@ async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
   // branch and fetch/checkout the SHA explicitly afterwards.
   if (resolvedRef && !isShaRef) cloneArgs.push('--branch', resolvedRef);
 
-  fs.mkdirSync(cacheDir, { recursive: true });
+  // Clone into a temp dir and atomically rename into place: a concurrent build
+  // cloning the same repo never sees — or deletes — a half-written clone.
+  const tmpDir = `${cacheDir}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  fs.mkdirSync(path.dirname(tmpDir), { recursive: true });
 
   try {
     const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' };
     const git = simpleGit({ env });
-    await git.clone(cloneUrl, cacheDir, cloneArgs);
+    await git.clone(cloneUrl, tmpDir, cloneArgs);
     if (isShaRef) {
-      const shaGit = simpleGit({ baseDir: cacheDir, env });
+      const shaGit = simpleGit({ baseDir: tmpDir, env });
       await shaGit.fetch(['--depth=1', 'origin', resolvedRef]);
       await shaGit.checkout(resolvedRef);
     }
+    if (token && !ssh) await stripTokenFromRemote(tmpDir, repo);
+
+    try {
+      fs.renameSync(tmpDir, cacheDir);
+    } catch {
+      // cacheDir already exists — a concurrent clone (valid) or stale junk.
+      if (await isCacheValid(cacheDir, resolvedRef)) {
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+      } else {
+        try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (_) {}
+        fs.renameSync(tmpDir, cacheDir);
+      }
+    }
   } catch (err) {
-    try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (_) {}
-    const msg = err.message || '';
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    const msg = redactToken(err.message || '', token);
     let hint = '';
     if (/repository not found|does not exist/i.test(msg)) {
       hint = '\n  → Check the repo name, or set github.token_env if the repo is private';
@@ -102,6 +148,31 @@ async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
 
   logger.info(`Cloning ${repo} @ ${cacheKey} ... done`);
   return cacheDir;
+}
+
+/**
+ * True when the clone at cacheDir exists and actually contains the requested ref
+ * (guards against partial clones left by a crashed process).
+ */
+async function isCacheValid(cacheDir, ref) {
+  if (!fs.existsSync(path.join(cacheDir, '.git'))) return false;
+  try {
+    const verifyRef = ref && ref !== 'HEAD' ? `${ref}^{commit}` : 'HEAD';
+    await simpleGit({ baseDir: cacheDir }).revparse(['--verify', verifyRef]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The token is only needed during the clone; drop it from .git/config so it is
+// not persisted on disk.
+async function stripTokenFromRemote(cloneDir, repo) {
+  await simpleGit({ baseDir: cloneDir }).remote(['set-url', 'origin', `https://github.com/${repo}.git`]);
+}
+
+function redactToken(msg, token) {
+  return token ? String(msg).split(token).join('***') : String(msg);
 }
 
 function buildCloneUrl(repo, token, ssh) {

@@ -116,6 +116,28 @@ function deployFile(manifest, buildDir, relPath, section) {
   logger.verbose(`  → ${dest}`);
 }
 
+/**
+ * Removes a deployed file that was deleted locally (watch mode).
+ * relPath is relative to the section root. Honours deploy.exclude.
+ */
+function removeDeployedFile(manifest, buildDir, relPath, section) {
+  if (!manifest.deploy.path) return;
+
+  const { amxmodxDest, assetsDest, deployRoot } = resolveDeployDirs(manifest);
+
+  const destBase = section === 'assets' ? assetsDest : amxmodxDest;
+  const dest     = path.join(destBase, relPath);
+
+  if (isExcluded(dest, deployRoot, manifest.deploy.exclude || [])) {
+    logger.verbose(`  skip delete (excluded): ${relPath}`);
+    return;
+  }
+
+  if (!fs.existsSync(dest)) return;
+  fs.rmSync(dest, { force: true });
+  logger.success(`Removed: ${relPath}`);
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function isExcluded(absDestPath, deployRoot, patterns) {
@@ -172,4 +194,4 @@ function assertDeployPath(manifest) {
   }
 }
 
-module.exports = { deployBuild, deployPlugin, deployFile };
+module.exports = { deployBuild, deployPlugin, deployFile, removeDeployedFile };

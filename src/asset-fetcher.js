@@ -115,10 +115,15 @@ async function resolveUrlSource(source, manifestDir, buildDir, noFetch) {
     if (isArchive(filename, contentType)) {
       extractArchive(data, filename, cacheDir);
     } else {
-      fs.writeFileSync(path.join(cacheDir, filename), data);
+      const filePath = path.join(cacheDir, filename);
+      const part     = filePath + '.part';
+      fs.writeFileSync(part, data);
+      fs.renameSync(part, filePath);
     }
 
-    fs.writeFileSync(sentinel, JSON.stringify({ url: source.url, cached_at: new Date().toISOString() }));
+    const sentinelTmp = sentinel + '.tmp';
+    fs.writeFileSync(sentinelTmp, JSON.stringify({ url: source.url, cached_at: new Date().toISOString() }));
+    fs.renameSync(sentinelTmp, sentinel);
     logger.info(`Assets: ${filename} ready`);
     return cacheDir;
   } catch (err) {
@@ -152,7 +157,8 @@ function isArchive(filename, contentType) {
 }
 
 function extractArchive(data, filename, destDir) {
-  if (/\.zip$/i.test(filename)) {
+  const isZip = /\.zip$/i.test(filename) || isZipMagic(data);
+  if (isZip) {
     new AdmZip(data).extractAllTo(destDir, true);
     return;
   }
@@ -163,6 +169,12 @@ function extractArchive(data, filename, destDir) {
   } finally {
     fs.rmSync(tmpFile, { force: true });
   }
+}
+
+// ZIP archives start with "PK" — filename extensions are unreliable for
+// CDN/redirect URLs, so sniff the actual bytes when the name is inconclusive.
+function isZipMagic(buf) {
+  return buf.length >= 2 && buf[0] === 0x50 && buf[1] === 0x4b;
 }
 
 // ─── map application ──────────────────────────────────────────────────────────

@@ -524,17 +524,34 @@ function parseIncludeDirective(raw) {
 }
 
 /**
- * Case-insensitive file search inside a directory.
+ * Case-insensitive file search inside a directory, walking nested path segments
+ * (readdirSync only lists one level, so "SubDir/File.inc" needs per-segment lookup).
  * Returns the first match (by readdir order) or null.
  */
 function findCaseInsensitive(dir, filename) {
   try {
-    const lower = filename.toLowerCase();
-    for (const entry of fs.readdirSync(dir)) {
-      if (entry.toLowerCase() === lower) return path.join(dir, entry);
+    const segments = filename.split(/[\\/]/);
+    let current = dir;
+    for (let i = 0; i < segments.length; i++) {
+      const lower = segments[i].toLowerCase();
+      if (i === segments.length - 1) {
+        for (const entry of fs.readdirSync(current)) {
+          if (entry.toLowerCase() === lower) return path.join(current, entry);
+        }
+        return null;
+      }
+      let found = null;
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        if (entry.isDirectory() && entry.name.toLowerCase() === lower) {
+          found = entry.name;
+          break;
+        }
+      }
+      if (!found) return null;
+      current = path.join(current, found);
     }
-  } catch (_) {}
-  return null;
+    return null;
+  } catch (_) { return null; }
 }
 
 /**
@@ -801,7 +818,9 @@ async function handleCompileSma(args, token, noFetch) {
 
   const outDir = path.join(os.tmpdir(), 'amxb-mcp-compile');
   fs.mkdirSync(outDir, { recursive: true });
-  const outPath = path.join(outDir, `${path.basename(smaPath, '.sma')}_${process.pid}.amxx`);
+  // Unique suffix per call: the server now dispatches requests concurrently,
+  // so two compile_sma calls for the same file must not share an output path.
+  const outPath = path.join(outDir, `${path.basename(smaPath, '.sma')}_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}.amxx`);
 
   const { status, output } = await runCompiler(compilerPath, [smaPath, `-o${outPath}`, ...includes, ...defines]);
 

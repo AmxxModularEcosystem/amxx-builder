@@ -210,7 +210,9 @@ async function getAmxmodxFullDir(version, platform) {
   await downloadFile(downloadUrl, archivePath);
   extractWithPrefix(archivePath, cacheDir, { prefix: 'addons/', destSubdir: 'addons' });
   fs.rmSync(archivePath, { force: true });
-  fs.writeFileSync(sentinel, '');
+  const sentinelTmp = sentinel + '.tmp';
+  fs.writeFileSync(sentinelTmp, '');
+  fs.renameSync(sentinelTmp, sentinel);
 
   logger.success(`Assets: amxmodx ${version} (${platform}) ready`);
   return cacheDir;
@@ -279,7 +281,9 @@ async function downloadFile(url, dest) {
     { label: filename }
   );
   if (bar) bar.stop();
-  fs.writeFileSync(dest, Buffer.from(response.data));
+  const part = dest + '.part';
+  fs.writeFileSync(part, Buffer.from(response.data));
+  fs.renameSync(part, dest);
 }
 
 function makeBinaryExecutable(destDir, platform) {

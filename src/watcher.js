@@ -70,12 +70,34 @@ function startWatch(manifest, manifestPath, handlers) {
   };
 
   watcher.on('all', (event, filePath) => {
+    const absPath = path.resolve(filePath);
+    const rel     = path.relative(manifestDir, absPath);
+
+    // Deleted file → remove it from the deploy target (Windows rename fires
+    // unlink+add, so handling unlink also covers renames of the old name).
+    if (event === 'unlink') {
+      if (absPath === path.resolve(manifestPath)) return;
+      fileHashes.delete(absPath);
+      const inAmxmodx = caseNorm(absPath).startsWith(caseNorm(localAmxmodxDir) + path.sep);
+      if (!inAmxmodx && !caseNorm(absPath).startsWith(caseNorm(localAssetsDir) + path.sep)) return;
+      const section   = inAmxmodx ? 'amxmodx' : 'assets';
+      const baseDir   = inAmxmodx ? localAmxmodxDir : localAssetsDir;
+      let relToBase   = path.relative(baseDir, absPath);
+      if (inAmxmodx && caseNorm(relToBase).endsWith('.inc')) return; // includes are never deployed
+      if (inAmxmodx && caseNorm(relToBase).endsWith('.sma')) {
+        // A deleted .sma should remove its compiled output, not the source copy.
+        relToBase = relToBase.replace(/\.sma$/i, '').replace(/^scripting\//, 'plugins/') + '.amxx';
+      }
+      if (typeof handlers.onFileDelete === 'function') {
+        logger.step(`Deleted: ${rel}`);
+        safeCall(() => handlers.onFileDelete(relToBase, section));
+      }
+      return;
+    }
+
     if (!['add', 'change'].includes(event)) return;
 
-    const absPath = path.resolve(filePath);
     if (!contentChanged(absPath)) return;
-
-    const rel = path.relative(manifestDir, absPath);
 
     // Manifest changed → full rebuild
     if (absPath === path.resolve(manifestPath)) {

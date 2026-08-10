@@ -74,14 +74,16 @@ class McpServer {
         continue;
       }
 
-      try {
-        await this._handleMessage(msg);
-      } catch (err) {
-        // Handler threw unexpectedly — respond with internal error if it has an id
-        if (msg.id != null) {
-          this._sendError(msg.id, -32603, 'Internal error: ' + err.message);
-        }
-      }
+      // Dispatch without awaiting so a long tools/call does not block
+      // ping / notifications / subsequent requests. stdout writes are queued
+      // by Node, so per-message response order is preserved.
+      Promise.resolve()
+        .then(() => this._handleMessage(msg))
+        .catch((err) => {
+          if (msg.id != null) {
+            this._sendError(msg.id, -32603, 'Internal error: ' + err.message);
+          }
+        });
     }
 
     // stdin EOF — client closed the pipe; exit so we don't hang on open stdout.

@@ -51,7 +51,8 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   }
 
   // ── Collect all .sma tasks ─────────────────────────────────────────────────
-  const tasks = [];
+  const onConflict = manifest.output.on_conflict || 'last_wins';
+  const tasksByOut = new Map(); // outPath → task (dedupe cross-source collisions)
   for (const src of sources) {
     const { scriptingDir, exclude, postfix, label, ref, isLocal = false } = src;
 
@@ -96,24 +97,39 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
 
       const baseName = path.basename(smaRel);
       const outName  = smaRel.replace(/\.sma$/, '.amxx').split(path.sep).join('/');
-      tasks.push({
+      const task = {
         label, ref, postfix: taskPostfix, skipIni, baseName,
         srcPath: path.join(scriptingDir, smaRel),
         outName,
         outPath: path.join(pluginsDir, ...outName.split('/')),
         includes,
         defines,
-      });
+      };
+      const prev = tasksByOut.get(task.outPath);
+      if (prev) {
+        if (onConflict === 'error') {
+          throw new Error(`Plugin output conflict: "${outName}" — provided by both "${prev.label}" and "${label}"`);
+        }
+        if (onConflict === 'first_wins') {
+          logger.warn(`Plugin conflict (kept "${prev.label}"): ${outName}`);
+          continue;
+        }
+        logger.warn(`Plugin conflict (overwriting "${prev.label}"): ${outName}`);
+      }
+      tasksByOut.set(task.outPath, task);
     }
   }
+
+  const tasks = [...tasksByOut.values()];
 
   if (!tasks.length) return [];
 
   logger.info(`Compiling ${tasks.length} plugin(s)...`);
 
-  // ── Run all compilations in parallel ──────────────────────────────────────
-  const settled = await Promise.allSettled(
-    tasks.map((task) => runCompile(compilerPath, task))
+  // ── Run compilations with a bounded worker pool ───────────────────────────
+  const settled = await mapLimit(tasks, 8, (task) => runCompile(compilerPath, task)
+    .then((value) => ({ status: 'fulfilled', value }))
+    .catch((reason) => ({ status: 'rejected', reason }))
   );
 
   const compiled = [];
@@ -140,6 +156,19 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   }
 
   return compiled;
+}
+
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 async function runCompile(compilerPath, task) {
