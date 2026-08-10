@@ -1,8 +1,11 @@
 'use strict';
 
 const fs   = require('fs');
+const os   = require('os');
 const path = require('path');
 const glob = require('fast-glob');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 
 const { fetchRepo, resolveRef } = require('../src/repo-fetcher');
 const { fetchReleaseDep }       = require('../src/release-fetcher');
@@ -10,11 +13,16 @@ const { fetchCompiler, fetchLatestVersion } = require('../src/compiler-fetcher')
 const { parseDepsLines, resolveManifest } = require('../src/manifest');
 const { parseManifest }         = require('../src/manifest');
 const { validateManifestFile }  = require('../src/validate');
+const { getManifestSchema }     = require('../src/schema');
 const { getCacheInfo }          = require('../src/cache-info');
 const { buildDepTree }          = require('../src/deps-tree');
 const { buildIncludeTree }      = require('../src/include-tree');
 const { listReleases, listTags } = require('../src/release-lister');
+const { buildPlanData }         = require('../src/commands/dry-run');
+const { buildIndex, searchIndex } = require('./symbol-index');
 const logger                    = require('../src/logger');
+
+const execFileP = promisify(execFile);
 
 // ─── Response formatters ───────────────────────────────────────────────────────
 
@@ -616,6 +624,354 @@ async function handleResolveInclude(args, token, noFetch) {
   return textResult(applyOutputLimit(out, args));
 }
 
+// ─── Build plan ────────────────────────────────────────────────────────────────
+
+async function handleBuildPlan(args) {
+  const manifestPath = resolveManifestPath(args?.manifest);
+  const fullPath = path.resolve(manifestPath);
+  require('dotenv').config({ path: path.join(path.dirname(fullPath), '.env'), override: true, quiet: true });
+
+  try {
+    const manifest = resolveManifest(fullPath, { set: args?.set, define: args?.define });
+    return textResult(applyOutputLimit(JSON.stringify(buildPlanData(manifest), null, 2), args));
+  } catch (err) {
+    return errorResult(err.message);
+  }
+}
+
+// ─── Repo file access ──────────────────────────────────────────────────────────
+
+async function fetchDepRoot(args, token, noFetch) {
+  let dep;
+  if (args?.dep) {
+    dep = parseDep(args.dep);
+  } else {
+    if (!args?.repo) throw new Error('Provide either "dep" or "repo"');
+    dep = { repo: args.repo, ref: args.ref || null, source: args.source || 'git', include_path: args.include_path || null, asset: args.asset ?? null };
+  }
+  if (args?.source)        dep.source = args.source;
+  if (args?.include_path)  dep.include_path = args.include_path;
+  if (args?.asset != null) dep.asset = args.asset;
+
+  if (dep.source === 'release') {
+    const dir = await fetchReleaseDep(dep, token, noFetch);
+    return { rootDir: dir, label: `${dep.repo}@${dep.ref} (release)` };
+  }
+
+  const repoDir = await fetchRepo(dep.repo, dep.ref, token, noFetch, false);
+  if (dep.include_path) {
+    const sub = path.join(repoDir, dep.include_path);
+    if (!fs.existsSync(sub)) {
+      throw new Error(`include_path "${dep.include_path}" not found in ${dep.repo}`);
+    }
+    return { rootDir: sub, label: `${dep.repo}@${dep.ref || 'default branch'}` };
+  }
+  return { rootDir: repoDir, label: `${dep.repo}@${dep.ref || 'default branch'}` };
+}
+
+async function handleListRepoFiles(args, token, noFetch) {
+  let root;
+  try {
+    root = await fetchDepRoot(args, token, noFetch);
+  } catch (err) {
+    return errorResult(err.message);
+  }
+
+  const pattern = args?.pattern || '**/*';
+  const limit   = args?.limit || 500;
+
+  let files;
+  try {
+    files = await glob(pattern, { cwd: root.rootDir, dot: false });
+  } catch (err) {
+    return errorResult(`Invalid pattern "${pattern}": ${err.message}`);
+  }
+  files.sort();
+
+  const shown   = files.slice(0, limit);
+  const skipped = files.length - shown.length;
+  const listing = shown.map((f) => `  ${f}`).join('\n')
+    + (skipped > 0 ? `\n  … [${skipped} more; pass a higher limit]` : '');
+
+  return textResult(
+    applyOutputLimit(
+      `${root.label} — ${files.length} file(s) matching "${pattern}":\n\n${listing}`,
+      args
+    )
+  );
+}
+
+async function handleReadRepoFile(args, token, noFetch) {
+  if (!args?.file) return errorResult('Missing required "file" parameter', -32602);
+
+  let root;
+  try {
+    root = await fetchDepRoot(args, token, noFetch);
+  } catch (err) {
+    return errorResult(err.message);
+  }
+
+  const target = path.resolve(root.rootDir, args.file);
+  if (target !== root.rootDir && !target.startsWith(root.rootDir + path.sep)) {
+    return errorResult(`Path escapes the repo root: "${args.file}"`);
+  }
+  if (!fs.existsSync(target) || fs.statSync(target).isDirectory()) {
+    return errorResult(`File not found in ${root.label}: ${args.file}`);
+  }
+
+  const content = readFileSafe(target);
+  const grep   = args?.grep;
+  const before = args?.before || 0;
+  const after  = args?.after || 0;
+  const displayed = grep ? grepContent(content, grep, before, after) : content;
+
+  return textResult(
+    applyOutputLimit(
+      `──── ${args.file} (${root.label}) ────\n${displayed}${displayed.endsWith('\n') ? '' : '\n'}`,
+      args
+    )
+  );
+}
+
+// ─── Single-file compilation ───────────────────────────────────────────────────
+
+async function runCompiler(cmd, args) {
+  const env = { ...process.env };
+  if (process.platform === 'linux') {
+    // amxxpc needs its .so next to the binary — same as src/compiler.js spawnAsync
+    const compilerDir = path.dirname(cmd);
+    env.LD_LIBRARY_PATH = env.LD_LIBRARY_PATH
+      ? `${compilerDir}:${env.LD_LIBRARY_PATH}`
+      : compilerDir;
+  }
+  try {
+    const { stdout, stderr } = await execFileP(cmd, args, { env, maxBuffer: 10 * 1024 * 1024 });
+    return { status: 0, output: stdout + stderr };
+  } catch (err) {
+    return { status: err.code ?? 1, output: (err.stdout || '') + (err.stderr || '') };
+  }
+}
+
+async function handleCompileSma(args, token, noFetch) {
+  if (!args?.sma_file) return errorResult('Missing required "sma_file" parameter', -32602);
+  const smaPath = path.resolve(args.sma_file);
+  if (!fs.existsSync(smaPath)) return errorResult(`File not found: ${smaPath}`);
+
+  const version = await resolveAmxmodxVersion(args, noFetch);
+  const { compilerPath, includeDir } = await fetchCompiler(version);
+
+  const includes = [`-i${path.dirname(smaPath)}`];
+  const localInc = path.join(path.dirname(smaPath), 'include');
+  if (fs.existsSync(localInc)) includes.push(`-i${localInc}`);
+  if (includeDir) includes.push(`-i${includeDir}`);
+
+  const depErrors = [];
+  const manifestPath = resolveManifestPath(args?.manifest || undefined);
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const manifest = parseManifest(manifestPath);
+      for (const dep of manifest.globalDeps) {
+        try {
+          includes.push(`-i${await fetchDepIncludeDir(dep, token, noFetch)}`);
+        } catch (err) {
+          depErrors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
+        }
+      }
+    } catch (err) {
+      depErrors.push(`manifest ${manifestPath}: ${err.message}`);
+    }
+  }
+  for (const d of args?.include_dirs || []) includes.push(`-i${path.resolve(d)}`);
+  const defines = (args?.define || []).map((d) => `-D${d}`);
+
+  const outDir = path.join(os.tmpdir(), 'amxb-mcp-compile');
+  fs.mkdirSync(outDir, { recursive: true });
+  const outPath = path.join(outDir, `${path.basename(smaPath, '.sma')}_${process.pid}.amxx`);
+
+  const { status, output } = await runCompiler(compilerPath, [smaPath, `-o${outPath}`, ...includes, ...defines]);
+
+  let msg = status === 0
+    ? `Compiled OK (amxxpc ${version}): ${path.basename(smaPath)}`
+    : `Compilation FAILED (amxxpc ${version}, exit ${status}): ${path.basename(smaPath)}`;
+
+  if (status === 0 && args?.keep_output) {
+    msg += `\n  Output: ${outPath}`;
+  } else {
+    try { fs.rmSync(outPath, { force: true }); } catch (_) {}
+  }
+
+  if (depErrors.length) {
+    msg += `\n\nNote — deps failed to resolve:\n` + depErrors.map((e) => `  ${e}`).join('\n');
+  }
+  msg += `\n\n──── compiler output ────\n${output || '(no output)'}`;
+
+  return textResult(applyOutputLimit(msg, args));
+}
+
+// ─── Asset plan ────────────────────────────────────────────────────────────────
+
+async function handleResolveAssets(args) {
+  const manifestPath = resolveManifestPath(args?.manifest);
+  const fullPath = path.resolve(manifestPath);
+
+  let manifest;
+  try {
+    manifest = parseManifest(fullPath);
+  } catch (err) {
+    return errorResult(err.message);
+  }
+
+  const manifestDir = path.dirname(fullPath);
+  const plan = manifest.assets.sources.map((s) => {
+    const entry = { type: s.type, map: s.map };
+    if (s.type === 'local') {
+      entry.source = 'assets/ (next to manifest)';
+      if (args?.list_local !== false) {
+        const dir = path.join(manifestDir, 'assets');
+        entry.files = fs.existsSync(dir)
+          ? glob.sync('**/*', { cwd: dir, dot: false }).sort()
+          : [];
+      }
+    } else if (s.type === 'amxmodx') {
+      entry.source = `amxmodx ${manifest.amxmodx.version || 'latest'} (${manifest.platform || 'host'})`;
+    } else if (s.type === 'release') {
+      entry.source = `${s.repo}@${s.ref}`;
+      entry.asset  = s.asset ?? null;
+      entry.cache  = 'global';
+    } else {
+      entry.source = s.url;
+      entry.cache  = s.cache || 'none';
+    }
+    return entry;
+  });
+
+  return textResult(
+    applyOutputLimit(JSON.stringify({ on_conflict: manifest.assets.on_conflict, sources: plan }, null, 2), args)
+  );
+}
+
+// ─── Manifest schema ───────────────────────────────────────────────────────────
+
+async function handleManifestSchema(args) {
+  const schema = getManifestSchema();
+  if (!schema) {
+    return textResult('No schema file found (schema/amxbuild.schema.json missing).');
+  }
+  return textResult(applyOutputLimit(JSON.stringify(schema, null, 2), args));
+}
+
+// ─── Symbol search ─────────────────────────────────────────────────────────────
+
+const MAX_SYMBOLS_PER_SOURCE = 100;
+
+async function handleSearchSymbol(args, token, noFetch) {
+  if (!args?.symbol) return errorResult('Missing required "symbol" parameter', -32602);
+  const scope   = args?.scope || 'all';
+  const partial = args?.partial === true;
+
+  const sources = [];
+  const errors  = [];
+
+  const addSource = async (label, dirs, pattern) => {
+    if (!dirs.length) return;
+    try {
+      const index = await buildIndex(dirs, pattern);
+      sources.push({ label, index });
+    } catch (err) {
+      errors.push(`${label}: ${err.message}`);
+    }
+  };
+
+  const manifestPath = resolveManifestPath(args?.manifest || undefined);
+  let manifest = null;
+  if (fs.existsSync(manifestPath)) {
+    try {
+      manifest = parseManifest(manifestPath);
+    } catch (err) {
+      errors.push(`manifest ${manifestPath}: ${err.message}`);
+    }
+  }
+
+  const jobs = [];
+
+  if (scope === 'all' || scope === 'stdlib') {
+    jobs.push((async () => {
+      const version = await resolveAmxmodxVersion(args, noFetch);
+      const { includeDir } = await fetchCompiler(version);
+      if (includeDir) await addSource(`stdlib ${version}`, [includeDir], '**/*.inc');
+    })());
+  }
+
+  const deps = manifest?.globalDeps?.length
+    ? manifest.globalDeps
+    : (args?.deps || []).map(parseDep);
+  if ((scope === 'all' || scope === 'deps') && deps.length) {
+    for (const dep of deps) {
+      jobs.push((async () => {
+        try {
+          const dir = await fetchDepIncludeDir(dep, token, noFetch);
+          await addSource(`${dep.repo}@${dep.ref}`, [dir], '**/*.inc');
+        } catch (err) {
+          errors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
+        }
+      })());
+    }
+  }
+
+  if (scope === 'all' || scope === 'local') {
+    const baseDir = manifest ? path.dirname(manifest._path) : process.cwd();
+    const amxDir  = manifest
+      ? path.join(path.dirname(manifest._path), manifest.amxmodx.dir)
+      : path.join(process.cwd(), 'amxmodx');
+    if (fs.existsSync(amxDir)) {
+      await addSource('local project', [amxDir]);
+    } else {
+      errors.push('local: no amxmodx/ dir found next to the manifest');
+    }
+  }
+
+  await Promise.all(jobs);
+
+  if (!sources.length) {
+    return textResult(
+      `No searchable sources.\n\nErrors:\n` +
+      (errors.length ? errors.map((e) => `  ${e}`).join('\n') : '  (none)')
+    );
+  }
+
+  const matches = sources.map((s) => ({
+    label: s.label,
+    results: searchIndex(s.index, args.symbol, { partial }),
+  }));
+
+  const total = matches.reduce((n, m) => n + m.results.length, 0);
+  if (total === 0) {
+    let msg =
+      `Symbol "${args.symbol}" not found in any source.\n\nSearched:\n` +
+      matches.map((m) => `  ${m.label}`).join('\n');
+    if (errors.length) msg += `\n\nFailed to search:\n` + errors.map((e) => `  ${e}`).join('\n');
+    return textResult(msg);
+  }
+
+  let out = `Symbol "${args.symbol}" — ${total} declaration(s)${partial ? ' (partial match)' : ''}:\n`;
+  for (const m of matches) {
+    if (!m.results.length) continue;
+    const shown = m.results.slice(0, MAX_SYMBOLS_PER_SOURCE);
+    out += `\n── ${m.label} ──\n`;
+    for (const r of shown) {
+      out += `  ${r.name}\n`;
+      for (const hit of r.matches) {
+        out += `    ${hit.file}:${hit.line}  [${hit.kind}] ${hit.signature}\n`;
+      }
+    }
+    if (m.results.length > shown.length) {
+      out += `  … [${m.results.length - shown.length} more]`;
+    }
+  }
+  if (errors.length) out += `\n\nNote — failed to search:\n` + errors.map((e) => `  ${e}`).join('\n');
+  return textResult(applyOutputLimit(out, args));
+}
+
 // ─── Dispatch ──────────────────────────────────────────────────────────────────
 
 const HANDLERS = {
@@ -630,6 +986,13 @@ const HANDLERS = {
   list_amxmodx_incs:    handleListAmxmodxIncs,
   get_amxmodx_include:  handleGetAmxmodxInclude,
   resolve_include:      handleResolveInclude,
+  build_plan:           handleBuildPlan,
+  list_repo_files:      handleListRepoFiles,
+  read_repo_file:       handleReadRepoFile,
+  compile_sma:          handleCompileSma,
+  resolve_assets:       handleResolveAssets,
+  manifest_schema:      handleManifestSchema,
+  search_symbol:        handleSearchSymbol,
 };
 
 module.exports = { HANDLERS };

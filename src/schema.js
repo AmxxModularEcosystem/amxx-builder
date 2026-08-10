@@ -47,4 +47,8 @@ function validateManifest(raw) {
   };
 }
 
-module.exports = { validateManifest };
+function getManifestSchema() {
+  return schemaCache;
+}
+
+module.exports = { validateManifest, getManifestSchema };

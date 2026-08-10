@@ -519,6 +519,310 @@ const TOOLS = [
             required: ['repo'],
           },
         },
+        {
+          name: 'build_plan',
+          title: 'Preview a full build plan (dry run)',
+          description:
+            'Resolve a manifest (defaults + set/define overrides) and return the complete build plan ' +
+            'without executing anything: compiler + version, repos with refs, deps, asset sources, ' +
+            'output layout. Equivalent to "amxb build --dry-run" but as structured JSON.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              manifest: {
+                type: 'string',
+                description: 'Path to amxbuild.yml. Auto-detected in cwd if omitted.',
+              },
+              set: {
+                type: 'array',
+                description: 'Field overrides via dot notation, e.g. ["version=1.2", "output.pack=false"].',
+                items: { type: 'string' },
+              },
+              define: {
+                type: 'array',
+                description: 'Compiler defines, e.g. ["DEBUG"]. Appended to amxmodx.defines.',
+                items: { type: 'string' },
+              },
+            },
+          },
+        },
+        {
+          name: 'list_repo_files',
+          title: 'List files in a dependency repo or release asset',
+          description:
+            'Fetch (if not cached) a git repo or release asset and list its files — not just .inc: ' +
+            '.sma sources, configs, lang files, README, etc. Useful to understand what a plugin provides.\n\n' +
+            'Supports git deps ("owner/repo@ref" via `dep`) or explicit { repo, ref?, source?, include_path?, asset? } fields.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              dep: {
+                type: 'string',
+                description: 'Dependency string "owner/repo@ref" or "owner/repo@ref:include_path".',
+              },
+              repo: {
+                type: 'string',
+                description: 'Alternative to `dep`: repository "owner/repo" (ref optional — default branch).',
+              },
+              ref: {
+                type: 'string',
+                description: 'Ref (tag/branch/commit) when using `repo`. Default: default branch.',
+              },
+              source: {
+                type: 'string',
+                description: 'Fetch method: "git" or "release".',
+                default: 'git',
+                enum: ['git', 'release'],
+              },
+              include_path: {
+                type: 'string',
+                description: 'Restrict listing to this path inside the repo/asset.',
+              },
+              asset: {
+                description: 'For source=release: asset selector (glob pattern or index).',
+              },
+              pattern: {
+                type: 'string',
+                description: 'Glob pattern, e.g. "**/*.sma", "amxmodx/**", "**/*".',
+                default: '**/*',
+              },
+              limit: {
+                type: 'number',
+                description: 'Max files to list.',
+                default: 500,
+              },
+              token: {
+                type: 'string',
+                description: 'GitHub PAT override. Defaults to GITHUB_TOKEN env.',
+              },
+              no_fetch: {
+                type: 'boolean',
+                description: 'Only use cache, skip network fetch.',
+                default: false,
+              },
+            },
+          },
+        },
+        {
+          name: 'read_repo_file',
+          title: 'Read any file from a dependency repo or release asset',
+          description:
+            'Fetch (if not cached) a git repo or release asset and return the contents of a specific file — ' +
+            'any file, not just .inc: .sma sources, configs, lang files, README.\n\n' +
+            'Path traversal outside the repo root is rejected.\n\n' +
+            'Supports git deps ("owner/repo@ref" via `dep`) or explicit { repo, ref?, source?, include_path?, asset? } fields.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              dep: {
+                type: 'string',
+                description: 'Dependency string "owner/repo@ref" or "owner/repo@ref:include_path".',
+              },
+              repo: {
+                type: 'string',
+                description: 'Alternative to `dep`: repository "owner/repo" (ref optional — default branch).',
+              },
+              ref: {
+                type: 'string',
+                description: 'Ref (tag/branch/commit) when using `repo`. Default: default branch.',
+              },
+              source: {
+                type: 'string',
+                description: 'Fetch method: "git" or "release".',
+                default: 'git',
+                enum: ['git', 'release'],
+              },
+              include_path: {
+                type: 'string',
+                description: 'Treat this path inside the repo as the root for `file`.',
+              },
+              asset: {
+                description: 'For source=release: asset selector (glob pattern or index).',
+              },
+              file: {
+                type: 'string',
+                description: 'Relative path inside the repo/asset root, e.g. "amxmodx/scripting/my_plugin.sma".',
+              },
+              grep: {
+                type: 'string',
+                description: 'Optional substring (case-insensitive) to search within the file.',
+              },
+              before: {
+                type: 'number',
+                description: 'Lines of context before each grep match.',
+                default: 0,
+              },
+              after: {
+                type: 'number',
+                description: 'Lines of context after each grep match.',
+                default: 0,
+              },
+              token: {
+                type: 'string',
+                description: 'GitHub PAT override. Defaults to GITHUB_TOKEN env.',
+              },
+              no_fetch: {
+                type: 'boolean',
+                description: 'Only use cache, skip network fetch.',
+                default: false,
+              },
+            },
+            required: ['file'],
+          },
+        },
+        {
+          name: 'compile_sma',
+          title: 'Compile a single .sma to check for errors',
+          description:
+            'Run amxxpc on a local .sma file without a full build and return the compiler output ' +
+            '(status, errors, warnings). Resolves the compiler version and include dirs ' +
+            '(stdlib + manifest deps) the same way a real build would. ' +
+            'Use it to iterate on code until it compiles clean.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              sma_file: {
+                type: 'string',
+                description: 'Path to the .sma file to compile.',
+              },
+              manifest: {
+                type: 'string',
+                description: 'Path to amxbuild.yml for deps + version. Auto-detected in cwd if omitted.',
+              },
+              version: {
+                type: 'string',
+                description: 'AMX Mod X version override (default: from manifest or latest).',
+              },
+              include_dirs: {
+                type: 'array',
+                description: 'Extra include dirs passed as -i.',
+                items: { type: 'string' },
+              },
+              define: {
+                type: 'array',
+                description: 'Extra compiler defines, e.g. ["DEBUG"].',
+                items: { type: 'string' },
+              },
+              keep_output: {
+                type: 'boolean',
+                description: 'Keep the compiled .amxx and return its path.',
+                default: false,
+              },
+              token: {
+                type: 'string',
+                description: 'GitHub PAT override. Defaults to GITHUB_TOKEN env.',
+              },
+              no_fetch: {
+                type: 'boolean',
+                description: 'Only use cache, skip network fetch.',
+                default: false,
+              },
+            },
+            required: ['sma_file'],
+          },
+        },
+        {
+          name: 'resolve_assets',
+          title: 'Preview asset sources without downloading',
+          description:
+            'Show the parsed asset plan from a manifest: every source (local/url/release/amxmodx), ' +
+            'its map rules (from → to), cache type, and for local sources the files that would be included. ' +
+            'No downloads — pure preview of the assets.sources configuration.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              manifest: {
+                type: 'string',
+                description: 'Path to amxbuild.yml. Auto-detected in cwd if omitted.',
+              },
+              list_local: {
+                type: 'boolean',
+                description: 'List files from the local assets/ dir.',
+                default: true,
+              },
+            },
+          },
+        },
+        {
+          name: 'manifest_schema',
+          title: 'Get the amxbuild.yml JSON schema',
+          description:
+            'Return the full JSON schema for amxbuild.yml (all fields, types, constraints). ' +
+            'Use this when writing or editing a manifest to know exactly which fields are valid.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+          },
+        },
+        {
+          name: 'search_symbol',
+          title: 'Search for a symbol across stdlib, deps and the local project',
+          description:
+            'Search for a symbol (function, native, define, enum member, constant) across ' +
+            'all available AMXX sources: the standard library, manifest dependencies ' +
+            '(git or release), and the local project\'s own code (amxmodx/ dir: shared ' +
+            'includes + .sma files). Uses a cached index — fast repeated lookups.\n\n' +
+            'Exact match by default; set partial=true for a case-insensitive substring search.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              symbol: {
+                type: 'string',
+                description: 'Symbol name to find, e.g. "register_cvar", "MAX_PLAYERS".',
+              },
+              manifest: {
+                type: 'string',
+                description: 'Path to amxbuild.yml — provides deps scope + local project dir. Auto-detected in cwd.',
+              },
+              scope: {
+                type: 'string',
+                description: '"all" (default), "stdlib", "deps" or "local".',
+                default: 'all',
+                enum: ['all', 'stdlib', 'deps', 'local'],
+              },
+              deps: {
+                type: 'array',
+                description: 'Inline deps as alternative to manifest (strings "owner/repo@ref" or objects).',
+                items: {
+                  oneOf: [
+                    { type: 'string' },
+                    {
+                      type: 'object',
+                      properties: {
+                        repo: { type: 'string' },
+                        ref: { type: 'string' },
+                        source: { type: 'string', enum: ['git', 'release'] },
+                        include_path: { type: 'string' },
+                        asset: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+                      },
+                      required: ['repo', 'ref'],
+                    },
+                  ],
+                },
+              },
+              version: {
+                type: 'string',
+                description: 'AMX Mod X version for the stdlib scope (default: from manifest or latest).',
+              },
+              partial: {
+                type: 'boolean',
+                description: 'Case-insensitive substring search instead of exact match.',
+                default: false,
+              },
+              token: {
+                type: 'string',
+                description: 'GitHub PAT override. Defaults to GITHUB_TOKEN env.',
+              },
+              no_fetch: {
+                type: 'boolean',
+                description: 'Only use cache, skip network fetch.',
+                default: false,
+              },
+            },
+            required: ['symbol'],
+          },
+        },
+
 ];
 
 TOOLS.forEach((t) => {
