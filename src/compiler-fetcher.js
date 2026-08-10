@@ -107,7 +107,7 @@ async function fetchLatestVersion() {
   });
 
   const buildPattern = new RegExp(
-    `href="amxmodx-[\\d.]+-git(\\d+)-base-${platform}\\.\\w+"`,
+    `href="amxmodx-[\\d.]+-git(\\d+)-base-${platform}\\.[\\w.]+"`,
     'g'
   );
   const builds = [];
