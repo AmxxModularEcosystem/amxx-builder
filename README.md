@@ -424,3 +424,20 @@ MCP сервер предоставляет агенту opencode информа
 | ассеты | порядок в `sources:` + `on_conflict` |
 | версия компилятора | `amxmodx.version` → последний релиз |
 | значения манифеста | `--set` → манифест проекта → `defaults/amxbuild.defaults.yml` |
+
+## Устранение неполадок
+
+### `no such file or directory: ./amxxpc`
+
+Если файл `./amxxpc` существует и имеет права на исполнение (`chmod +x amxxpc`), но вы всё равно получаете ошибку **"No such file or directory"** при его запуске, скорее всего, в вашей 64-битной системе Linux отсутствуют 32-битные библиотеки.
+`amxxpc` — это 32-битный исполняемый файл, которому требуется поддержка 32-битной архитектуры (`i386`).
+
+#### Решение: Установите поддержку 32-битной архитектуры
+
+**Ubuntu / Debian / WSL:**
+
+```bash
+sudo dpkg --add-architecture i386
+sudo apt update
+sudo apt install libc6:i386 libstdc++6:i386
+```
