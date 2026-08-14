@@ -61,6 +61,7 @@ amxb init                           # создать amxbuild.yml в текущ�
 amxb init --deploy                  # + создать .env с заготовками для деплоя
 amxb init --plugin <name>           # + создать amxmodx/scripting/<name>.sma
 amxb init --workflow                # + создать .github/workflows/ci.yml
+amxb init --script                  # + создать build.bat / build.sh для быстрого запуска amxb build
 
 amxb clean                          # очистить build/ и кэш клонов
 amxb clean --all                    # + кэш компилятора

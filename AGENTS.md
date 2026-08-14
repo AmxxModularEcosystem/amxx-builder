@@ -21,6 +21,7 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 | `amxb deploy --build` | Build then deploy |
 | `amxb watch` | Watch local files, incremental build+deploy |
 | `amxb init` | Scaffold manifest and optional files |
+| `amxb init --script` | Also create `build.bat` / `build.sh` quick-build scripts |
 | `amxb clean` | Clean build/ and clone cache |
 | `amxb clean --all` | Also clean compiler cache |
 | `amxb cache info` | Show cache contents |

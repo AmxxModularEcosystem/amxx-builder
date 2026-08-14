@@ -59,6 +59,12 @@ async function runInitInteractive(options) {
     initial: false,
   }).run();
 
+  const doScript = await new Confirm({
+    name: 'script',
+    message: 'Create build.bat / build.sh quick-build scripts?',
+    initial: true,
+  }).run();
+
   const actions = [];
   actions.push('amxbuild.yml');
   if (doWorkflow) actions.push('.github/workflows/ci.yml');
@@ -66,6 +72,7 @@ async function runInitInteractive(options) {
   if (doGitignore) actions.push('.gitignore');
   if (doDeploy) actions.push('.env');
   if (doOpencode) actions.push('.opencode/opencode.json');
+  if (doScript) actions.push('build.bat', 'build.sh');
 
   logger.info('Creating:');
   for (const a of actions) logger.dim(`  ${a}`);
@@ -99,6 +106,10 @@ async function runInitInteractive(options) {
 
   if (doOpencode) {
     writeOpencodeConfig();
+  }
+
+  if (doScript) {
+    writeBuildScripts();
   }
 }
 
@@ -134,15 +145,36 @@ function runInit(options) {
   if (options.opencode) {
     writeOpencodeConfig();
   }
+
+  if (options.script) {
+    writeBuildScripts();
+  }
+}
+
+function writeBuildScripts() {
+  const batCreated = writeIfAbsent('build.bat', renderTemplate('init-build.bat').replace(/\r?\n/g, '\r\n'));
+  const shCreated  = writeIfAbsent('build.sh',  renderTemplate('init-build.sh'));
+
+  if (shCreated && process.platform !== 'win32') {
+    try {
+      fs.chmodSync('build.sh', 0o755);
+      logger.dim('  chmod +x build.sh');
+    } catch (err) {
+      logger.warn(`Could not make build.sh executable: ${err.message}`);
+    }
+  }
+
+  return batCreated || shCreated;
 }
 
 function writeIfAbsent(filePath, content) {
   if (fs.existsSync(filePath)) {
     logger.warn(`${filePath} already exists, skipping`);
-    return;
+    return false;
   }
   fs.writeFileSync(filePath, content);
   logger.success(`Created ${filePath}`);
+  return true;
 }
 
 function writeOpencodeConfig() {
