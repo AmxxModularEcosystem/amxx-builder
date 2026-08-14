@@ -12,6 +12,12 @@ amxmodx:
 # ── GitHub ────────────────────────────────────────────────────────────────────
 # token_env: GITHUB_TOKEN   # имя env-переменной с PAT (default: GITHUB_TOKEN)
 # ssh: false                # использовать SSH вместо HTTPS (default: false)
+#
+# Несколько организаций — мапа owner → env-переменная с токеном организации.
+# Резолвер: github.tokens[owner] → token_env → GITHUB_TOKEN → анонимно.
+# tokens:
+#   AmxxModularEcosystem: GITHUB_TOKEN_ORGA
+#   Next21Team:            GITHUB_TOKEN_ORGB
 
 # ── Глобальные зависимости ────────────────────────────────────────────────────
 # Выигрывают над DEPS_LIST из любого репо

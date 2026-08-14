@@ -2,7 +2,7 @@ const fs   = require('fs');
 const path = require('path');
 const glob = require('fast-glob');
 const logger = require('./logger');
-const { parseDepsLines } = require('./manifest');
+const { parseDepsLines, resolveGithubToken } = require('./manifest');
 const { fetchRepo, resolveRef } = require('./repo-fetcher');
 const { fetchReleaseDep } = require('./release-fetcher');
 
@@ -13,7 +13,6 @@ const { fetchReleaseDep } = require('./release-fetcher');
  * Priority: manifest.globalDeps > repo.deps_override > DEPS_LIST file in repo root
  */
 async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
-  const token  = manifest.github.token;
   const merged = new Map(); // normalised "owner/repo" → dep entry
 
   // Add repo-level deps first (lowest priority)
@@ -53,6 +52,7 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
   const includeDirs = [];
 
   for (const [k, dep] of merged) {
+    const token = resolveGithubToken(manifest, dep.repo);
     let srcDir;
     if (dep.source === 'release') {
       srcDir = await fetchReleaseDep(dep, token, noFetch);

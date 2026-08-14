@@ -15,6 +15,7 @@ const { getCacheDir }        = require('./cache-dir');
 const { withRetry }          = require('./retry');
 const { getAmxmodxFullDir, getHostPlatform } = require('./compiler-fetcher');
 const { getReleaseCacheDir } = require('./release-fetcher');
+const { resolveGithubToken } = require('./manifest');
 
 /**
  * Processes all asset sources defined in manifest.assets.sources in order.
@@ -69,7 +70,7 @@ async function resolveSource(source, manifest, manifestDir, buildDir, noFetch) {
     return getAmxmodxFullDir(version, platform);
   }
   if (source.type === 'release') {
-    return getReleaseCacheDir(source, manifest.github.token, noFetch);
+    return getReleaseCacheDir(source, resolveGithubToken(manifest, source.repo), noFetch);
   }
   return resolveUrlSource(source, manifestDir, buildDir, noFetch);
 }

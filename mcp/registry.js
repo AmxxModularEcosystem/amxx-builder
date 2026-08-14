@@ -854,7 +854,7 @@ async function callTool(name, args) {
       _meta: { code: -32601 },
     };
   }
-  const token   = args?.token || process.env.GITHUB_TOKEN || null;
+  const token   = args?.token || null; // explicit override; handlers fall back to env/manifest per-owner
   const noFetch = args?.no_fetch === true;
   return tool.handler(args, token, noFetch);
 }

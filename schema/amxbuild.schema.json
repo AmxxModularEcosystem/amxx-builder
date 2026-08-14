@@ -51,8 +51,18 @@
       "properties": {
         "token_env": {
           "type": "string",
-          "description": "Name of the environment variable holding the GitHub PAT (default: \"GITHUB_TOKEN\").",
-          "default": "GITHUB_TOKEN"
+          "description": "Name of the environment variable holding the GitHub PAT (default: \"GITHUB_TOKEN\")."
+        },
+        "tokens": {
+          "type": "object",
+          "description": "Map of repository owner (organization) → name of the environment variable holding that owner's GitHub PAT. Used when a repo, dependency, or release asset belongs to an organization with its own token. Falls back to token_env when the owner is not listed.",
+          "additionalProperties": { "type": "string" },
+          "examples": [
+            {
+              "AmxxModularEcosystem": "GITHUB_TOKEN_ORGA",
+              "Next21Team": "GITHUB_TOKEN_ORGB"
+            }
+          ]
         },
         "ssh": {
           "type": "boolean",

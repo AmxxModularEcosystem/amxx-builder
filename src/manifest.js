@@ -50,6 +50,7 @@ function parseManifest(manifestPath) {
   const tokenEnv = gh.token_env || 'GITHUB_TOKEN';
   const token    = process.env[tokenEnv] || null;
   const ssh      = !!gh.ssh;
+  const tokens   = parseTokenMap(gh.tokens);
 
   const globalPostfix = raw.plugins_ini_postfix != null ? String(raw.plugins_ini_postfix) : '';
   const globalAmxDir  = (raw.amxmodx && raw.amxmodx.dir) || 'amxmodx';
@@ -70,7 +71,7 @@ function parseManifest(manifestPath) {
         ? raw.amxmodx.defines.map(String)
         : [],
     },
-    github: { token_env: tokenEnv, token, ssh },
+    github: { token_env: tokenEnv, tokens, token, ssh },
     globalDeps,
     globalPostfix,
     repos,
@@ -104,6 +105,40 @@ function validateOnConflict(val) {
     throw new Error(`manifest: output.on_conflict must be one of: ${valid.join(', ')}`);
   }
   return val;
+}
+
+function parseTokenMap(map) {
+  if (map == null) return {};
+  if (typeof map !== 'object' || Array.isArray(map)) {
+    throw new Error(`manifest: github.tokens must be a map of owner → env var name`);
+  }
+  const result = {};
+  for (const [owner, envName] of Object.entries(map)) {
+    if (envName == null || String(envName).trim() === '') {
+      throw new Error(`manifest: github.tokens.${owner} must name an env variable`);
+    }
+    result[String(owner).trim()] = interpolateEnv(String(envName).trim());
+  }
+  return result;
+}
+
+/**
+ * Resolve the GitHub token for a specific "owner/repo" path.
+ *
+ * Priority:
+ *   1. github.tokens[owner]   — per-owner env var (e.g. GITHUB_TOKEN_ORGA)
+ *   2. github.token_env       — global token env var (default "GITHUB_TOKEN")
+ *   3. null                   — anonymous (public repos)
+ *
+ * @param {object} manifest — parsed manifest
+ * @param {string} repoPath — "owner/repo" or any string starting with the owner
+ * @returns {string|null}
+ */
+function resolveGithubToken(manifest, repoPath) {
+  const gh     = manifest.github || {};
+  const owner  = String(repoPath || '').split('/')[0];
+  const envName = (gh.tokens && gh.tokens[owner]) || gh.token_env || 'GITHUB_TOKEN';
+  return process.env[envName] || null;
 }
 
 function parseRepoEntry(r, globalPostfix, globalAmxDir) {
@@ -295,4 +330,4 @@ function resolveManifest(manifestPath, options = {}) {
   return manifest;
 }
 
-module.exports = { parseManifest, parseDepsLines, applyOverrides, parseOverrideValue, resolveManifest, loadDefaultsRaw, deepMerge };
+module.exports = { parseManifest, parseDepsLines, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge };

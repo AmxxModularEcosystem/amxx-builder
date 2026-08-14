@@ -10,7 +10,7 @@ const { promisify } = require('util');
 const { fetchRepo, resolveRef } = require('../src/repo-fetcher');
 const { fetchReleaseDep }       = require('../src/release-fetcher');
 const { fetchCompiler, fetchLatestVersion } = require('../src/compiler-fetcher');
-const { parseDepsLines, resolveManifest } = require('../src/manifest');
+const { parseDepsLines, resolveManifest, resolveGithubToken } = require('../src/manifest');
 const { parseManifest }         = require('../src/manifest');
 const { validateManifestFile }  = require('../src/validate');
 const { getManifestSchema }     = require('../src/schema');
@@ -38,6 +38,10 @@ function errorResult(message, code = -32603) {
     isError: true,
     _meta: code ? { code } : undefined,
   };
+}
+
+function envToken(token) {
+  return token || process.env.GITHUB_TOKEN || null;
 }
 
 // ─── Output limits ─────────────────────────────────────────────────────────────
@@ -228,6 +232,7 @@ function resolveManifestPath(explicit) {
 // ─── Tool handlers ─────────────────────────────────────────────────────────────
 
 async function handleGetDepInterface(args, token, noFetch) {
+  token = envToken(token);
   let dep;
   try {
     dep = parseDep(args?.dep || args);
@@ -272,6 +277,7 @@ async function handleGetDepInterface(args, token, noFetch) {
 }
 
 async function handleListDepIncs(args, token, noFetch) {
+  token = envToken(token);
   let dep;
   try {
     dep = parseDep(args?.dep || args);
@@ -303,10 +309,12 @@ async function handleGetDepTree(args, token, noFetch) {
   const depth = args?.depth || 0;
   let rootDeps;
   let getDepsOverride = null;
+  let tokenFor = null;
 
   if (args?.manifest) {
     const manifest = parseManifest(path.resolve(args.manifest));
     rootDeps = [];
+    tokenFor = (repo) => resolveGithubToken(manifest, repo);
 
     for (const repoConfig of manifest.repos) {
       rootDeps.push({ repo: repoConfig.repo, ref: repoConfig.ref });
@@ -333,6 +341,7 @@ async function handleGetDepTree(args, token, noFetch) {
 
   const tree = await buildDepTree(rootDeps, {
     token,
+    tokenFor,
     noFetch,
     depth,
     from: args?.manifest ? 'manifest' : 'user',
@@ -370,6 +379,7 @@ async function handleGetCacheInfo(args) {
 async function handleListReleasesTool(args, token) {
   if (!args?.repo) return errorResult('Missing required "repo" field', -32602);
   const limit = args?.limit || 10;
+  token = envToken(token);
 
   let entries;
   if (args?.tags) {
@@ -604,7 +614,7 @@ async function handleResolveInclude(args, token, noFetch) {
       const manifest = parseManifest(manifestPath);
       for (const dep of manifest.globalDeps) {
         try {
-          const depDir = await fetchDepIncludeDir(dep, token, noFetch);
+          const depDir = await fetchDepIncludeDir(dep, resolveGithubToken(manifest, dep.repo), noFetch);
           searchPaths.push({ path: depDir, label: `${dep.repo}@${dep.ref}` });
         } catch (err) {
           depErrors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
@@ -666,6 +676,7 @@ async function handleBuildPlan(args) {
 // ─── Repo file access ──────────────────────────────────────────────────────────
 
 async function fetchDepRoot(args, token, noFetch) {
+  token = envToken(token);
   let dep;
   if (args?.dep) {
     dep = parseDep(args.dep);
@@ -804,7 +815,7 @@ async function handleCompileSma(args, token, noFetch) {
       const manifest = parseManifest(manifestPath);
       for (const dep of manifest.globalDeps) {
         try {
-          includes.push(`-i${await fetchDepIncludeDir(dep, token, noFetch)}`);
+          includes.push(`-i${await fetchDepIncludeDir(dep, resolveGithubToken(manifest, dep.repo), noFetch)}`);
         } catch (err) {
           depErrors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
         }

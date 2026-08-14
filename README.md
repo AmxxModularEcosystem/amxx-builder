@@ -245,6 +245,33 @@ deploy:
 - остальные файлы → задеплоить напрямую
 - манифест → полная пересборка
 
+## Несколько GitHub токенов
+
+Если репозитории, зависимости или release-ассеты разнесены по разным организациям, а один fine-grained PAT не может охватывать несколько организаций — укажи мапу `github.tokens` (владелец → имя env-переменной с токеном этой организации):
+
+```env
+# .env рядом с amxbuild.yml
+GITHUB_TOKEN=ghp_fallback_xxx          # fallback для всех остальных
+GITHUB_TOKEN_ORGA=github_pat_111_...
+GITHUB_TOKEN_ORGB=github_pat_222_...
+```
+
+```yaml
+github:
+  token_env: GITHUB_TOKEN          # необязательно, по умолчанию GITHUB_TOKEN
+  tokens:                          # необязательно — owner → env-переменная
+    AmxxModularEcosystem: GITHUB_TOKEN_ORGA
+    Next21Team:            GITHUB_TOKEN_ORGB
+```
+
+Резолвер для каждого `owner/repo`:
+
+1. `github.tokens[owner]` — токен организации (если owner есть в мапе);
+2. `github.token_env` (по умолчанию `GITHUB_TOKEN`) — глобальный токен;
+3. иначе — анонимный доступ (публичные репо).
+
+Мапа применяется ко всему: репозитории из `repos:`, зависимости (`deps`/`DEPS_LIST`/`deps_override`), GitHub release-ассеты в `assets.sources` и команда `amxb deps-tree`. Для транзитивных зависимостей токен подбирается по владельцу автоматически.
+
 ## GitHub Actions
 
 ```yaml
@@ -355,6 +382,20 @@ jobs:
         uses: AmxxModularEcosystem/amxx-builder@v0
         with:
           github-token: ${{ secrets.MY_PAT }}
+```
+
+Несколько организаций — передай секреты через `env:` и пропиши мапу через инпут `set`:
+
+```yaml
+      - id: build
+        uses: AmxxModularEcosystem/amxx-builder@v0
+        env:
+          GITHUB_TOKEN_ORGA: ${{ secrets.TOKEN_ORGA }}
+          GITHUB_TOKEN_ORGB: ${{ secrets.TOKEN_ORGB }}
+        with:
+          set: |
+            github.tokens.AmxxModularEcosystem=GITHUB_TOKEN_ORGA
+            github.tokens.Next21Team=GITHUB_TOKEN_ORGB
 ```
 
 ## Локальная сборка (замена build.bat)

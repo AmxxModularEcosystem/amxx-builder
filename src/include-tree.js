@@ -26,7 +26,7 @@ const fs   = require('fs');
 const path = require('path');
 const glob = require('fast-glob');
 
-const { parseManifest, parseDepsLines } = require('./manifest');
+const { parseManifest, parseDepsLines, resolveGithubToken } = require('./manifest');
 const { fetchCompiler, fetchLatestVersion } = require('./compiler-fetcher');
 const { fetchRepo, resolveRef } = require('./repo-fetcher');
 const { fetchReleaseDep }   = require('./release-fetcher');
@@ -542,7 +542,7 @@ function formatNodeInfo(node, displayName) {
 async function buildIncludeTree(manifestPath, targetPath, options = {}) {
   const direction = options.direction || 'auto';
   const depth     = options.depth     || 0;
-  const token     = options.token     || process.env.GITHUB_TOKEN || null;
+  const token     = options.token     || null; // explicit override; otherwise per-owner via manifest
   const noFetch   = options.noFetch   !== undefined ? !!options.noFetch : false;
   const format    = options.format    || 'text';
 
@@ -551,6 +551,8 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
   require('./commands/shared').loadEnv(mPath); // .env tokens (GITHUB_TOKEN etc.)
   const manifest = parseManifest(mPath);
   const manifestDir = path.dirname(mPath);
+
+  const tokenFor = (repo) => token || resolveGithubToken(manifest, repo);
 
   // ── 2. Create graph ──────────────────────────────────────────────────
   const graph = new IncludeGraph();
@@ -568,9 +570,9 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
     }
     try {
       const resolvedRef = repoConfig.ref === 'latest'
-        ? await resolveRef(repoConfig.repo, repoConfig.ref, token)
+        ? await resolveRef(repoConfig.repo, repoConfig.ref, tokenFor(repoConfig.repo))
         : repoConfig.ref;
-      const repoDir = await fetchRepo(repoConfig.repo, resolvedRef, token, noFetch, manifest.github.ssh);
+      const repoDir = await fetchRepo(repoConfig.repo, resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
       const depsPath = path.join(repoDir, 'DEPS_LIST');
       if (fs.existsSync(depsPath)) {
         depEntries.push(...parseDepsLines(fs.readFileSync(depsPath, 'utf8').split(/\r?\n/)));
@@ -584,7 +586,7 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
     if (seenDeps.has(key)) continue;
     seenDeps.add(key);
     try {
-      const depDir = await fetchDepIncludeDirCached(dep, token, noFetch, manifest.github.ssh);
+      const depDir = await fetchDepIncludeDirCached(dep, tokenFor(dep.repo), noFetch, manifest.github.ssh);
       graph.includeDirs.push({ path: depDir, label: `dep: ${dep.repo}@${dep.ref}` });
     } catch (_) { /* skip unresolvable */ }
   }
@@ -633,9 +635,9 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
     let repoDir;
     try {
       const resolvedRef = repoConfig.ref === 'latest'
-        ? await resolveRef(repoConfig.repo, repoConfig.ref, token)
+        ? await resolveRef(repoConfig.repo, repoConfig.ref, tokenFor(repoConfig.repo))
         : repoConfig.ref;
-      repoDir = await fetchRepo(repoConfig.repo, resolvedRef, token, noFetch, manifest.github.ssh);
+      repoDir = await fetchRepo(repoConfig.repo, resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
     } catch (_) {
       continue; // skip repos that can't be fetched
     }

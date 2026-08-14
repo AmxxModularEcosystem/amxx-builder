@@ -3,7 +3,7 @@
 const path = require('path');
 
 const logger = require('../logger');
-const { parseManifest } = require('../manifest');
+const { parseManifest, resolveGithubToken } = require('../manifest');
 const { resolveRef } = require('../repo-fetcher');
 const { buildDepTree } = require('../deps-tree');
 const { resolveManifestPath, loadEnv } = require('./shared');
@@ -20,7 +20,7 @@ async function runDepsTree(options) {
 
   await Promise.all(manifest.repos.map(async (repoConfig) => {
     repoConfig._resolvedRef = await resolveRef(
-      repoConfig.repo, repoConfig.ref, manifest.github.token
+      repoConfig.repo, repoConfig.ref, resolveGithubToken(manifest, repoConfig.repo)
     );
   }));
 
@@ -44,7 +44,7 @@ async function runDepsTree(options) {
   };
 
   const tree = await buildDepTree(rootDeps, {
-    token:   manifest.github.token,
+    tokenFor: (repo) => resolveGithubToken(manifest, repo),
     noFetch,
     depth:   Number.isInteger(options.depth) ? options.depth : 0,
     from:    'manifest',

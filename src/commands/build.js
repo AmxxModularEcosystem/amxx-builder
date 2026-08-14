@@ -4,7 +4,7 @@ const fs   = require('fs');
 const path = require('path');
 
 const logger         = require('../logger');
-const { parseManifest, applyOverrides, resolveManifest } = require('../manifest');
+const { parseManifest, applyOverrides, resolveManifest, resolveGithubToken } = require('../manifest');
 const { fetchCompiler }  = require('../compiler-fetcher');
 const { fetchRepo, resolveRef } = require('../repo-fetcher');
 const { resolveDeps }    = require('../deps-resolver');
@@ -48,7 +48,7 @@ async function runBuild(options) {
   if (hasRepos) {
     await Promise.all(manifest.repos.map(async (repoConfig) => {
       repoConfig._resolvedRef = await resolveRef(
-        repoConfig.repo, repoConfig.ref, manifest.github.token
+        repoConfig.repo, repoConfig.ref, resolveGithubToken(manifest, repoConfig.repo)
       );
     }));
 
@@ -57,7 +57,7 @@ async function runBuild(options) {
       const key = `${repoConfig.repo}@${repoConfig._resolvedRef || 'HEAD'}`;
       if (!cloneJobs.has(key)) {
         cloneJobs.set(key,
-          fetchRepo(repoConfig.repo, repoConfig._resolvedRef, manifest.github.token, noFetch, manifest.github.ssh)
+          fetchRepo(repoConfig.repo, repoConfig._resolvedRef, resolveGithubToken(manifest, repoConfig.repo), noFetch, manifest.github.ssh)
         );
       }
     }

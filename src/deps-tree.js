@@ -28,6 +28,8 @@ const { parseDepsLines }        = require('./manifest');
  *   Each entry: { repo, ref, source?, include_path?, asset? }
  * @param {Object} [options]
  * @param {string}   [options.token]       — GitHub PAT (falls back to env)
+ * @param {Function} [options.tokenFor]    — (repo) => token; per-owner token resolver.
+ *   When provided, takes precedence over options.token for every dep node.
  * @param {boolean}  [options.noFetch]     — only use cache, skip network
  * @param {number}   [options.depth]       — max depth (0 = unlimited)
  * @param {string}   [options.from]        — origin label for root deps ('manifest')
@@ -38,12 +40,15 @@ const { parseDepsLines }        = require('./manifest');
  */
 async function buildDepTree(rootDeps, options = {}) {
   const {
-    token   = null,
-    noFetch = false,
-    depth   = 0,
+    token    = null,
+    tokenFor = null,
+    noFetch  = false,
+    depth    = 0,
     from: rootFrom = 'manifest',
     getDepsOverride = null,
   } = options;
+
+  const resolveToken = tokenFor || (() => token);
 
   const visited   = new Set(); // Set<"owner/repo@resolvedRef"> — already expanded globally
   const pathStack = new Set(); // current recursion path — a dep seen here is a TRUE cycle
@@ -51,7 +56,7 @@ async function buildDepTree(rootDeps, options = {}) {
 
   for (const dep of rootDeps) {
     const node = await walkDep(dep, {
-      token, noFetch, depth, visited, pathStack,
+      resolveToken, noFetch, depth, visited, pathStack,
       from: rootFrom,
       currentDepth: 0,
       getDepsOverride,
@@ -65,10 +70,11 @@ async function buildDepTree(rootDeps, options = {}) {
 // ─── Recursive walk ────────────────────────────────────────────────────────────
 
 async function walkDep(dep, ctx) {
-  const { token, noFetch, depth, visited, pathStack, getDepsOverride } = ctx;
+  const { resolveToken, noFetch, depth, visited, pathStack, getDepsOverride } = ctx;
 
   const repo = dep.repo;
   const ref  = dep.ref || 'HEAD';
+  const token = resolveToken(repo);
 
   // ── Resolve ref (e.g. "latest" → concrete tag) ──────────────────────────
   let resolvedRef;

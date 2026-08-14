@@ -35,11 +35,14 @@ inputs:
         version=1.2.3
         output.archive_name={name}-{version}.zip
         output.generate_ini=false
+        github.tokens.MyOrg=GITHUB_TOKEN_MYORG
     required: false
   github-token:
     description: >
       GitHub token for accessing private repositories.
       Defaults to the built-in GITHUB_TOKEN (sufficient for public repos).
+      For multiple organizations, pass secrets via the job `env:` block and
+      map them with `github.tokens.<owner>=<ENV_VAR>` in the `set` input.
     required: false
     default: ${{ github.token }}
 
