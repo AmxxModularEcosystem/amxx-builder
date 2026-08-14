@@ -10,6 +10,9 @@ amxmodx:
 
 github:
   token_env: GITHUB_TOKEN
+  # Per-owner tokens: map of owner → env var name holding that owner's PAT.
+  # Resolved as github.tokens[owner] → token_env → GITHUB_TOKEN.
+  tokens: {}
   ssh: false
 
 output:
