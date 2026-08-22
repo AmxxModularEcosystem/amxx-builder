@@ -66,7 +66,8 @@ jobs:
           git checkout --detach origin/master
 
           # Align package.json with the tag and rebuild the bundled action
-          npm version "${VERSION#v}" --no-git-tag-version
+          # (--allow-same-version: re-runs already have this version, don't fail)
+          npm version "${VERSION#v}" --no-git-tag-version --allow-same-version
           npm run bundle
 
           git add package.json package-lock.json
