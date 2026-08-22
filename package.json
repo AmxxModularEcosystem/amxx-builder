@@ -1,6 +1,6 @@
 {
   "name": "amxx-builder",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "author": {
     "name": "ArKaNeMaN"
   },
@@ -8,7 +8,18 @@
   "repository": {
     "url": "https://github.com/AmxxModularEcosystem/amxx-builder"
   },
-  "keywords": ["amxx", "amxmodx", "cs", "hlds", "builder", "amxx-builder", "amxb", "mcp", "amxbuild", "half-life"],
+  "keywords": [
+    "amxx",
+    "amxmodx",
+    "cs",
+    "hlds",
+    "builder",
+    "amxx-builder",
+    "amxb",
+    "mcp",
+    "amxbuild",
+    "half-life"
+  ],
   "main": "index.js",
   "bin": {
     "amxx-builder": "./index.js",
