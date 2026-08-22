@@ -275,7 +275,7 @@ github:
 ## GitHub Actions
 
 ```yaml
-uses: AmxxModularEcosystem/amxx-builder@v0
+uses: AmxxModularEcosystem/amxx-builder@v1
 ```
 
 ### Инпуты
@@ -334,19 +334,19 @@ jobs:
       sha:  ${{ steps.sha.outputs.SHORT }}
       name: ${{ steps.build.outputs.name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: sha
         run: echo "SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - id: build
-        uses: AmxxModularEcosystem/amxx-builder@v0
+        uses: AmxxModularEcosystem/amxx-builder@v1
         with:
           set: |
             output.pack=false
             output.dir=./artifact
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ steps.build.outputs.name }}-${{ steps.sha.outputs.SHORT }}-dev
           path: artifact/
@@ -360,7 +360,7 @@ jobs:
       github.event.action == 'published' &&
       startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: ${{ needs.build.outputs.name }}-${{ needs.build.outputs.sha }}-dev
           path: artifact/
@@ -379,7 +379,7 @@ jobs:
 
 ```yaml
       - id: build
-        uses: AmxxModularEcosystem/amxx-builder@v0
+        uses: AmxxModularEcosystem/amxx-builder@v1
         with:
           github-token: ${{ secrets.MY_PAT }}
 ```
@@ -388,7 +388,7 @@ jobs:
 
 ```yaml
       - id: build
-        uses: AmxxModularEcosystem/amxx-builder@v0
+        uses: AmxxModularEcosystem/amxx-builder@v1
         env:
           GITHUB_TOKEN_ORGA: ${{ secrets.TOKEN_ORGA }}
           GITHUB_TOKEN_ORGB: ${{ secrets.TOKEN_ORGB }}

@@ -51,5 +51,5 @@ outputs:
     description: 'Project name from the manifest (value of manifest.name)'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'dist/index.js'
