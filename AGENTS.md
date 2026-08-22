@@ -8,7 +8,7 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 - Node.js 18+, pure **CommonJS** (`require`), no ESM.
 - **Node 18+ is a deliberate, genuinely minimal floor.** Write code that works on Node 18 — do not use newer-version-only APIs (stable `node:test` features, `fetch`, `AbortSignal.timeout`, …) unless they exist in 18. If a feature truly requires a newer Node, propose raising the minimum in the PR/discussion first; right now there is no practical benefit in raising it (no feature pressure, no dependency forcing it), and a raised floor would only cut off users stuck on 18. CI tests the matrix 18/24 (floor + newest) to keep this honest.
 - Only dev dep: `@vercel/ncc` for bundling the GitHub Action.
-- Tests: `node --test test/` (built-in node:test, zero deps). No linter or type checker configured.
+- Tests: `node --test` (built-in node:test, zero deps; discovers `test/*.test.js` automatically — keep fixtures out of `test/`). No linter or type checker configured.
 
 ## Architecture: logic lives once in the core
 - All business logic MUST live in `src/` (the core) and be interface-agnostic: no `process.argv`, no `process.stdout` writes, no `commander`, no JSON-RPC/MCP schemas, no CLI rendering.

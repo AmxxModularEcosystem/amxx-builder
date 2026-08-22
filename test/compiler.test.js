@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Compiler tests against a FAKE amxxpc binary (test/fixtures/amxxpc-mock.js).
+ * Compiler tests against a FAKE amxxpc binary (fixtures/amxxpc-mock.js).
  *
  * The mock mirrors the real amxxpc CLI contract (verified against 1.10.0.5479):
  *  - accepts -o/-i/-d/-D-rejection etc. with attached values only
@@ -19,7 +19,7 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
-const FIXTURE = path.join(__dirname, 'fixtures', 'amxxpc-mock.js');
+const FIXTURE = path.join(__dirname, '..', 'fixtures', 'amxxpc-mock.js');
 
 // Windows: child_process.execFile cannot run .cmd/.bat files (needs shell:true,
 // which src/compile-utils.js does not pass). Instead of spawning the mock as a

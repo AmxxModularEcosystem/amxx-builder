@@ -12,7 +12,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "test": "node --test test/*.test.js",
+    "test": "node --test",
     "bundle": "ncc build action-entry.js -o dist --minify --license licenses.txt"
   },
   "dependencies": {
