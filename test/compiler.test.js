@@ -19,23 +19,48 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
+const FIXTURE = path.join(__dirname, 'fixtures', 'amxxpc-mock.js');
+
+// Windows: child_process.execFile cannot run .cmd/.bat files (needs shell:true,
+// which src/compile-utils.js does not pass). Instead of spawning the mock as a
+// binary, intercept require('./compile-utils') and wrap spawnCompiler so it
+// invokes the mock through node.exe — a real child process, no shebang needed.
+if (process.platform === 'win32') {
+  const Module = require('module');
+  const { execFile } = require('child_process');
+  const origLoad = Module._load;
+  Module._load = function (request, parent, isMain) {
+    const loaded = origLoad.apply(this, arguments);
+    if (request === './compile-utils') {
+      const origSpawnCompiler = loaded.spawnCompiler;
+      // Keep the missing-binary behavior (ENOENT → status 1 → null) intact:
+      // only rewrite the command when the mock actually exists.
+      loaded.spawnCompiler = (cmd, args, opts) =>
+        fs.existsSync(cmd)
+          ? origSpawnCompiler(process.execPath, [FIXTURE, ...args], opts)
+          : origSpawnCompiler(cmd, args, opts);
+    }
+    return loaded;
+  };
+}
+
 const { compilePlugins, compileSingle, applyPluginRule } = require('../src/compiler');
 const { on, off, EVENTS } = require('../src/events');
-
-const FIXTURE = path.join(__dirname, 'fixtures', 'amxxpc-mock.js');
 
 function makeTmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
 // Copies the mock into a fresh temp dir and makes it executable.
+// On Windows the file only needs to exist: the win32 spawnCompiler wrapper
+// above redirects the invocation through node.exe + FIXTURE regardless.
 // Returns { dir, compilerPath }.
 function makeMockCompiler(dir) {
   const mockDir = path.join(dir, 'mock');
   fs.mkdirSync(mockDir, { recursive: true });
   const compilerPath = path.join(mockDir, 'amxxpc');
   fs.copyFileSync(FIXTURE, compilerPath);
-  fs.chmodSync(compilerPath, 0o755);
+  if (process.platform !== 'win32') fs.chmodSync(compilerPath, 0o755);
   return { compilerPath };
 }
 

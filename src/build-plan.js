@@ -88,8 +88,8 @@ function buildPlanData(manifest, options = {}) {
     output: {
       pack: out.pack,
       target: out.pack === false
-        ? `${path.resolve(out.dir)}/${expand(out.amxmodx_path)}/`
-        : `${path.resolve(out.dir)}/${expand(out.archive_name)}`,
+        ? `${path.join(path.resolve(out.dir), expand(out.amxmodx_path))}/`
+        : path.join(path.resolve(out.dir), expand(out.archive_name)),
       amxmodx_path: expand(out.amxmodx_path) + '/',
       assets_path: out.assets_path ? expand(out.assets_path) + '/' : null,
       generate_ini: out.generate_ini,

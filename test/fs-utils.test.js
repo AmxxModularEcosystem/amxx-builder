@@ -28,6 +28,17 @@ function writeFile(dir, rel, content = '') {
   return p;
 }
 
+// Windows: fs.symlinkSync needs admin privileges or Developer Mode — probe at
+// load time so symlink tests skip cleanly instead of failing with EPERM.
+const HAS_SYMLINK = (() => {
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'amxb-lnk-'));
+    fs.symlinkSync('probe', path.join(dir, 'probe'));
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
+  } catch { return false; }
+})();
+
 // ─── copyDirContents ────────────────────────────────────────────────────────
 
 test('copyDirContents: copies nested dirs and files, creates dest dir', (t) => {
@@ -47,6 +58,7 @@ test('copyDirContents: copies nested dirs and files, creates dest dir', (t) => {
 });
 
 test('copyDirContents: preserves source mode (exec bit survives copy)', (t) => {
+  if (process.platform === 'win32') return t.skip('exec bit is not meaningful on Windows');
   const src  = makeTmpDir('amxb-mode-src-');
   const dest = path.join(makeTmpDir('amxb-mode-dest-'), 'dest');
   t.after(() => { fs.rmSync(src, { recursive: true, force: true }); fs.rmSync(dest, { recursive: true, force: true }); });
@@ -61,6 +73,7 @@ test('copyDirContents: preserves source mode (exec bit survives copy)', (t) => {
 });
 
 test('copyDirContents: recreates symlinks as symlinks', (t) => {
+  if (!HAS_SYMLINK) return t.skip('symlinks not supported (Windows without Dev Mode)');
   const src  = makeTmpDir('amxb-link-src-');
   const dest = path.join(makeTmpDir('amxb-link-dest-'), 'dest');
   t.after(() => { fs.rmSync(src, { recursive: true, force: true }); fs.rmSync(dest, { recursive: true, force: true }); });
@@ -78,6 +91,7 @@ test('copyDirContents: recreates symlinks as symlinks', (t) => {
 });
 
 test('copyDirContents: falls back to file copy when symlink cannot be created (dest exists)', (t) => {
+  if (!HAS_SYMLINK) return t.skip('symlinks not supported (Windows without Dev Mode)');
   const src  = makeTmpDir('amxb-linkfb-src-');
   const dest = makeTmpDir('amxb-linkfb-dest-');
   t.after(() => { fs.rmSync(src, { recursive: true, force: true }); fs.rmSync(dest, { recursive: true, force: true }); });
@@ -96,6 +110,7 @@ test('copyDirContents: falls back to file copy when symlink cannot be created (d
 });
 
 test('copyDirContents: dangling symlink is recreated as a dangling symlink', (t) => {
+  if (!HAS_SYMLINK) return t.skip('symlinks not supported (Windows without Dev Mode)');
   const src  = makeTmpDir('amxb-dangle-src-');
   const dest = path.join(makeTmpDir('amxb-dangle-dest-'), 'dest');
   t.after(() => { fs.rmSync(src, { recursive: true, force: true }); fs.rmSync(dest, { recursive: true, force: true }); });
@@ -132,9 +147,7 @@ test('countFiles: empty dir is 0', (t) => {
 
 // ─── safeExtractTar ─────────────────────────────────────────────────────────
 
-const TAR_OK = !spawnSync('tar', ['--version']).error;
-
-function makeTar(workDir, outName, fileNames, flags = ['-czf']) {
+const TAR_OK = !spawnSync('tar', ['--version']).error;function makeTar(workDir, outName, fileNames, flags = ['-czf']) {
   return spawnSync('tar', [...flags, outName, ...fileNames], { cwd: workDir, stdio: 'pipe' });
 }
 
@@ -163,7 +176,8 @@ test('safeExtractTar: extracts a .tar.bz2 archive', (t) => {
   writeFile(srcDir, 'bz.txt', 'bz2 content');
   const archive = path.join(srcDir, 'pack.tar.bz2');
   const res = makeTar(srcDir, 'pack.tar.bz2', ['bz.txt'], ['-cjf']);
-  assert.equal(res.status, 0, 'test setup: tar bz2 creation failed');
+  // Windows' built-in bsdtar is compiled without bzip2 — skip, don't fail.
+  if (res.status !== 0) return t.skip('tar bzip2 not supported by this tar build');
 
   safeExtractTar(archive, dest);
 

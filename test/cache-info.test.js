@@ -29,6 +29,17 @@ function writeFile(dir, rel, content = '') {
   return p;
 }
 
+// Windows: fs.symlinkSync needs admin privileges or Developer Mode — probe at
+// load time so symlink tests skip cleanly instead of failing with EPERM.
+const HAS_SYMLINK = (() => {
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'amxb-lnk-'));
+    fs.symlinkSync('probe', path.join(dir, 'probe'));
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
+  } catch { return false; }
+})();
+
 // Point AMXX_BUILDER_CACHE at a fresh temp dir; restore the original value
 // (or unset it) when the test finishes.
 function useTempCache(t, prefix) {
@@ -65,6 +76,7 @@ test('dirSize: missing dir is 0', () => {
 });
 
 test('dirSize: sums nested file sizes, skips symlinks', (t) => {
+  if (!HAS_SYMLINK) return t.skip('symlinks not supported (Windows without Dev Mode)');
   const dir = makeTmpDir('amxb-dirsize-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
