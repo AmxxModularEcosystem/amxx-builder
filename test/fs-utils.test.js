@@ -170,6 +170,25 @@ test('safeExtractTar: extracts a .tar.bz2 archive', (t) => {
   assert.equal(fs.readFileSync(path.join(dest, 'bz.txt'), 'utf8'), 'bz2 content');
 });
 
+test('safeExtractTar: stripComponents removes the top-level wrapper dir', (t) => {
+  if (!TAR_OK) t.skip('tar binary not available');
+  const srcDir = makeTmpDir('amxb-tar-strip-src-');
+  const dest   = makeTmpDir('amxb-tar-strip-dest-');
+  t.after(() => { fs.rmSync(srcDir, { recursive: true, force: true }); fs.rmSync(dest, { recursive: true, force: true }); });
+
+  // GitHub tarballs wrap everything in a single {repo}-{sha}/ dir — archive
+  // contains only "wrapper", with inner.txt inside it.
+  writeFile(srcDir, 'wrapper/inner.txt', 'inner content');
+  const archive = path.join(srcDir, 'pack.tar.gz');
+  const res = makeTar(srcDir, 'pack.tar.gz', ['wrapper']);
+  assert.equal(res.status, 0, 'test setup: tar creation failed');
+
+  safeExtractTar(archive, dest, { stripComponents: 1 });
+
+  assert.equal(fs.readFileSync(path.join(dest, 'inner.txt'), 'utf8'), 'inner content');
+  assert.equal(fs.existsSync(path.join(dest, 'wrapper')), false);
+});
+
 test('safeExtractTar: missing archive throws', (t) => {
   if (!TAR_OK) t.skip('tar binary not available');
   const dest = makeTmpDir('amxb-tar-missing-');

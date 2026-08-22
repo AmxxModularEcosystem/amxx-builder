@@ -11,15 +11,16 @@ const { dirSize, fmtSize } = require('../cache-info');
 async function runDoctor(options) {
   const ok = [];
   const warn = [];
+  const note = [];
 
   const nodeMajor = parseInt(process.version.slice(1).split('.')[0], 10);
   (nodeMajor >= 16 ? ok : warn).push(`Node.js: ${process.version.slice(1)}${nodeMajor >= 16 ? '' : ' (minimum 16 required)'}`);
 
   try {
     const gitVer = execSync('git --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
-    ok.push(`Git: ${gitVer.replace('git version ', '')}`);
+    ok.push(`Git: ${gitVer.replace('git version ', '')} (optional — only for github.ssh: true)`);
   } catch {
-    warn.push('Git: not found in PATH');
+    note.push('Git: not found (optional — only needed for github.ssh: true)');
   }
 
   try {
@@ -65,6 +66,7 @@ async function runDoctor(options) {
 
   logger.info('=== System Check ===');
   for (const msg of ok) logger.success(`  ✓ ${msg}`);
+  for (const msg of note) logger.info(`  · ${msg}`);
   for (const msg of warn) logger.warn(`  ⚠ ${msg}`);
 
   if (warn.length) {

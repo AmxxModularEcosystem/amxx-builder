@@ -59,14 +59,45 @@ step "Node.js $(node --version) OK"
 # ── 2. Resolve version ──────────────────────────────────────────────────────────
 VERSION=$(resolve_version)
 
+# ── 2.5 Resolve commit SHA ─────────────────────────────────────────────────────
+# npm installs github:...#<full 40-hex SHA> as a plain tarball without git;
+# tags/branches would need git. The /commits/{ref} endpoint dereferences
+# annotated tags, and the first "sha" key is the commit SHA.
+resolve_sha() {
+  local version="$1"
+  local api_url="https://api.github.com/repos/$REPO/commits/$version"
+  local sha
+
+  # First "sha": "<40 hex>" in the response is the commit SHA (the endpoint
+  # dereferences annotated tags). -oE extracts each match separately, so the
+  # first one (head -1) is the top-level commit — not tree/parent shas.
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    sha=$(curl -sfL -H "Authorization: Bearer $GITHUB_TOKEN" "$api_url" 2>/dev/null \
+      | grep -oE '"sha": *"[0-9a-f]{40}"' | head -1 | grep -oE '[0-9a-f]{40}' || true)
+  else
+    sha=$(curl -sfL "$api_url" 2>/dev/null \
+      | grep -oE '"sha": *"[0-9a-f]{40}"' | head -1 | grep -oE '[0-9a-f]{40}' || true)
+  fi
+  echo "$sha"
+}
+
+INSTALL_REF="$VERSION"
+SHA=$(resolve_sha "$VERSION")
+if [ -n "$SHA" ]; then
+  INSTALL_REF="$SHA"
+  step "Resolved $VERSION → $SHA (git-free install)"
+else
+  echo -e "\033[33m[amxx-builder]\033[0m WARNING: could not resolve commit SHA for $VERSION; installing github:$REPO#$VERSION (this path requires git)" >&2
+fi
+
 # ── 3. Install via npm ──────────────────────────────────────────────────────────
-step "Installing amxb from github:$REPO#${VERSION} ..."
+step "Installing amxb from github:$REPO#${INSTALL_REF} ..."
 
 if [ -n "${GITHUB_TOKEN:-}" ]; then
     export GH_TOKEN="$GITHUB_TOKEN"
 fi
 
-npm install -g "github:$REPO#${VERSION}"
+npm install -g "github:$REPO#${INSTALL_REF}"
 
 # ── 3. Verify ────────────────────────────────────────────────────────────────
 step "Verifying installation..."

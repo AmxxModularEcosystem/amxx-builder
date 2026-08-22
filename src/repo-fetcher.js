@@ -104,19 +104,21 @@ async function resolveRepoRefs(repos, tokenFor) {
 }
 
 /**
- * Ensures the repo is cloned locally. Returns the local path.
+ * Ensures the repo is available locally. Returns the local path.
  *
- * Clone URL priority:
- *   ssh=true           → git@github.com:owner/repo.git  (explicit flag)
- *   token set          → https://<token>@github.com/...  (HTTPS + auth)
- *   neither            → git@github.com:owner/repo.git  (SSH default — no token, use key)
+ * Two paths:
+ *   ssh=true  → clone via system git (simple-git): URL is always
+ *               git@github.com:owner/repo.git, no token handling.
+ *   otherwise → download the GitHub tarball (codeload) over plain HTTP and
+ *               extract it — no system git needed. A 404 with a token present
+ *               retries once through the API tarball endpoint (private repos).
  */
 async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
-  const resolvedRef = ref || null;  // null = clone default branch
+  const resolvedRef = ref || null;  // null = default branch
   const cacheKey    = resolvedRef || 'HEAD';
   const cacheDir    = getRepoCacheDir(repo, cacheKey);
 
-  if (await isCacheValid(cacheDir, resolvedRef)) {
+  if (await isCacheValid(cacheDir, resolvedRef, ssh)) {
     logger.dim(`  ${repo} @ ${cacheKey} (cached)`);
     return cacheDir;
   }
@@ -128,38 +130,25 @@ async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
     );
   }
 
-  logger.step(`Cloning ${repo} @ ${cacheKey} ...`);
+  logger.step(`Fetching ${repo} @ ${cacheKey} ...`);
 
-  const cloneUrl  = buildCloneUrl(repo, token, ssh);
-  const isShaRef  = SHA_REF_RE.test(resolvedRef || '');
-  // Windows: allow >260-char paths and keep file contents identical across OSes
-  // (core.autocrlf would rewrite .sma/.inc/.cfg to CRLF and break hashing/output).
-  const cloneArgs = ['--depth=1', '-c', 'core.longpaths=true', '-c', 'core.autocrlf=false'];
-  // Shallow clones cannot fetch arbitrary SHAs via --branch; clone the default
-  // branch and fetch/checkout the SHA explicitly afterwards.
-  if (resolvedRef && !isShaRef) cloneArgs.push('--branch', resolvedRef);
-
-  // Clone into a temp dir and atomically rename into place: a concurrent build
-  // cloning the same repo never sees — or deletes — a half-written clone.
+  // Fetch into a temp dir and atomically rename into place: a concurrent build
+  // fetching the same repo never sees — or deletes — a half-written cache.
   const tmpDir = `${cacheDir}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   fs.mkdirSync(path.dirname(tmpDir), { recursive: true });
 
   try {
-    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' };
-    const git = simpleGit({ env });
-    await git.clone(cloneUrl, tmpDir, cloneArgs);
-    if (isShaRef) {
-      const shaGit = simpleGit({ baseDir: tmpDir, env });
-      await shaGit.fetch(['--depth=1', 'origin', resolvedRef]);
-      await shaGit.checkout(resolvedRef);
+    if (ssh) {
+      await cloneViaGit(repo, resolvedRef, tmpDir);
+    } else {
+      await fetchTarball(repo, resolvedRef, token, tmpDir);
     }
-    if (token && !ssh) await stripTokenFromRemote(tmpDir, repo);
 
     try {
       fs.renameSync(tmpDir, cacheDir);
     } catch {
-      // cacheDir already exists — a concurrent clone (valid) or stale junk.
-      if (await isCacheValid(cacheDir, resolvedRef)) {
+      // cacheDir already exists — a concurrent fetch (valid) or stale junk.
+      if (await isCacheValid(cacheDir, resolvedRef, ssh)) {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
       } else {
         try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (_) {}
@@ -168,27 +157,87 @@ async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
     }
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-    const msg = redactToken(err.message || '', token);
-    let hint = '';
-    if (/repository not found|does not exist/i.test(msg)) {
-      hint = '\n  → Check the repo name, or set github.token_env if the repo is private';
-    } else if (/authentication failed|could not read/i.test(msg)) {
-      hint = '\n  → Check your GitHub token (github.token_env / GITHUB_TOKEN)';
-    } else if (/could not resolve host/i.test(msg)) {
-      hint = '\n  → Check your internet connection';
-    }
-    throw new Error(`Failed to clone ${repo}@${cacheKey}: ${msg}${hint}`);
+    throw wrapFetchError(err, repo, cacheKey, token);
   }
 
-  logger.info(`Cloning ${repo} @ ${cacheKey} ... done`);
+  logger.info(`Fetching ${repo} @ ${cacheKey} ... done`);
   return cacheDir;
 }
 
 /**
- * True when the clone at cacheDir exists and actually contains the requested ref
- * (guards against partial clones left by a crashed process).
+ * SSH path (github.ssh: true): clone via system git — kept verbatim.
+ * Shallow clone of the default branch (--branch for tags/branches); SHA refs
+ * are fetched + checked out explicitly because shallow clones cannot fetch
+ * arbitrary SHAs via --branch.
  */
-async function isCacheValid(cacheDir, ref) {
+async function cloneViaGit(repo, resolvedRef, tmpDir) {
+  const isShaRef  = SHA_REF_RE.test(resolvedRef || '');
+  // Windows: allow >260-char paths and keep file contents identical across OSes
+  // (core.autocrlf would rewrite .sma/.inc/.cfg to CRLF and break hashing/output).
+  const cloneArgs = ['--depth=1', '-c', 'core.longpaths=true', '-c', 'core.autocrlf=false'];
+  if (resolvedRef && !isShaRef) cloneArgs.push('--branch', resolvedRef);
+
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' };
+  const git = simpleGit({ env });
+  await git.clone(`git@github.com:${repo}.git`, tmpDir, cloneArgs);
+  if (isShaRef) {
+    const shaGit = simpleGit({ baseDir: tmpDir, env });
+    await shaGit.fetch(['--depth=1', 'origin', resolvedRef]);
+    await shaGit.checkout(resolvedRef);
+  }
+}
+
+/**
+ * Non-ssh path: download the repo tarball as a plain HTTP GET and extract it
+ * into tmpDir. downloadRef is passed straight to codeload — it accepts
+ * branches, tags, short/full SHAs and HEAD, so no SHA-resolution calls.
+ * A 404 with a token present means the repo is private (or the ref needs
+ * auth): retry once via the API tarball endpoint, which 302-redirects to a
+ * signed codeload URL (axios follows the redirect). The token only ever
+ * travels in request headers — never in a URL or on disk.
+ */
+async function fetchTarball(repo, resolvedRef, token, tmpDir) {
+  const downloadRef = resolvedRef || 'HEAD';
+  // Lazy require: release-fetcher imports repo-fetcher at top level.
+  const { downloadAsset } = require('./release-fetcher');
+  const { safeExtractTar } = require('./fs-utils');
+
+  // downloadAsset writes <archivePath>.part — the parent dir must exist.
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  const archivePath = path.join(tmpDir, 'repo.tar.gz');
+  try {
+    await downloadAsset(`https://codeload.github.com/${repo}/tar.gz/${downloadRef}`, archivePath, {});
+  } catch (err) {
+    if (!(err.response && err.response.status === 404 && token)) throw err;
+    await downloadAsset(
+      `https://api.github.com/repos/${repo}/tarball/${downloadRef}`,
+      archivePath,
+      { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` }
+    );
+  }
+
+  safeExtractTar(archivePath, tmpDir, { stripComponents: 1 });
+  fs.rmSync(archivePath, { force: true });
+  // Sentinel written inside tmpDir BEFORE the rename: only complete dirs
+  // ever become the cache.
+  const sentinelTmp = path.join(tmpDir, '.extracted.tmp');
+  fs.writeFileSync(sentinelTmp, downloadRef, 'utf8');
+  fs.renameSync(sentinelTmp, path.join(tmpDir, '.extracted'));
+}
+
+/**
+ * True when the fetch cache at cacheDir exists and is usable.
+ * gitBased (github.ssh: true) → a real git clone whose ref resolves
+ * (guards against partial clones left by a crashed process).
+ * Non-git → an extracted tarball (sentinel) or a legacy git clone — old
+ * caches stay valid so no mass re-download after upgrading.
+ */
+async function isCacheValid(cacheDir, ref, gitBased = false) {
+  if (!gitBased) {
+    return fs.existsSync(path.join(cacheDir, '.extracted')) ||
+           fs.existsSync(path.join(cacheDir, '.git'));
+  }
   if (!fs.existsSync(path.join(cacheDir, '.git'))) return false;
   try {
     const verifyRef = ref && ref !== 'HEAD' ? `${ref}^{commit}` : 'HEAD';
@@ -199,19 +248,26 @@ async function isCacheValid(cacheDir, ref) {
   }
 }
 
-// The token is only needed during the clone; drop it from .git/config so it is
-// not persisted on disk.
-async function stripTokenFromRemote(cloneDir, repo) {
-  await simpleGit({ baseDir: cloneDir }).remote(['set-url', 'origin', `https://github.com/${repo}.git`]);
-}
-
 function redactToken(msg, token) {
   return token ? String(msg).split(token).join('***') : String(msg);
 }
 
-function buildCloneUrl(repo, token, ssh) {
-  if (ssh || !token) return `git@github.com:${repo}.git`;
-  return `https://oauth2:${token}@github.com/${repo}.git`;
+/**
+ * Maps failures to the established hints: HTTP status when available
+ * (axios errors), otherwise treat as a network problem.
+ */
+function wrapFetchError(err, repo, cacheKey, token) {
+  const msg    = redactToken(err.message || '', token);
+  const status = err.response && err.response.status;
+  let hint;
+  if (status === 404) {
+    hint = '\n  → Check the repo name/ref, or set github.token_env if the repo is private';
+  } else if (status === 401 || status === 403) {
+    hint = '\n  → Check your GitHub token (github.token_env / GITHUB_TOKEN)';
+  } else {
+    hint = '\n  → Check your internet connection';
+  }
+  return new Error(`Failed to fetch ${repo}@${cacheKey}: ${msg}${hint}`);
 }
 
-module.exports = { fetchRepo, resolveRef, resolveRefIfLatest, resolveRepoRefs, getRepoCacheDir };
+module.exports = { fetchRepo, resolveRef, resolveRefIfLatest, resolveRepoRefs, getRepoCacheDir, isCacheValid };

@@ -66,11 +66,15 @@ function countFiles(dir) {
 /**
  * Safe tar extraction — uses spawnSync to avoid shell injection.
  * Supports .tar.gz / .tgz and .tar.bz2 archives.
+ * stripComponents > 0 drops that many leading path segments (GitHub tarballs
+ * wrap everything in a single {repo}-{sha}/ top-level dir → strip 1).
  * Throws on non-zero exit.
  */
-function safeExtractTar(archivePath, destDir) {
+function safeExtractTar(archivePath, destDir, { stripComponents = 0 } = {}) {
   const flag = archivePath.endsWith('.tar.bz2') ? 'j' : 'z';
-  const result = spawnSync('tar', ['-x' + flag, '-f', archivePath, '-C', destDir], { stdio: 'pipe' });
+  const args = ['-x' + flag, '-f', archivePath, '-C', destDir];
+  if (stripComponents > 0) args.push(`--strip-components=${stripComponents}`);
+  const result = spawnSync('tar', args, { stdio: 'pipe' });
   if (result.error) {
     throw new Error(`tar extraction failed for ${path.basename(archivePath)}: ${result.error.message}`);
   }

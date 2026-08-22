@@ -15,6 +15,7 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 - Interfaces are thin adapters that map params → core calls and render core events → their output format.
   - Current interfaces: CLI (`src/commands/`), MCP (`mcp/`), serve (JSON-RPC over stdio).
   - **serve** — started via `amxb serve`; uses `src/jsonrpc-transport.js` (generic JSON-RPC 2.0 over stdio, lives in core); methods are thin wrappers over core calls (`manifest.validate`, `build.start`, `include.resolve`, …); build progress is pushed as notifications (`build.stage` / `build.compiled` / `build.done` / `build.error`).
+  - Repo fetching (`source: git`) downloads GitHub tarballs (codeload) instead of `git clone`; system git is only required when `github.ssh: true`.
 - **Never copy a core function into an interface layer.** If two interfaces need the same behavior, it belongs in `src/` — refactor it there instead of duplicating.
 - Interfaces must not do their own resolution/parsing: reuse the core single-source-of-truth helpers instead of reimplementing them. Known ones:
   - Include-path candidate lists (`['scripting/include', 'amxmodx/scripting/include', 'include', '.']`) — single source: `src/deps-resolver.js` (`resolveIncludePath`)

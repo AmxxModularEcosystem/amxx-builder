@@ -203,4 +203,4 @@ function hasZipMagic(filePath) {
   } catch { return false; }
 }
 
-module.exports = { fetchReleaseDep, getReleaseCacheDir };
+module.exports = { fetchReleaseDep, getReleaseCacheDir, downloadAsset };
