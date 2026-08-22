@@ -71,6 +71,7 @@ amxb cache info                     # показать содержимое кэ
 Кэш хранится в `%LOCALAPPDATA%\amxx-builder` (Windows) или `~/.cache/amxx-builder` (Unix).  
 Переопределить: `AMXX_BUILDER_CACHE=/path amxb build`.
 
+
 ## Манифест
 
 Минимальный — только имя и список репо:
