@@ -90,6 +90,7 @@ This is automated in `.github/workflows/release.yml` on `v*.*.*` tags.
   - compile: `compile.single`
   - watch: `watch.start`, `watch.stop`
 - Lifecycle events are pushed as server→client notifications: `build.stage` / `build.compiled` / `build.progress` / `build.done` / `build.error`, plus `watch.changed`
+- Full API reference (methods, params, results, error codes): `docs/serve/INDEX.md`
 
 ## Cache
 - Win: `%LOCALAPPDATA%\amxx-builder`, Unix: `~/.cache/amxx-builder`
