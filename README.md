@@ -4,6 +4,20 @@ CLI-инструмент для сборки AMX Mod X серверов. Чит�
 
 ## Установка
 
+**Через npm** (Node.js 18+):
+
+```bash
+npm i -g amxx-builder
+```
+
+Команды `amxb` и `amxx-builder` станут доступны глобально. Управление версиями — стандартное для npm:
+
+```bash
+npm i -g amxx-builder@1.5.1   # конкретная версия
+npm update -g amxx-builder    # обновить
+npm rm -g amxx-builder        # удалить
+```
+
 **Windows** (PowerShell):
 
 ```powershell
