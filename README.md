@@ -10,6 +10,7 @@ CLI-инструмент для сборки AMX Mod X серверов. Чит�
 irm https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/install.ps1 | iex
 ```
 
+
 **Linux / macOS**:
 
 ```bash
