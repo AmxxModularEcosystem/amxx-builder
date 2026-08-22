@@ -34,6 +34,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -56,29 +58,58 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Base the release commit on the current master tip, not the tag.
+          # This keeps the push to master a fast-forward even if master moved
+          # after the tag was created, and makes re-runs no-ops (deterministic
+          # rebuild => empty diff => nothing to commit).
+          git fetch origin master
+          git checkout --detach origin/master
+
+          # Align package.json with the tag and rebuild the bundled action
           npm version "${VERSION#v}" --no-git-tag-version
+          npm run bundle
+
           git add package.json package-lock.json
           git add -f dist/
+
           if git diff --cached --quiet; then
-            echo "nothing changed, skipping commit"
+            echo "No changes - release $VERSION already published"
+
+            # Repair tags if a previous run died before moving them: point them
+            # at the existing release commit (the one that built this version).
+            RELEASE_COMMIT=$(git log --format=%H -1 --grep="chore: build dist for $VERSION" origin/master || true)
+            if [ -n "$RELEASE_COMMIT" ]; then
+              git tag -fa "$VERSION" -m "Release $VERSION" "$RELEASE_COMMIT"
+              git tag -fa "$MINOR"   -m "Update $MINOR" "$RELEASE_COMMIT"
+              git tag -fa "$MAJOR"   -m "Update $MAJOR" "$RELEASE_COMMIT"
+              git push origin "$VERSION" "$MINOR" "$MAJOR" --force
+            fi
           else
             git commit -m "chore: build dist for $VERSION"
+
+            # Absorb anything that landed on master while we were building
+            git fetch origin master
+            git rebase origin/master
             git push origin HEAD:refs/heads/master
+
+            # Point the exact and floating tags at this release commit
+            git tag -fa "$VERSION" -m "Release $VERSION"
+            git tag -fa "$MINOR"   -m "Update $MINOR"
+            git tag -fa "$MAJOR"   -m "Update $MAJOR"
+            git push origin "$VERSION" "$MINOR" "$MAJOR" --force
           fi
 
-          # Move exact tag to dist-included commit
-          git tag -fa "$VERSION" -m "Release $VERSION"
-
-          # Update floating minor and major tags
-          git tag -fa "$MINOR"   -m "Update $MINOR"
-          git tag -fa "$MAJOR"   -m "Update $MAJOR"
-
-          git push origin "$VERSION" "$MINOR" "$MAJOR" --force
-
       - name: Publish to npm
-        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm view "${PKG_NAME}@${PKG_VERSION}" >/dev/null 2>&1; then
+            echo "${PKG_NAME}@${PKG_VERSION} already published, skipping"
+          else
+            npm publish
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -66,7 +66,7 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 npm ci
 npm run bundle   # esbuild action-entry.js → dist/index.js + scripts/gen-licenses.js → dist/licenses.txt
 node scripts/smoke-test.js   # runs the bundled action with INPUT_* env, asserts GITHUB_OUTPUT name output
-# Commit dist/, update package.json version, push tags
+# Commit dist/, update package.json version, push tags, publish to npm (idempotent: re-runs are no-ops)
 ```
 This is automated in `.github/workflows/release.yml` on `v*.*.*` tags.
 
