@@ -44,7 +44,7 @@ jobs:
         run: npm ci
 
       - name: Build dist
-        run: npx ncc build action-entry.js -o dist --minify --license licenses.txt
+        run: npm run bundle
 
       - name: Commit dist and update tags
         run: |

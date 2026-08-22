@@ -50,5 +50,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build dist (ncc)
-        run: npx ncc build action-entry.js -o /tmp/amxb-dist-check --minify --license licenses.txt
+      - name: Build dist (esbuild)
+        run: npm run bundle
+
+      - name: Smoke-test dist/index.js
+        run: |
+          node - <<'EOF'
+          const path = require('path');
+          const os = require('os');
+          const fs = require('fs');
+          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'amxb-ci-smoke-'));
+          const outFile = path.join(tmp, 'output.txt');
+          fs.writeFileSync(outFile, ''); // runner pre-creates GITHUB_OUTPUT
+          process.env.GITHUB_OUTPUT = outFile;
+          process.env.INPUT_MANIFEST = path.join(process.cwd(), 'example', 'amxbuild.local.yml');
+          process.env.INPUT_BUILD_DIR = path.join(tmp, 'build');
+          process.env['INPUT_NO-FETCH'] = 'true';
+          process.env['INPUT_NO-ARCHIVE'] = 'true';
+          require('./dist/index.js');
+          setTimeout(() => {
+            const out = fs.readFileSync(outFile, 'utf8');
+            if (!/^name<<ghadelimiter_/m.test(out)) {
+              console.error('FAIL: name output not written to GITHUB_OUTPUT');
+              console.error(out);
+              process.exit(1);
+            }
+            console.log('OK: name output written to GITHUB_OUTPUT');
+            process.exit(0);
+          }, 20000);
+          EOF

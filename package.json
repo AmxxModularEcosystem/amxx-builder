@@ -13,10 +13,10 @@
   "scripts": {
     "start": "node index.js",
     "test": "node --test",
-    "bundle": "ncc build action-entry.js -o dist --minify --license licenses.txt"
+    "bundle": "esbuild action-entry.js --bundle --platform=node --target=node24 --format=cjs --minify --legal-comments=inline --outfile=dist/index.js && node scripts/gen-licenses.js"
   },
   "dependencies": {
-    "@actions/core": "1.11.1",
+    "@actions/core": "3.0.1",
     "adm-zip": "^0.6.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
@@ -32,9 +32,6 @@
     "js-yaml": "^4.3.1",
     "simple-git": "^3.22.0"
   },
-  "devDependencies": {
-    "@vercel/ncc": "^0.38.4"
-  },
   "files": [
     "index.js",
     "mcp/",
@@ -46,5 +43,8 @@
     "package.json",
     "README.md",
     "AGENTS.md"
-  ]
+  ],
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
 }

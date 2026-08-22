@@ -5,9 +5,9 @@ CLI + GitHub Action for building/packaging AMX Mod X servers from an `amxbuild.y
 Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesises `process.argv` → requires `index.js`.
 
 ## Tech
-- Node.js 18+, pure **CommonJS** (`require`), no ESM.
+- Node.js 18+, pure **CommonJS** (`require`), no ESM. Exception: `action-entry.js` uses `import * as core from '@actions/core'` because `@actions/core@3.x` is ESM-only — esbuild transpiles it to CJS in the bundle. Do not "fix" that import back to `require`, it fails to resolve.
 - **Node 18+ is a deliberate, genuinely minimal floor.** Write code that works on Node 18 — do not use newer-version-only APIs (stable `node:test` features, `fetch`, `AbortSignal.timeout`, …) unless they exist in 18. If a feature truly requires a newer Node, propose raising the minimum in the PR/discussion first; right now there is no practical benefit in raising it (no feature pressure, no dependency forcing it), and a raised floor would only cut off users stuck on 18. CI tests the matrix 18/24 (floor + newest) to keep this honest.
-- Only dev dep: `@vercel/ncc` for bundling the GitHub Action.
+- Only dev dep: `esbuild` for bundling the GitHub Action.
 - Tests: `node --test` (built-in node:test, zero deps; discovers `test/*.test.js` automatically — keep fixtures out of `test/`). No linter or type checker configured.
 
 ## Architecture: logic lives once in the core
@@ -64,7 +64,7 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 ## GitHub Action release flow
 ```bash
 npm ci
-npx ncc build action-entry.js -o dist --minify --license licenses.txt
+npm run bundle   # esbuild action-entry.js → dist/index.js + scripts/gen-licenses.js → dist/licenses.txt
 # Commit dist/, update package.json version, push tags
 ```
 This is automated in `.github/workflows/release.yml` on `v*.*.*` tags.

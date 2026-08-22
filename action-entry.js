@@ -1,6 +1,6 @@
 'use strict';
 
-const core = require('@actions/core');
+import * as core from '@actions/core';
 const fs   = require('fs');
 const yaml = require('js-yaml');
 
