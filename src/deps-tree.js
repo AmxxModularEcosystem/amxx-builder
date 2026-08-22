@@ -18,6 +18,7 @@ const path = require('path');
 
 const { fetchRepo, resolveRef } = require('./repo-fetcher');
 const { parseDepsLines }        = require('./manifest');
+const { normalize }             = require('./deps-resolver');
 
 // ─── Public API ────────────────────────────────────────────────────────────────
 
@@ -67,6 +68,35 @@ async function buildDepTree(rootDeps, options = {}) {
   return { dependencies: tree };
 }
 
+/**
+ * Assemble root deps for the dependency tree from a resolved manifest.
+ * Single source of truth shared by the CLI `amxb deps-tree` command and the
+ * MCP `get_dep_tree` tool.
+ *
+ * Mirrors the historical behavior of both callers:
+ *   - manifest.repos       → { ...repoConfig, _from: 'repo' } (repo/ref plus
+ *     preserved repo fields, tagged with their origin)
+ *   - manifest.globalDeps  → { ...dep, _from: 'manifest' }
+ *   - getDepsOverride(repo) → the repo config's deps_override, or null
+ *
+ * @param {object} manifest - resolved manifest (parseManifest output)
+ * @returns {{ rootDeps: Object[], getDepsOverride: (repo: string) => Object[]|null }}
+ */
+function assembleRootDeps(manifest) {
+  const rootDeps = [];
+  for (const repoConfig of manifest.repos) {
+    rootDeps.push({ ...repoConfig, _from: 'repo' });
+  }
+  for (const dep of manifest.globalDeps) {
+    rootDeps.push({ ...dep, _from: 'manifest' });
+  }
+  const getDepsOverride = (repo) => {
+    const config = manifest.repos.find((r) => r.repo === repo);
+    return config ? config.deps_override : null;
+  };
+  return { rootDeps, getDepsOverride };
+}
+
 // ─── Recursive walk ────────────────────────────────────────────────────────────
 
 async function walkDep(dep, ctx) {
@@ -87,7 +117,7 @@ async function walkDep(dep, ctx) {
   }
 
   // ── Cycle vs shared detection ───────────────────────────────────────────
-  const normRepo  = repo.toLowerCase();
+  const normRepo  = normalize(repo);
   const visitedKey = resolvedRef
     ? `${normRepo}@${resolvedRef}`
     : `${normRepo}@${ref}`; // if resolve failed, use original ref
@@ -169,4 +199,4 @@ async function getSubDeps(dep, resolvedRef, token, noFetch, getDepsOverride) {
 
 // ─── Exports ────────────────────────────────────────────────────────────────────
 
-module.exports = { buildDepTree };
+module.exports = { buildDepTree, assembleRootDeps };

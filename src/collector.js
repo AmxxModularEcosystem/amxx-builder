@@ -2,6 +2,7 @@ const fs   = require('fs');
 const path = require('path');
 const glob = require('fast-glob');
 const logger = require('./logger');
+const { repoKey } = require('./deps-resolver');
 
 /**
  * Copies everything from each repo's amxmodx_dir into build/amxmodx/,
@@ -27,7 +28,7 @@ async function collectAll(manifest, repoLocalDirs, buildDir) {
 
   // Copy from each remote repo
   for (const repoConfig of manifest.repos) {
-    const repoDir = repoLocalDirs[`${repoConfig.repo}@${repoConfig._resolvedRef || repoConfig.ref || 'HEAD'}`];
+    const repoDir = repoLocalDirs[repoKey(repoConfig)];
     const srcDir  = path.join(repoDir, repoConfig.amxmodx_dir);
 
     if (!fs.existsSync(srcDir)) {

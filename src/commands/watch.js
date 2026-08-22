@@ -4,15 +4,21 @@ const fs   = require('fs');
 const path = require('path');
 
 const logger                = require('../logger');
-const { parseManifest }     = require('../manifest');
+const { parseManifest, resolveGithubToken } = require('../manifest');
 const { fetchCompiler }     = require('../compiler-fetcher');
 const { compileSingle, applyPluginRule } = require('../compiler');
 const { deployBuild, deployPlugin, deployFile, removeDeployedFile } = require('../deployer');
 const { sendRconForPlugins } = require('../rcon');
 const { DepGraph }           = require('../dep-graph');
 const { startWatch }         = require('../watcher');
+const { fetchRepo, resolveRepoRefs } = require('../repo-fetcher');
+const { resolveDeps, repoKey } = require('../deps-resolver');
 const { resolveManifestPath, loadEnv } = require('./shared');
 const { runBuild } = require('./build');
+const { subscribeCompiledRendering } = require('./compile-renderer');
+
+// Render compiler 'compiled' events (previously direct stdout/stderr writes).
+subscribeCompiledRendering();
 
 async function runWatch(options) {
   const manifestPath = resolveManifestPath(options.manifest);
@@ -34,16 +40,31 @@ async function runWatch(options) {
     const manifest = parseManifest(manifestPath);
     const { compilerPath, includeDir: compilerIncludeDir } = await fetchCompiler(manifest.amxmodx.version);
 
-    const depsIncludeRoot = path.join(buildDir, '_includes');
-    const depsDirs = fs.existsSync(depsIncludeRoot)
-      ? fs.readdirSync(depsIncludeRoot, { withFileTypes: true })
-          .filter((e) => e.isDirectory())
-          .map((e) => path.join(depsIncludeRoot, e.name))
-      : [];
-    const includeDirs = [
-      ...depsDirs,
-      ...(compilerIncludeDir ? [compilerIncludeDir] : []),
-    ];
+    // Include dirs come from the same single-source helpers as the build
+    // pipeline (src/build-service.js): clone manifest repos (cache-only — the
+    // initial build just populated the clone cache), then resolveDeps collects
+    // dep .inc files into build/_includes/ and returns those dirs; the compiler
+    // bundle is appended last (deps before stdlib, matching the real build).
+    const repoLocalDirs = {};
+    if (manifest.repos.length > 0) {
+      await resolveRepoRefs(manifest.repos, (repo) => resolveGithubToken(manifest, repo));
+      const cloneJobs = new Map();
+      for (const repoConfig of manifest.repos) {
+        const key = repoKey(repoConfig);
+        if (!cloneJobs.has(key)) {
+          cloneJobs.set(key,
+            fetchRepo(repoConfig.repo, repoConfig._resolvedRef, resolveGithubToken(manifest, repoConfig.repo), true, manifest.github.ssh)
+          );
+        }
+      }
+      const cloned = await Promise.all(
+        [...cloneJobs.entries()].map(async ([key, p]) => ({ key, dir: await p }))
+      );
+      for (const { key, dir } of cloned) repoLocalDirs[key] = dir;
+    }
+
+    const depsIncludeDirs = await resolveDeps(manifest, repoLocalDirs, true, buildDir);
+    const includeDirs = compilerIncludeDir ? [...depsIncludeDirs, compilerIncludeDir] : depsIncludeDirs;
 
     const manifestDir      = path.dirname(path.resolve(manifestPath));
     const scriptingRootDir = path.join(manifestDir, manifest.amxmodx.dir, 'scripting');

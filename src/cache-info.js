@@ -3,6 +3,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { getCacheDir } = require('./cache-dir');
+const { formatBytes } = require('./format');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -22,10 +23,7 @@ function dirSize(dir) {
 }
 
 function fmtSize(bytes) {
-  if (bytes < 1024)        return `${bytes} B`;
-  if (bytes < 1024 ** 2)  return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 ** 3)  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  return formatBytes(bytes);
 }
 
 function parseCacheKey(key) {

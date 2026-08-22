@@ -9,7 +9,7 @@ const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
 const { safeExtractTar } = require('./fs-utils');
 const { withRetry } = require('./retry');
-const { resolveRef } = require('./repo-fetcher');
+const { resolveRefIfLatest } = require('./repo-fetcher');
 
 /**
  * Downloads a GitHub release asset and extracts it locally.
@@ -38,11 +38,13 @@ async function getReleaseCacheDir(source, token, noFetch) {
 }
 
 async function ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, label) {
-  const resolvedRef  = await resolveReleaseTag(repo, ref, token);
+  const resolvedRef  = await resolveRefIfLatest(ref, repo, token);
   // Include the asset selector in the key: the same repo@tag with different
   // assets must not share a cache dir (first-extracted content would win).
   const assetKey = assetSelector == null ? '' : '--' + String(assetSelector).replace(/[^a-zA-Z0-9._-]/g, '_');
-  const cacheKey = repo.toLowerCase().replace('/', '__') + '__' +
+  // Lazy require: deps-resolver imports us, so a top-level import would cycle.
+  const { normalize } = require('./deps-resolver');
+  const cacheKey = normalize(repo).replace('/', '__') + '__' +
     resolvedRef.replace(/[^a-zA-Z0-9._-]/g, '_') + assetKey;
   const cacheDir     = path.join(getCacheDir(), 'release-deps', cacheKey);
   const sentinelFile = path.join(cacheDir, '.extracted');
@@ -79,11 +81,6 @@ async function ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, l
 
   logger.info(`${label}: ${repo}@${resolvedRef} ready`);
   return cacheDir;
-}
-
-async function resolveReleaseTag(repo, ref, token) {
-  if (ref !== 'latest') return ref;
-  return resolveRef(repo, ref, token);
 }
 
 async function fetchRelease(repo, tag, headers) {

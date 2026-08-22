@@ -11,7 +11,9 @@ function getRepoCacheDir(repo, ref) {
   // Lowercased key: GitHub repo names are case-insensitive, but filesystems
   // (NTFS/APFS) and the repo/ref dedup may not be — normalize to avoid
   // duplicate clones on Linux and dir collisions on Windows/macOS.
-  const key = repo.toLowerCase().replace('/', '__') + '__' + String(ref).replace(/[^a-zA-Z0-9._-]/g, '_');
+  // Lazy require: deps-resolver imports us, so a top-level import would cycle.
+  const { normalize } = require('./deps-resolver');
+  const key = normalize(repo).replace('/', '__') + '__' + String(ref).replace(/[^a-zA-Z0-9._-]/g, '_');
   return path.join(getCacheDir(), 'repos', key);
 }
 
@@ -44,7 +46,9 @@ function writeLatestTagIndex(index) {
 async function resolveRef(repo, ref, token) {
   if (ref !== 'latest') return ref;
 
-  const key = repo.toLowerCase();
+  // Lazy require: deps-resolver imports us, so a top-level import would cycle.
+  const { normalize } = require('./deps-resolver');
+  const key = normalize(repo);
   const index = readLatestTagIndex();
   const cached = index[key];
   if (cached && Date.now() - cached.at < LATEST_TAG_TTL_MS) {
@@ -67,6 +71,36 @@ async function resolveRef(repo, ref, token) {
   } catch (err) {
     throw new Error(`Failed to resolve latest release for ${repo}: ${err.message}`);
   }
+}
+
+/**
+ * Resolve a ref to a concrete tag only when it is 'latest'.
+ * Single-source-of-truth for the `ref === 'latest' ? resolveRef(...) : ref`
+ * pattern shared by the build pipeline, include-tree and MCP.
+ */
+async function resolveRefIfLatest(ref, repo, token) {
+  return ref !== 'latest' ? ref : resolveRef(repo, ref, token);
+}
+
+/**
+ * Resolve the ref for every manifest repo and record it as `_resolvedRef`.
+ * Single source of the "for each repo: ref === 'latest' → resolve tag" loop
+ * shared by the build pipeline, deps-tree and include-tree. Repos with a
+ * concrete ref get `_resolvedRef = repoConfig.ref`; `latest` refs are resolved
+ * via the GitHub API (cached 1h). Rejects if any resolution fails.
+ *
+ * @param {Object[]} repos - manifest.repos entries ({ repo, ref, ... })
+ * @param {(repo: string) => string|null} tokenFor - per-repo token resolver,
+ *   e.g. (repo) => resolveGithubToken(manifest, repo)
+ */
+async function resolveRepoRefs(repos, tokenFor) {
+  await Promise.all(repos.map(async (repoConfig) => {
+    repoConfig._resolvedRef = await resolveRefIfLatest(
+      repoConfig.ref,
+      repoConfig.repo,
+      tokenFor(repoConfig.repo)
+    );
+  }));
 }
 
 /**
@@ -180,4 +214,4 @@ function buildCloneUrl(repo, token, ssh) {
   return `https://oauth2:${token}@github.com/${repo}.git`;
 }
 
-module.exports = { fetchRepo, resolveRef, getRepoCacheDir };
+module.exports = { fetchRepo, resolveRef, resolveRefIfLatest, resolveRepoRefs, getRepoCacheDir };

@@ -165,30 +165,70 @@ function makeRepo(r, globalPostfix, globalAmxDir) {
   };
 }
 
+/**
+ * Dep string shorthand: "owner/repo@ref[:include_path]".
+ * Strict — rejects internal whitespace in the repo and ref parts.
+ */
+const DEP_STRING_RE = /^([^@\s]+)@([^:\s]+)(?::(.+))?$/;
+
+/**
+ * Parse a long-form dep object (manifest `deps` entries).
+ *
+ * @param {object} line
+ * @returns {{ repo: string, ref: string, include_path: string|null, source: string, asset: * }}
+ */
+function parseDepObject(line) {
+  if (!line.repo) throw new Error(`Dep entry missing "repo": ${JSON.stringify(line)}`);
+  if (!line.ref)  throw new Error(`Dep entry missing "ref": ${JSON.stringify(line)}`);
+  const source = line.source || 'git';
+  if (!['git', 'release'].includes(source)) {
+    throw new Error(`Dep entry "source" must be "git" or "release": ${JSON.stringify(line)}`);
+  }
+  return {
+    repo:         String(line.repo).trim(),
+    ref:          String(line.ref).trim(),
+    include_path: line.include_path ? String(line.include_path).trim() : null,
+    source,
+    asset:        line.asset != null ? line.asset : null,
+  };
+}
+
+/**
+ * Strict parse of a SINGLE dep string: "owner/repo@ref[:include_path]".
+ *
+ * @param {string} str
+ * @returns {{ repo: string, ref: string, include_path: string|null, source: string, asset: null }}
+ */
+function parseDepString(str) {
+  const trimmed = String(str).trim();
+  const match = trimmed.match(DEP_STRING_RE);
+  if (!trimmed || !match) {
+    throw new Error(
+      `Invalid dep string: "${trimmed}". Expected format: "owner/repo@ref" or "owner/repo@ref:include_path"`
+    );
+  }
+  const [, repo, ref, includePath] = match;
+  return {
+    repo:         repo.trim(),
+    ref:          ref.trim(),
+    include_path: includePath ? includePath.trim() : null,
+    source:       'git',
+    asset:        null,
+  };
+}
+
 function parseDepsLines(lines) {
   const result = [];
   for (const line of lines) {
     // Long-form object (manifest only — DEPS_LIST files are always strings)
     if (line && typeof line === 'object') {
-      if (!line.repo) throw new Error(`Dep entry missing "repo": ${JSON.stringify(line)}`);
-      if (!line.ref)  throw new Error(`Dep entry missing "ref": ${JSON.stringify(line)}`);
-      const source = line.source || 'git';
-      if (!['git', 'release'].includes(source)) {
-        throw new Error(`Dep entry "source" must be "git" or "release": ${JSON.stringify(line)}`);
-      }
-      result.push({
-        repo:         String(line.repo).trim(),
-        ref:          String(line.ref).trim(),
-        include_path: line.include_path ? String(line.include_path).trim() : null,
-        source,
-        asset:        line.asset != null ? line.asset : null,
-      });
+      result.push(parseDepObject(line));
       continue;
     }
     // Short-form string: "owner/repo@ref[:include_path]"  (always git)
     const trimmed = String(line).trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
-    const match = trimmed.match(/^([^@]+)@([^:]+)(?::(.+))?$/);
+    const match = trimmed.match(DEP_STRING_RE);
     if (!match) throw new Error(`Invalid dep entry: "${trimmed}"`);
     const [, repoPath, ref, includePath] = match;
     result.push({
@@ -330,4 +370,4 @@ function resolveManifest(manifestPath, options = {}) {
   return manifest;
 }
 
-module.exports = { parseManifest, parseDepsLines, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge };
+module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge };

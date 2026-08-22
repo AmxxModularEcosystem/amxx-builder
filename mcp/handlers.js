@@ -4,25 +4,25 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 const glob = require('fast-glob');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
 
-const { fetchRepo, resolveRef } = require('../src/repo-fetcher');
+const { fetchRepo, resolveRefIfLatest } = require('../src/repo-fetcher');
 const { fetchReleaseDep }       = require('../src/release-fetcher');
-const { fetchCompiler, fetchLatestVersion } = require('../src/compiler-fetcher');
-const { parseDepsLines, resolveManifest, resolveGithubToken } = require('../src/manifest');
+const { fetchCompiler, resolveAmxmodxVersion: resolveAmxmodxVersionCore } = require('../src/compiler-fetcher');
+const { resolveManifest, resolveGithubToken, parseDepString, parseDepObject } = require('../src/manifest');
 const { parseManifest }         = require('../src/manifest');
 const { validateManifestFile }  = require('../src/validate');
 const { getManifestSchema }     = require('../src/schema');
 const { getCacheInfo }          = require('../src/cache-info');
-const { buildDepTree }          = require('../src/deps-tree');
-const { buildIncludeTree }      = require('../src/include-tree');
+const { buildDepTree, assembleRootDeps } = require('../src/deps-tree');
+const { buildIncludeTree, fetchDepIncludeDir, parseIncludeDirective, searchIncludeFile, collectIncFiles } = require('../src/include-tree');
 const { listReleases, listTags } = require('../src/release-lister');
-const { buildPlanData }         = require('../src/commands/dry-run');
+const { buildPlanData }         = require('../src/build-plan');
+const { spawnCompiler, buildIncludeArgs, buildDefineArgs } = require('../src/compile-utils');
 const { buildIndex, searchIndex } = require('./symbol-index');
+const { loadEnv }               = require('../src/env');
+const { resolveManifestPath }   = require('../src/manifest-path');
+const { formatBytes }           = require('../src/format');
 const logger                    = require('../src/logger');
-
-const execFileP = promisify(execFile);
 
 // ─── Response formatters ───────────────────────────────────────────────────────
 
@@ -40,7 +40,8 @@ function errorResult(message, code = -32603) {
   };
 }
 
-function envToken(token) {
+// Fallback token when no manifest is in scope — plain `token || GITHUB_TOKEN`.
+function fallbackToken(token) {
   return token || process.env.GITHUB_TOKEN || null;
 }
 
@@ -48,12 +49,6 @@ function envToken(token) {
 
 const DEFAULT_MAX_OUTPUT_BYTES = 200 * 1024; // 200 KB
 const DEFAULT_MAX_FILES        = 50;
-
-function formatBytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function applyOutputLimit(text, args, maxBytes = DEFAULT_MAX_OUTPUT_BYTES) {
   if (args?.full_output) return text;
@@ -79,81 +74,13 @@ function limitFiles(files, args) {
 // ─── Dep parsing helpers ───────────────────────────────────────────────────────
 
 function parseDep(raw) {
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    const match = trimmed.match(/^([^@\s]+)@([^:\s]+)(?::(.+))?$/);
-    if (!match) {
-      throw new Error(
-        `Invalid dep string: "${trimmed}". Expected format: "owner/repo@ref" or "owner/repo@ref:include_path"`
-      );
-    }
-    const [, repo, ref, includePath] = match;
-    return {
-      repo:         repo.trim(),
-      ref:          ref.trim(),
-      include_path: includePath ? includePath.trim() : null,
-      source:       'git',
-      asset:        null,
-    };
-  }
-
-  if (raw && typeof raw === 'object') {
-    if (!raw.repo || !raw.ref) {
-      throw new Error('Dep object must include both "repo" and "ref" fields');
-    }
-    const source = raw.source || 'git';
-    if (!['git', 'release'].includes(source)) {
-      throw new Error(`Dep source must be "git" or "release", got "${source}"`);
-    }
-    return {
-      repo:         String(raw.repo).trim(),
-      ref:          String(raw.ref).trim(),
-      include_path: raw.include_path ? String(raw.include_path).trim() : null,
-      source,
-      asset:        raw.asset != null ? raw.asset : null,
-    };
-  }
-
+  if (typeof raw === 'string') return parseDepString(raw);
+  if (raw && typeof raw === 'object') return parseDepObject(raw);
   throw new Error('Dep must be a string or an object');
 }
 
-async function resolveDepRef(dep, token) {
-  if (dep.ref !== 'latest') return dep.ref;
-  return resolveRef(dep.repo, dep.ref, token);
-}
-
-async function fetchDepIncludeDir(dep, token, noFetch) {
-  if (dep.source === 'release') {
-    return fetchReleaseDep(
-      { repo: dep.repo, ref: dep.ref, include_path: dep.include_path, asset: dep.asset },
-      token,
-      noFetch
-    );
-  }
-
-  const resolvedRef = dep.ref === 'latest'
-    ? await resolveRef(dep.repo, dep.ref, token)
-    : dep.ref;
-  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, false);
-  const candidates = dep.include_path
-    ? [dep.include_path]
-    : ['scripting/include', 'amxmodx/scripting/include', 'include', '.'];
-
-  for (const candidate of candidates) {
-    const full = path.join(repoDir, candidate);
-    if (fs.existsSync(full)) return full;
-  }
-
-  return repoDir;
-}
-
-async function collectIncFiles(srcDir) {
-  const entries = await glob('**/*.inc', { cwd: srcDir, dot: false });
-  entries.sort();
-  return entries.map((rel) => ({
-    rel,
-    abs: path.join(srcDir, rel),
-  }));
+function resolveDepRef(dep, token) {
+  return resolveRefIfLatest(dep.ref, dep.repo, token);
 }
 
 function readFileSafe(absPath) {
@@ -220,19 +147,10 @@ function grepContent(content, pattern, before = 0, after = 0) {
   return parts.join('\n');
 }
 
-function resolveManifestPath(explicit) {
-  if (explicit) return explicit;
-  const cwd = process.cwd();
-  if (fs.existsSync(path.join(cwd, 'amxbuild.yml')))  return path.join(cwd, 'amxbuild.yml');
-  if (fs.existsSync(path.join(cwd, 'amxbuild.yaml'))) return path.join(cwd, 'amxbuild.yaml');
-  if (fs.existsSync(path.join(cwd, 'manifest.yml')))  return path.join(cwd, 'manifest.yml');
-  return path.join(cwd, 'amxbuild.yml');
-}
-
 // ─── Tool handlers ─────────────────────────────────────────────────────────────
 
 async function handleGetDepInterface(args, token, noFetch) {
-  token = envToken(token);
+  token = fallbackToken(token);
   let dep;
   try {
     dep = parseDep(args?.dep || args);
@@ -277,7 +195,7 @@ async function handleGetDepInterface(args, token, noFetch) {
 }
 
 async function handleListDepIncs(args, token, noFetch) {
-  token = envToken(token);
+  token = fallbackToken(token);
   let dep;
   try {
     dep = parseDep(args?.dep || args);
@@ -313,20 +231,10 @@ async function handleGetDepTree(args, token, noFetch) {
 
   if (args?.manifest) {
     const manifest = parseManifest(path.resolve(args.manifest));
-    rootDeps = [];
     tokenFor = (repo) => resolveGithubToken(manifest, repo);
-
-    for (const repoConfig of manifest.repos) {
-      rootDeps.push({ repo: repoConfig.repo, ref: repoConfig.ref });
-    }
-    for (const d of manifest.globalDeps) {
-      rootDeps.push({ ...d });
-    }
-
-    getDepsOverride = (repo) => {
-      const config = manifest.repos.find(r => r.repo === repo);
-      return config ? config.deps_override : null;
-    };
+    const assembled = assembleRootDeps(manifest);
+    rootDeps = assembled.rootDeps;
+    getDepsOverride = assembled.getDepsOverride;
   } else if (args?.deps) {
     rootDeps = args.deps.map((entry) => {
       if (typeof entry === 'string') {
@@ -352,9 +260,9 @@ async function handleGetDepTree(args, token, noFetch) {
 }
 
 async function handleResolveManifestTool(args) {
-  const manifestPath = resolveManifestPath(args?.manifest);
+  const manifestPath = resolveManifestPath(args?.manifest).path;
   const fullPath = path.resolve(manifestPath);
-  require('dotenv').config({ path: path.join(path.dirname(fullPath), '.env'), override: true });
+  loadEnv(fullPath);
 
   const manifest = resolveManifest(fullPath, {
     set:    args?.set,
@@ -365,7 +273,7 @@ async function handleResolveManifestTool(args) {
 }
 
 async function handleValidateManifestTool(args) {
-  const manifestPath = resolveManifestPath(args?.manifest);
+  const manifestPath = resolveManifestPath(args?.manifest).path;
   const result = validateManifestFile(manifestPath);
   return textResult(applyOutputLimit(JSON.stringify(result, null, 2), args));
 }
@@ -379,7 +287,7 @@ async function handleGetCacheInfo(args) {
 async function handleListReleasesTool(args, token) {
   if (!args?.repo) return errorResult('Missing required "repo" field', -32602);
   const limit = args?.limit || 10;
-  token = envToken(token);
+  token = fallbackToken(token);
 
   let entries;
   if (args?.tags) {
@@ -415,24 +323,27 @@ async function handleBuildIncludeTree(args, token, noFetch) {
 // ─── AMXX standard include helpers ────────────────────────────────────────────
 
 /**
- * Resolve the AMX Mod X version to use for standard includes.
+ * Resolve the AMX Mod X version to use.
  * Priority: explicit `version` arg → manifest `amxmodx.version` → latest.
+ * The priority logic lives in core (compiler-fetcher.resolveAmxmodxVersion);
+ * this wrapper only does arg extraction + manifest discovery/parse, keeping
+ * the current error-fallback behavior (unparseable manifest → latest).
  */
 async function resolveAmxmodxVersion(args, noFetch) {
-  if (args?.version) return args.version;
+  if (args?.version) return resolveAmxmodxVersionCore(null, { version: args.version });
 
   const manifestPathStr = args?.manifest;
-  const manifestPath = resolveManifestPath(manifestPathStr || undefined);
+  const manifestPath = resolveManifestPath(manifestPathStr || undefined).path;
+  let manifest = null;
   if (fs.existsSync(manifestPath)) {
     try {
-      const manifest = parseManifest(manifestPath);
-      if (manifest.amxmodx?.version) return manifest.amxmodx.version;
+      manifest = parseManifest(manifestPath);
     } catch (err) {
       logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
     }
   }
 
-  return fetchLatestVersion({ noFetch });
+  return resolveAmxmodxVersionCore(manifest, { noFetch });
 }
 
 async function handleListAmxmodxIncs(args, token, noFetch) {
@@ -502,84 +413,6 @@ async function handleGetAmxmodxInclude(args, token, noFetch) {
 
 // ─── Include resolution ─────────────────────────────────────────────────────────
 
-/**
- * Parse a preprocessor include directive into a filename + search mode.
- *
- * Accepted forms:
- *   #include <file>      — global search only (<> equivalent)
- *   #include "file"      — local (sma dir) first, then global
- *   #include file        — bare filename, equivalent to <>
- *   <file>, "file", file — directive prefix is optional
- *
- * Extension defaults to .inc if missing.
- */
-function parseIncludeDirective(raw) {
-  let input = String(raw || '').trim();
-  if (!input) throw new Error('Empty include directive');
-
-  input = input.replace(/^#include\s+/, '');
-
-  let localFirst = false;
-
-  if (input.startsWith('"') && input.endsWith('"')) {
-    input = input.slice(1, -1);
-    localFirst = true;
-  } else if (input.startsWith('<') && input.endsWith('>')) {
-    input = input.slice(1, -1);
-  }
-
-  if (!path.extname(input)) input += '.inc';
-
-  return { filename: input, localFirst };
-}
-
-/**
- * Case-insensitive file search inside a directory, walking nested path segments
- * (readdirSync only lists one level, so "SubDir/File.inc" needs per-segment lookup).
- * Returns the first match (by readdir order) or null.
- */
-function findCaseInsensitive(dir, filename) {
-  try {
-    const segments = filename.split(/[\\/]/);
-    let current = dir;
-    for (let i = 0; i < segments.length; i++) {
-      const lower = segments[i].toLowerCase();
-      if (i === segments.length - 1) {
-        for (const entry of fs.readdirSync(current)) {
-          if (entry.toLowerCase() === lower) return path.join(current, entry);
-        }
-        return null;
-      }
-      let found = null;
-      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-        if (entry.isDirectory() && entry.name.toLowerCase() === lower) {
-          found = entry.name;
-          break;
-        }
-      }
-      if (!found) return null;
-      current = path.join(current, found);
-    }
-    return null;
-  } catch (_) { return null; }
-}
-
-/**
- * Search for a file in a list of { path, label } search targets.
- * Checks exact match first, then case-insensitive fallback.
- *
- * Returns { foundPath, label } or null.
- */
-function searchIncludeFile(filename, searchPaths) {
-  for (const { path: sp, label } of searchPaths) {
-    const exact = path.join(sp, filename);
-    if (fs.existsSync(exact)) return { foundPath: exact, label };
-    const ci = findCaseInsensitive(sp, filename);
-    if (ci) return { foundPath: ci, label };
-  }
-  return null;
-}
-
 async function handleResolveInclude(args, token, noFetch) {
   let parsed;
   try {
@@ -601,13 +434,9 @@ async function handleResolveInclude(args, token, noFetch) {
     searchPaths.push({ path: smaDir, label });
   }
 
-  const version = await resolveAmxmodxVersion(args, noFetch);
-  const { includeDir } = await fetchCompiler(version);
-  if (includeDir) {
-    searchPaths.push({ path: includeDir, label: `AMXX stdlib ${version}` });
-  }
-
-  const manifestPath = resolveManifestPath(args?.manifest || undefined);
+  // Dep includes come BEFORE the stdlib — matching the real build's search
+  // order (deps first, then the compiler bundle).
+  const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
   const depErrors = [];
   if (fs.existsSync(manifestPath)) {
     try {
@@ -625,7 +454,13 @@ async function handleResolveInclude(args, token, noFetch) {
     }
   }
 
-  const result = searchIncludeFile(filename, searchPaths);
+  const version = await resolveAmxmodxVersion(args, noFetch);
+  const { includeDir } = await fetchCompiler(version);
+  if (includeDir) {
+    searchPaths.push({ path: includeDir, label: `AMXX stdlib ${version}` });
+  }
+
+  const result = searchIncludeFile(searchPaths, filename);
 
   if (!result) {
     let msg =
@@ -661,9 +496,9 @@ async function handleResolveInclude(args, token, noFetch) {
 // ─── Build plan ────────────────────────────────────────────────────────────────
 
 async function handleBuildPlan(args) {
-  const manifestPath = resolveManifestPath(args?.manifest);
+  const manifestPath = resolveManifestPath(args?.manifest).path;
   const fullPath = path.resolve(manifestPath);
-  require('dotenv').config({ path: path.join(path.dirname(fullPath), '.env'), quiet: true });
+  loadEnv(fullPath, { quiet: true, override: false });
 
   try {
     const manifest = resolveManifest(fullPath, { set: args?.set, define: args?.define });
@@ -676,7 +511,7 @@ async function handleBuildPlan(args) {
 // ─── Repo file access ──────────────────────────────────────────────────────────
 
 async function fetchDepRoot(args, token, noFetch) {
-  token = envToken(token);
+  token = fallbackToken(token);
   let dep;
   if (args?.dep) {
     dep = parseDep(args.dep);
@@ -696,9 +531,7 @@ async function fetchDepRoot(args, token, noFetch) {
     return { rootDir: dir, label: `${dep.repo}@${dep.ref} (release)` };
   }
 
-  const resolvedRef = dep.ref === 'latest'
-    ? await resolveRef(dep.repo, dep.ref, token)
-    : dep.ref;
+  const resolvedRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
   const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, false);
   if (dep.include_path) {
     const sub = path.join(repoDir, dep.include_path);
@@ -777,22 +610,7 @@ async function handleReadRepoFile(args, token, noFetch) {
 // ─── Single-file compilation ───────────────────────────────────────────────────
 
 async function runCompiler(cmd, args) {
-  const env = { ...process.env };
-  if (process.platform === 'linux') {
-    // amxxpc needs its .so next to the binary — same as src/compiler.js spawnAsync
-    const compilerDir = path.dirname(cmd);
-    env.LD_LIBRARY_PATH = env.LD_LIBRARY_PATH
-      ? `${compilerDir}:${env.LD_LIBRARY_PATH}`
-      : compilerDir;
-  }
-  try {
-    const { stdout, stderr } = await execFileP(cmd, args, { env, maxBuffer: 10 * 1024 * 1024, windowsHide: true });
-    return { status: 0, output: stdout + stderr };
-  } catch (err) {
-    // err.code is a string ('ENOENT') on spawn failure — never let it leak as status.
-    const status = Number.isInteger(err.code) ? err.code : 1;
-    return { status, output: (err.stdout || '') + (err.stderr || '') };
-  }
+  return spawnCompiler(cmd, args);
 }
 
 async function handleCompileSma(args, token, noFetch) {
@@ -803,19 +621,15 @@ async function handleCompileSma(args, token, noFetch) {
   const version = await resolveAmxmodxVersion(args, noFetch);
   const { compilerPath, includeDir } = await fetchCompiler(version);
 
-  const includes = [`-i${path.dirname(smaPath)}`];
-  const localInc = path.join(path.dirname(smaPath), 'include');
-  if (fs.existsSync(localInc)) includes.push(`-i${localInc}`);
-  if (includeDir) includes.push(`-i${includeDir}`);
-
+  const depDirs = [];
   const depErrors = [];
-  const manifestPath = resolveManifestPath(args?.manifest || undefined);
+  const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
   if (fs.existsSync(manifestPath)) {
     try {
       const manifest = parseManifest(manifestPath);
       for (const dep of manifest.globalDeps) {
         try {
-          includes.push(`-i${await fetchDepIncludeDir(dep, resolveGithubToken(manifest, dep.repo), noFetch)}`);
+          depDirs.push(await fetchDepIncludeDir(dep, resolveGithubToken(manifest, dep.repo), noFetch));
         } catch (err) {
           depErrors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
         }
@@ -824,8 +638,20 @@ async function handleCompileSma(args, token, noFetch) {
       depErrors.push(`manifest ${manifestPath}: ${err.message}`);
     }
   }
-  for (const d of args?.include_dirs || []) includes.push(`-i${path.resolve(d)}`);
-  const defines = (args?.define || []).map((d) => `-D${d}`);
+
+  // Dep includes come BEFORE the stdlib — matching the real build's search
+  // order (deps first, then the compiler bundle).
+  const includeDirs = [...depDirs];
+  if (includeDir) includeDirs.push(includeDir);
+  for (const d of args?.include_dirs || []) includeDirs.push(path.resolve(d));
+
+  const includes = buildIncludeArgs({
+    scriptingDir: path.dirname(smaPath),
+    localIncDir: path.join(path.dirname(smaPath), 'include'),
+    collectedIncDir: undefined,
+    includeDirs,
+  });
+  const defines = buildDefineArgs(args?.define);
 
   const outDir = path.join(os.tmpdir(), 'amxb-mcp-compile');
   fs.mkdirSync(outDir, { recursive: true });
@@ -856,7 +682,7 @@ async function handleCompileSma(args, token, noFetch) {
 // ─── Asset plan ────────────────────────────────────────────────────────────────
 
 async function handleResolveAssets(args) {
-  const manifestPath = resolveManifestPath(args?.manifest);
+  const manifestPath = resolveManifestPath(args?.manifest).path;
   const fullPath = path.resolve(manifestPath);
 
   let manifest;
@@ -866,32 +692,16 @@ async function handleResolveAssets(args) {
     return errorResult(err.message);
   }
 
-  const manifestDir = path.dirname(fullPath);
-  const plan = manifest.assets.sources.map((s) => {
-    const entry = { type: s.type, map: s.map };
-    if (s.type === 'local') {
-      entry.source = 'assets/ (next to manifest)';
-      if (args?.list_local !== false) {
-        const dir = path.join(manifestDir, 'assets');
-        entry.files = fs.existsSync(dir)
-          ? glob.sync('**/*', { cwd: dir, dot: false }).sort()
-          : [];
-      }
-    } else if (s.type === 'amxmodx') {
-      entry.source = `amxmodx ${manifest.amxmodx.version || 'latest'} (${manifest.platform || 'host'})`;
-    } else if (s.type === 'release') {
-      entry.source = `${s.repo}@${s.ref}`;
-      entry.asset  = s.asset ?? null;
-      entry.cache  = 'global';
-    } else {
-      entry.source = s.url;
-      entry.cache  = s.cache || 'none';
-    }
-    return entry;
+  const plan = buildPlanData(manifest, {
+    detailedAssets: true,
+    listLocal: args?.list_local !== false,
   });
 
   return textResult(
-    applyOutputLimit(JSON.stringify({ on_conflict: manifest.assets.on_conflict, sources: plan }, null, 2), args)
+    applyOutputLimit(
+      JSON.stringify({ on_conflict: manifest.assets.on_conflict, sources: plan.assets }, null, 2),
+      args
+    )
   );
 }
 
@@ -927,7 +737,7 @@ async function handleSearchSymbol(args, token, noFetch) {
     }
   };
 
-  const manifestPath = resolveManifestPath(args?.manifest || undefined);
+  const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
   let manifest = null;
   if (fs.existsSync(manifestPath)) {
     try {
@@ -936,6 +746,11 @@ async function handleSearchSymbol(args, token, noFetch) {
       errors.push(`manifest ${manifestPath}: ${err.message}`);
     }
   }
+
+  // Per-owner token when a manifest is in scope; plain arg/env fallback otherwise.
+  const tokenFor = (repo) => manifest
+    ? resolveGithubToken(manifest, repo)
+    : fallbackToken(token);
 
   const jobs = [];
 
@@ -958,7 +773,7 @@ async function handleSearchSymbol(args, token, noFetch) {
     for (const dep of deps) {
       jobs.push((async () => {
         try {
-          const dir = await fetchDepIncludeDir(dep, token, noFetch);
+          const dir = await fetchDepIncludeDir(dep, tokenFor(dep.repo), noFetch);
           await addSource(`${dep.repo}@${dep.ref}`, [dir], '**/*.inc');
         } catch (err) {
           errors.push(`${dep.repo}@${dep.ref}: ${err.message}`);

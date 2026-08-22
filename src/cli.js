@@ -18,6 +18,7 @@ const { runValidate }         = require('./commands/validate');
 const { runReleases }         = require('./commands/releases');
 const { runInit, runInitInteractive } = require('./commands/init');
 const { runMcp }                     = require('./commands/mcp');
+const { runServe }                   = require('./commands/serve');
 
 program
   .name('amxx-builder')
@@ -27,8 +28,9 @@ program
 // ─── Update check ──────────────────────────────────────────────────────────────
 
 program.hook('preAction', async () => {
-  // The MCP server owns stdout (JSON-RPC); an update notice would corrupt it.
-  if (program.args[0] === 'mcp') return;
+  // The MCP server and the serve JSON-RPC server own stdout; an update notice
+  // would corrupt the protocol stream.
+  if (program.args[0] === 'mcp' || program.args[0] === 'serve') return;
   try {
     const latest = await checkForUpdate();
     if (latest) {
@@ -268,6 +270,20 @@ program
   .action(async () => {
     try {
       await runMcp();
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// ─── serve ───────────────────────────────────────────────────────────────────
+
+program
+  .command('serve')
+  .description('Start JSON-RPC server for editor integration (stdio)')
+  .action(async () => {
+    try {
+      await runServe();
     } catch (err) {
       logger.error(err.message);
       process.exit(1);

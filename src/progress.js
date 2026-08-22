@@ -1,5 +1,7 @@
 'use strict';
 
+const { emit, EVENTS } = require('./events');
+
 const BAR_LEN = 20;
 
 function formatBar(ratio) {
@@ -45,6 +47,8 @@ function createBar(total, label) {
     if (lastLen > 0) stream.write('\r' + ' '.repeat(lastLen) + '\r');
     stream.write(line);
     lastLen = line.length;
+
+    emit(EVENTS.PROGRESS, { label, current: val, total });
   }
 
   writeLine(0);
@@ -54,6 +58,7 @@ function createBar(total, label) {
     stop() {
       if (lastLen > 0) stream.write('\r' + ' '.repeat(lastLen) + '\r');
       stream.write('\n');
+      emit(EVENTS.PROGRESS, { label, current: total, total, done: true });
     },
   };
 }

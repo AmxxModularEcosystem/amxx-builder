@@ -4,8 +4,8 @@ const path = require('path');
 
 const logger = require('../logger');
 const { parseManifest, resolveGithubToken } = require('../manifest');
-const { resolveRef } = require('../repo-fetcher');
-const { buildDepTree } = require('../deps-tree');
+const { resolveRepoRefs } = require('../repo-fetcher');
+const { buildDepTree, assembleRootDeps } = require('../deps-tree');
 const { resolveManifestPath, loadEnv } = require('./shared');
 
 async function runDepsTree(options) {
@@ -18,30 +18,9 @@ async function runDepsTree(options) {
 
   const manifest = parseManifest(manifestPath);
 
-  await Promise.all(manifest.repos.map(async (repoConfig) => {
-    repoConfig._resolvedRef = await resolveRef(
-      repoConfig.repo, repoConfig.ref, resolveGithubToken(manifest, repoConfig.repo)
-    );
-  }));
+  await resolveRepoRefs(manifest.repos, (repo) => resolveGithubToken(manifest, repo));
 
-  const rootDeps = [];
-
-  for (const repoConfig of manifest.repos) {
-    rootDeps.push({
-      repo:  repoConfig.repo,
-      ref:   repoConfig.ref,
-      _from: 'repo',
-    });
-  }
-
-  for (const dep of manifest.globalDeps) {
-    rootDeps.push({ ...dep, _from: 'manifest' });
-  }
-
-  const getDepsOverride = (repo) => {
-    const config = manifest.repos.find(r => r.repo === repo);
-    return config ? config.deps_override : null;
-  };
+  const { rootDeps, getDepsOverride } = assembleRootDeps(manifest);
 
   const tree = await buildDepTree(rootDeps, {
     tokenFor: (repo) => resolveGithubToken(manifest, repo),

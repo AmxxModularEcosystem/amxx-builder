@@ -173,6 +173,25 @@ async function resolveLatestVersionFromWeb() {
   return version;
 }
 
+/**
+ * Resolve the AMX Mod X version to use.
+ * Priority: explicit `version` option → manifest `amxmodx.version` → latest.
+ * Single source of truth shared by the CLI build, include-tree and the MCP
+ * amxmodx-include / resolve_include / compile_sma tools.
+ *
+ * @param {object|null} manifest - parsed manifest (pass null when absent or unparseable)
+ * @param {object} [options]
+ * @param {string} [options.version] - explicit version override (highest priority)
+ * @param {boolean} [options.noFetch] - skip network when resolving "latest"
+ * @returns {Promise<string>}
+ */
+async function resolveAmxmodxVersion(manifest, options = {}) {
+  const { version, noFetch } = options;
+  if (version) return version;
+  if (manifest && manifest.amxmodx && manifest.amxmodx.version) return manifest.amxmodx.version;
+  return fetchLatestVersion({ noFetch });
+}
+
 function getPlatform() {
   return getHostPlatform();
 }
@@ -305,4 +324,4 @@ function findDir(root, name) {
   return null;
 }
 
-module.exports = { fetchCompiler, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion };
+module.exports = { fetchCompiler, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion, resolveAmxmodxVersion };

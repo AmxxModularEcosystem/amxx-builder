@@ -28,8 +28,11 @@ const glob = require('fast-glob');
 
 const { parseManifest, parseDepsLines, resolveGithubToken } = require('./manifest');
 const { fetchCompiler, fetchLatestVersion } = require('./compiler-fetcher');
-const { fetchRepo, resolveRef } = require('./repo-fetcher');
+const { fetchRepo, resolveRefIfLatest, resolveRepoRefs } = require('./repo-fetcher');
 const { fetchReleaseDep }   = require('./release-fetcher');
+const { normalize }         = require('./deps-resolver');
+const { loadEnv }           = require('./env');
+const { resolveManifestPath } = require('./manifest-path');
 
 // ─── Regex ───────────────────────────────────────────────────────────────────
 
@@ -407,17 +410,34 @@ class IncludeNode {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Case-insensitive file search inside a directory.
- * Returns the first match by readdir order or null.
+ * Case-insensitive file search inside a directory, walking nested path segments
+ * (readdirSync only lists one level, so "SubDir/File.inc" needs per-segment lookup).
+ * Returns the first match (by readdir order) or null.
  */
 function findCaseInsensitive(dir, filename) {
   try {
-    const lower = filename.toLowerCase();
-    for (const entry of fs.readdirSync(dir)) {
-      if (entry.toLowerCase() === lower) return path.join(dir, entry);
+    const segments = filename.split(/[\\/]/);
+    let current = dir;
+    for (let i = 0; i < segments.length; i++) {
+      const lower = segments[i].toLowerCase();
+      if (i === segments.length - 1) {
+        for (const entry of fs.readdirSync(current)) {
+          if (entry.toLowerCase() === lower) return path.join(current, entry);
+        }
+        return null;
+      }
+      let found = null;
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        if (entry.isDirectory() && entry.name.toLowerCase() === lower) {
+          found = entry.name;
+          break;
+        }
+      }
+      if (!found) return null;
+      current = path.join(current, found);
     }
-  } catch (_) { /* ignore */ }
-  return null;
+    return null;
+  } catch (_) { return null; }
 }
 
 /**
@@ -547,12 +567,21 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
   const format    = options.format    || 'text';
 
   // ── 1. Resolve manifest ──────────────────────────────────────────────
-  const mPath = resolveManifestPath(manifestPath);
-  require('./commands/shared').loadEnv(mPath); // .env tokens (GITHUB_TOKEN etc.)
+  const { path: mPath } = resolveManifestPath(manifestPath);
+  loadEnv(mPath); // .env tokens (GITHUB_TOKEN etc.)
   const manifest = parseManifest(mPath);
   const manifestDir = path.dirname(mPath);
 
   const tokenFor = (repo) => token || resolveGithubToken(manifest, repo);
+
+  // Resolve refs for every manifest repo once (same single-source loop as the
+  // build pipeline); a repo whose ref resolution throws keeps _resolvedRef
+  // undefined and is skipped below (ref-less repos still clone default branch).
+  await Promise.all(manifest.repos.map(async (repoConfig) => {
+    try {
+      await resolveRepoRefs([repoConfig], tokenFor);
+    } catch (_) { /* ref failed — repo skipped by the fetch loops below */ }
+  }));
 
   // ── 2. Create graph ──────────────────────────────────────────────────
   const graph = new IncludeGraph();
@@ -568,11 +597,9 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
       depEntries.push(...repoConfig.deps_override);
       continue;
     }
+    if (repoConfig._resolvedRef === undefined) continue; // ref failed → skip
     try {
-      const resolvedRef = repoConfig.ref === 'latest'
-        ? await resolveRef(repoConfig.repo, repoConfig.ref, tokenFor(repoConfig.repo))
-        : repoConfig.ref;
-      const repoDir = await fetchRepo(repoConfig.repo, resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
+      const repoDir = await fetchRepo(repoConfig.repo, repoConfig._resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
       const depsPath = path.join(repoDir, 'DEPS_LIST');
       if (fs.existsSync(depsPath)) {
         depEntries.push(...parseDepsLines(fs.readFileSync(depsPath, 'utf8').split(/\r?\n/)));
@@ -582,11 +609,11 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
 
   const seenDeps = new Set();
   for (const dep of depEntries) {
-    const key = `${String(dep.repo).toLowerCase()}@${dep.ref}`;
+    const key = `${normalize(dep.repo)}@${dep.ref}`;
     if (seenDeps.has(key)) continue;
     seenDeps.add(key);
     try {
-      const depDir = await fetchDepIncludeDirCached(dep, tokenFor(dep.repo), noFetch, manifest.github.ssh);
+      const depDir = await fetchDepIncludeDir(dep, tokenFor(dep.repo), noFetch, manifest.github.ssh);
       graph.includeDirs.push({ path: depDir, label: `dep: ${dep.repo}@${dep.ref}` });
     } catch (_) { /* skip unresolvable */ }
   }
@@ -632,12 +659,10 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
 
   // 4b. Repo scripting/ dirs
   for (const repoConfig of manifest.repos) {
+    if (repoConfig._resolvedRef === undefined) continue; // ref failed → skip
     let repoDir;
     try {
-      const resolvedRef = repoConfig.ref === 'latest'
-        ? await resolveRef(repoConfig.repo, repoConfig.ref, tokenFor(repoConfig.repo))
-        : repoConfig.ref;
-      repoDir = await fetchRepo(repoConfig.repo, resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
+      repoDir = await fetchRepo(repoConfig.repo, repoConfig._resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
     } catch (_) {
       continue; // skip repos that can't be fetched
     }
@@ -702,24 +727,89 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 /**
- * Resolve manifest path with auto-detect.
+ * Parse a single preprocessor include directive into { filename, localFirst }.
+ *
+ * Accepted forms:
+ *   #include <file>      — global search only (<> equivalent)
+ *   #include "file"      — local (sma dir) first, then global
+ *   #include file        — bare filename, equivalent to <>
+ *   <file>, "file", file — directive prefix is optional
+ *
+ * Extension defaults to .inc if missing.
+ * Shared by the MCP resolve_include tool. The IncludeGraph's regex-based
+ * parseIncludesFromContent stays the engine for bulk content parsing.
  */
-function resolveManifestPath(explicit) {
-  if (explicit && fs.existsSync(explicit)) return path.resolve(explicit);
-  if (explicit) return path.resolve(explicit); // let parseManifest throw
+function parseIncludeDirective(raw) {
+  let input = String(raw || '').trim();
+  if (!input) throw new Error('Empty include directive');
 
-  const cwd = process.cwd();
-  for (const name of ['amxbuild.yml', 'amxbuild.yaml', 'manifest.yml']) {
-    const p = path.join(cwd, name);
-    if (fs.existsSync(p)) return p;
+  input = input.replace(/^#include\s+/, '');
+
+  let localFirst = false;
+
+  if (input.startsWith('"') && input.endsWith('"')) {
+    input = input.slice(1, -1);
+    localFirst = true;
+  } else if (input.startsWith('<') && input.endsWith('>')) {
+    input = input.slice(1, -1);
   }
-  return path.join(cwd, 'amxbuild.yml'); // will cause parseManifest to throw with a clear message
+
+  if (!path.extname(input)) input += '.inc';
+
+  return { filename: input, localFirst };
+}
+
+/**
+ * Search an ordered list of { path, label } targets for a file.
+ * Exact match first per target, then case-insensitive fallback (via
+ * findCaseInsensitive).
+ *
+ * Local-first resolution is expressed by ordering `dirs` — the caller pushes
+ * the local dir first when the directive was "quoted".
+ *
+ * @param {{ path: string, label: string }[]} dirs - search targets in priority order
+ * @param {string} name - bare filename (may include subdirectories)
+ * @returns {{ foundPath: string, label: string } | null}
+ */
+function searchIncludeFile(dirs, name) {
+  for (const { path: sp, label } of dirs) {
+    const exact = path.join(sp, name);
+    if (fs.existsSync(exact)) return { foundPath: exact, label };
+    const ci = findCaseInsensitive(sp, name);
+    if (ci) return { foundPath: ci, label };
+  }
+  return null;
+}
+
+/**
+ * Collect all .inc files under a directory, sorted, as { rel, abs } entries.
+ * Shared glob (dot:false, all levels) used by the MCP dep-interface tools and
+ * the include collection in the build pipeline.
+ *
+ * @param {string} srcDir - directory to scan
+ * @returns {Promise<{ rel: string, abs: string }[]>}
+ */
+async function collectIncFiles(srcDir) {
+  const entries = await glob('**/*.inc', { cwd: srcDir, dot: false });
+  entries.sort();
+  return entries.map((rel) => ({ rel, abs: path.join(srcDir, rel) }));
 }
 
 /**
  * Fetch a dependency's include directory, using cache where possible.
+ * Public single-source-of-truth shared by the build pipeline (include-tree),
+ * the CLI and the MCP layer.
+ *
+ * Explicit-include_path semantics: silently falls back to the repo root when
+ * the given path does not exist (the MCP callers rely on this).
+ *
+ * @param {object} dep - { repo, ref, include_path, source, asset }
+ * @param {string|null} token - GitHub PAT (per-owner resolved by the caller)
+ * @param {boolean} [noFetch=false] - only use cache, skip network
+ * @param {boolean} [ssh=false] - clone via SSH
+ * @returns {Promise<string>} directory to use as the include dir
  */
-async function fetchDepIncludeDirCached(dep, token, noFetch, ssh = false) {
+async function fetchDepIncludeDir(dep, token, noFetch, ssh = false) {
   if (dep.source === 'release') {
     return fetchReleaseDep(
       { repo: dep.repo, ref: dep.ref, include_path: dep.include_path, asset: dep.asset },
@@ -728,9 +818,7 @@ async function fetchDepIncludeDirCached(dep, token, noFetch, ssh = false) {
     );
   }
 
-  const resolvedRef = dep.ref === 'latest'
-    ? await resolveRef(dep.repo, dep.ref, token)
-    : dep.ref;
+  const resolvedRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
   const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, ssh);
   const candidates = dep.include_path
     ? [dep.include_path]
@@ -746,4 +834,12 @@ async function fetchDepIncludeDirCached(dep, token, noFetch, ssh = false) {
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
-module.exports = { buildIncludeTree, IncludeGraph };
+module.exports = {
+  buildIncludeTree,
+  IncludeGraph,
+  findCaseInsensitive,
+  fetchDepIncludeDir,
+  parseIncludeDirective,
+  searchIncludeFile,
+  collectIncFiles,
+};

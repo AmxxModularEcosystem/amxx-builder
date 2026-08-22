@@ -7,7 +7,19 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 ## Tech
 - Node.js 18+, pure **CommonJS** (`require`), no ESM.
 - Only dev dep: `@vercel/ncc` for bundling the GitHub Action.
-- No test framework, linter, or type checker configured.
+- Tests: `node --test test/` (built-in node:test, zero deps). No linter or type checker configured.
+
+## Architecture: logic lives once in the core
+- All business logic MUST live in `src/` (the core) and be interface-agnostic: no `process.argv`, no `process.stdout` writes, no `commander`, no JSON-RPC/MCP schemas, no CLI rendering.
+- Interfaces are thin adapters that map params → core calls and render core events → their output format.
+  - Current interfaces: CLI (`src/commands/`), MCP (`mcp/`), serve (JSON-RPC over stdio).
+  - **serve** — started via `amxb serve`; uses `src/jsonrpc-transport.js` (generic JSON-RPC 2.0 over stdio, lives in core); methods are thin wrappers over core calls (`manifest.validate`, `build.start`, `include.resolve`, …); build progress is pushed as notifications (`build.stage` / `build.compiled` / `build.done` / `build.error`).
+- **Never copy a core function into an interface layer.** If two interfaces need the same behavior, it belongs in `src/` — refactor it there instead of duplicating.
+- Interfaces must not do their own resolution/parsing: reuse the core single-source-of-truth helpers instead of reimplementing them. Known ones:
+  - Include-path candidate lists (`['scripting/include', 'amxmodx/scripting/include', 'include', '.']`) — single source: `src/deps-resolver.js` (`resolveIncludePath`)
+  - Dep string parsing (`owner/repo@ref[:include_path]`) — single source: `src/manifest.js` (`parseDepsLines`)
+  - GitHub token resolution — `src/manifest.js` (`resolveGithubToken`); repo key / normalization — `src/deps-resolver.js` (`repoKey`, `normalize`)
+- When touching an interface layer, check whether the logic already exists in `src/` before writing new code. New core exports are cheap; new duplication is debt.
 
 ## Commands
 | Command | Description |
@@ -25,6 +37,7 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 | `amxb clean` | Clean build/ and clone cache |
 | `amxb clean --all` | Also clean compiler cache |
 | `amxb cache info` | Show cache contents |
+| `amxb serve` | Start JSON-RPC server for editor integration (stdio transport) |
 | `npm start` | Alias for `node index.js` |
 
 ## Build order (matters)
@@ -61,6 +74,20 @@ This is automated in `.github/workflows/release.yml` on `v*.*.*` tags.
 - Uses a custom lightweight `McpServer` from `mcp/mcp-server.js` (no external SDK dependency)
 - Register in any project's `.opencode/opencode.json` via `"command": ["amxb", "mcp"]`
 - Exposes tools: `get_dep_interface`, `list_dep_incs`, `get_dep_tree`, `resolve_manifest`, `validate_manifest`, `get_cache_info`, `list_amxmodx_incs`, `get_amxmodx_include`, `resolve_include`, `list_releases`
+
+## Serve (JSON-RPC)
+- Source: `src/commands/serve.js` — thin adapter; transport: `src/jsonrpc-transport.js` (generic JSON-RPC 2.0 over stdio, in core, no external deps)
+- Started via `amxb serve` (registered as subcommand in `src/cli.js` → `src/commands/serve.js`); stdout stays pure JSON-RPC, logs go to stderr, progress bars disabled
+- Method categories (all thin wrappers over core calls — no domain logic in the adapter):
+  - manifest: `manifest.validate`, `manifest.resolve`
+  - include: `include.resolve`, `include.list`
+  - deps: `deps.tree`
+  - releases: `releases.list`
+  - cache: `cache.info`
+  - build: `build.plan`, `build.start`, `build.cancel`
+  - compile: `compile.single`
+  - watch: `watch.start`, `watch.stop`
+- Lifecycle events are pushed as server→client notifications: `build.stage` / `build.compiled` / `build.progress` / `build.done` / `build.error`, plus `watch.changed`
 
 ## Cache
 - Win: `%LOCALAPPDATA%\amxx-builder`, Unix: `~/.cache/amxx-builder`

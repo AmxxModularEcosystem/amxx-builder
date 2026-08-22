@@ -41,7 +41,7 @@ const TOOLS = [
                 type: 'string',
                 description:
                   'Override the path inside the repo/asset where .inc files are located. ' +
-                  'Auto-detected: scripting/include → amxmodx/scripting/include → include → root',
+                  'Auto-detected from the repo layout when omitted (same candidates as amxb build).',
               },
               asset: {
                 description:
@@ -356,9 +356,10 @@ const TOOLS = [
             '  - `#include "file"` — local (sma dir) first, then global\n' +
             '  - `#include file`   — bare, equivalent to <>\n' +
             '  - The `#include` prefix is optional; just `<file>`, `"file"`, or `file` works.\n\n' +
-            'Extension defaults to `.inc` if omitted. Case-sensitive first, ' +
-            'then case-insensitive fallback.\n\n' +
-             'Search order: sma dir (for `""`, via sma_file or cwd) → stdlib → manifest deps.',
+             'Extension defaults to `.inc` if omitted. Case-sensitive first, ' +
+             'then case-insensitive fallback.\n\n' +
+             'Search order: sma dir (for `""`, via sma_file or cwd) → manifest deps → stdlib ' +
+             '(deps before stdlib, matching the real build).',
           inputSchema: {
             type: 'object',
             properties: {
