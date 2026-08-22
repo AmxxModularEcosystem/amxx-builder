@@ -39,6 +39,7 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
+          registry-url: 'https://registry.npmjs.org/'
 
       - name: Install dependencies
         run: npm ci
@@ -73,6 +74,11 @@ jobs:
           git tag -fa "$MAJOR"   -m "Update $MAJOR"
 
           git push origin "$VERSION" "$MINOR" "$MAJOR" --force
+
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
