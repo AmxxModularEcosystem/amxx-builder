@@ -165,7 +165,9 @@ async function downloadAsset(url, dest, headers) {
 
   const response = await withRetry(
     () => axios.get(url, {
-      headers: { ...headers, Accept: 'application/octet-stream' },
+      // Default to octet-stream but let callers override (API tarball fallback
+      // needs application/vnd.github+json).
+      headers: { Accept: 'application/octet-stream', ...headers },
       responseType: 'arraybuffer',
       maxRedirects: 5,
       timeout: 600000, // large assets — allow slow links, still bound hangs
