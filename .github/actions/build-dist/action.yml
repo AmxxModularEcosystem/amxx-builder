@@ -1,0 +1,50 @@
+name: 'Build dist and commit'
+description: 'Run npm run bundle, commit dist/ (plus extra files) to master if changed, and push.'
+
+inputs:
+  message:
+    description: 'Commit message to use'
+    required: true
+  extra-files:
+    description: 'Additional paths to stage alongside dist/ (space-separated)'
+    required: false
+    default: ''
+
+outputs:
+  changed:
+    description: '"true" when a commit was created and pushed, "false" otherwise'
+    value: ${{ steps.commit.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build dist
+      shell: bash
+      run: npm run bundle
+
+    - name: Commit dist if changed
+      id: commit
+      shell: bash
+      run: |
+        git config user.name  "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+        git add -f dist/
+        if [ -n "${{ inputs.extra-files }}" ]; then
+          git add ${{ inputs.extra-files }}
+        fi
+
+        if git diff --cached --quiet; then
+          echo "dist is up to date — nothing to commit"
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        git commit -m "${{ inputs.message }}"
+
+        # Absorb anything that landed on master while we were building
+        git fetch origin master
+        git rebase origin/master
+        git push origin HEAD:refs/heads/master
+
+        echo "changed=true" >> "$GITHUB_OUTPUT"

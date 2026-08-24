@@ -47,34 +47,40 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build dist
-        run: npm run bundle
+      - name: Base the release commit on the current master tip
+        # Keeps the push to master a fast-forward even if master moved
+        # after the tag was created, and makes re-runs no-ops (deterministic
+        # rebuild => empty diff => nothing to commit).
+        run: |
+          git fetch origin master
+          git checkout --detach origin/master
 
-      - name: Commit dist and update tags
+      - name: Align package.json with the tag
+        # --allow-same-version: re-runs already have this version, don't fail
+        run: |
+          VERSION="${{ github.ref_name }}"
+          npm version "${VERSION#v}" --no-git-tag-version --allow-same-version
+
+      - name: Build dist and commit
+        id: build-dist
+        uses: ./.github/actions/build-dist
+        with:
+          message: 'chore: build dist for ${{ github.ref_name }}'
+          extra-files: 'package.json package-lock.json'
+
+      - name: Update floating tags
         run: |
           VERSION="${{ github.ref_name }}"
           MINOR=$(echo "$VERSION" | cut -d. -f1-2)
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
 
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Base the release commit on the current master tip, not the tag.
-          # This keeps the push to master a fast-forward even if master moved
-          # after the tag was created, and makes re-runs no-ops (deterministic
-          # rebuild => empty diff => nothing to commit).
-          git fetch origin master
-          git checkout --detach origin/master
-
-          # Align package.json with the tag and rebuild the bundled action
-          # (--allow-same-version: re-runs already have this version, don't fail)
-          npm version "${VERSION#v}" --no-git-tag-version --allow-same-version
-          npm run bundle
-
-          git add package.json package-lock.json
-          git add -f dist/
-
-          if git diff --cached --quiet; then
+          if [ "${{ steps.build-dist.outputs.changed }}" = "true" ]; then
+            # Point the exact and floating tags at this release commit
+            git tag -fa "$VERSION" -m "Release $VERSION"
+            git tag -fa "$MINOR"   -m "Update $MINOR"
+            git tag -fa "$MAJOR"   -m "Update $MAJOR"
+            git push origin "$VERSION" "$MINOR" "$MAJOR" --force
+          else
             echo "No changes - release $VERSION already published"
 
             # Repair tags if a previous run died before moving them: point them
@@ -86,19 +92,6 @@ jobs:
               git tag -fa "$MAJOR"   -m "Update $MAJOR" "$RELEASE_COMMIT"
               git push origin "$VERSION" "$MINOR" "$MAJOR" --force
             fi
-          else
-            git commit -m "chore: build dist for $VERSION"
-
-            # Absorb anything that landed on master while we were building
-            git fetch origin master
-            git rebase origin/master
-            git push origin HEAD:refs/heads/master
-
-            # Point the exact and floating tags at this release commit
-            git tag -fa "$VERSION" -m "Release $VERSION"
-            git tag -fa "$MINOR"   -m "Update $MINOR"
-            git tag -fa "$MAJOR"   -m "Update $MAJOR"
-            git push origin "$VERSION" "$MINOR" "$MAJOR" --force
           fi
 
       - name: Publish to npm

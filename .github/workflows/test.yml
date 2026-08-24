@@ -3,10 +3,28 @@ name: CI
 on:
   push:
     branches: [master]
+    # Docs/examples/tooling/config don't affect tests or the bundle.
+    paths-ignore:
+      - 'dist/**'
+      - 'docs/**'
+      - 'example/**'
+      - '*.md'
+      - '.editorconfig'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.npmignore'
+      - '.env.example'
+      - '.claude/**'
+      - '.vscode/**'
+      - '.codegraph/**'
+      - '.omo/**'
+      - '.opencode/**'
+      - 'install.sh'
+      - 'install.ps1'
   pull_request:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

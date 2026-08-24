@@ -1,0 +1,93 @@
+name: Build dist
+
+on:
+  push:
+    branches: [master]
+    # Rebuild the bundled action only when bundle-affecting files change.
+    # A dist-only commit (pushed by the job itself) does not match these
+    # paths, so the workflow won't re-trigger on it.
+    paths:
+      - 'src/**'
+      - 'index.js'
+      - 'action-entry.js'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+
+concurrency:
+  group: ci-dist-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Node 24)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  bundle:
+    name: Bundle check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Cache amxx-builder cache dir (compiler)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/amxx-builder
+          key: amxb-cache-${{ runner.os }}-${{ hashFiles('src/compiler-fetcher.js') }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build dist (esbuild)
+        run: npm run bundle
+
+      - name: Smoke-test dist/index.js
+        run: node scripts/smoke-test.js
+
+  build-dist:
+    name: Rebuild & commit dist
+    needs: [test, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build dist and commit
+        uses: ./.github/actions/build-dist
+        with:
+          message: 'chore: build dist'
