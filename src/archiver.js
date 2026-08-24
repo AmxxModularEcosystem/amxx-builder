@@ -83,7 +83,7 @@ async function createArchive(manifest, buildDir) {
 }
 
 // Keeps the archive filename inside out.dir: strips any directory components
-// (both / and \ separators) and removes characters illegal on Windows.
+// (both '/' and '\' separators) and removes characters illegal on Windows.
 function sanitizeArchiveName(name) {
   const base = String(name).replace(/\\/g, '/').split('/').pop() || '';
   if (!base || base === '.' || base === '..') return 'archive.zip';
