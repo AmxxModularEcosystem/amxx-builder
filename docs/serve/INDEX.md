@@ -3,10 +3,11 @@
 `amxb serve` — универсальный интерфейс для программного управления сборкой AMX Mod X через **JSON-RPC 2.0 по stdio**. Это не «ещё один CLI»: это постоянный канал, по которому процесс-клиент (редактор, агент, скрипт, CI-инструмент — что угодно) может:
 
 - читать и валидировать манифесты,
-- резолвить `#include`, смотреть стандартные инклюды AMXX,
+- резолвить `#include`, смотреть стандартные инклюды AMXX, строить граф инклюдов `.sma`,
 - строить дерево зависимостей,
 - запускать полную сборку и **получать прогресс в реальном времени** (push-уведомления),
 - компилировать отдельные `.sma`,
+- деплоить на сервер и слать RCON-команды,
 - запускать watch.
 
 В отличие от вызова `amxb build` + парсинга stdout, serve отдаёт **структурированные данные** и умеет **пушить события** — клиент не опрашивает сервер, сервер сам сообщает о прогрессе.
@@ -238,6 +239,38 @@ child.stdin.write(JSON.stringify({
 
 Ответ — дерево из `buildDepTree` (см. `src/deps-tree.js`): `{ "dependencies": [...] }` с полями `repo`, `ref`, `resolvedRef`, `source`, `from`, `error`, `cycle`, `shared`, `dependencies`.
 
+### Граф `#include`-зависимостей
+
+#### `dep-graph.get`
+
+Построить граф инклюдов для `.sma`-файла: какие файлы парсятся, какие инклюды резолвятся и какие отсутствуют. Include-пути ищутся в том же порядке, что и в реальной сборке (deps → stdlib).
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `sma_file` | string | **Обязателен**, путь к `.sma` |
+| `manifest` | string | Для deps и версии AMXX (опционально) |
+| `version` | string | Переопределить версию AMXX |
+| `include_dirs` | string[] | Дополнительные папки поиска |
+| `no_fetch` | boolean | Только кэш |
+| `inc` | string | Обратный запрос: путь к `.inc` → какие `.sma` от него транзитивно зависят |
+
+Ответ:
+
+```json
+{
+  "sma_file": "/project/scripting/hello.sma",
+  "version": "1.10.5428",
+  "include_dirs": ["/home/user/.cache/amxx-builder/repos/...", "/home/user/.cache/amxx-builder/amxxpc/1.10.5428/linux/include"],
+  "files": [
+    {"file": "/project/scripting/hello.sma", "isSma": true, "includes": ["/project/scripting/include/colorchat.inc"]},
+    {"file": "/project/scripting/include/colorchat.inc", "isSma": false, "includes": []}
+  ],
+  "missing": [{"file": "/project/scripting/hello.sma", "name": "nonexistent", "isAngle": true}]
+}
+```
+
+При `inc` — дополнительное поле `smas_depending_on` (массив путей `.sma`, транзитивно зависящих от указанного `.inc`). Это та же логика, что использует watch для выбора плагинов на пересборку.
+
 ### Релизы / кэш / план
 
 #### `releases.list`
@@ -263,6 +296,30 @@ child.stdin.write(JSON.stringify({
 | `manifest` | string | Дополнительно проверить локальный кэш `.amxb-cache/` |
 
 Ответ — разбивка по `amxxpc`/`repos`/`release-deps`/`local` с размерами (см. `getCacheInfo` в `src/cache-info.js`).
+
+#### `compiler.info`
+
+Информация о компиляторе `amxxpc`: версия, платформа, пути к бинарнику и stdlib-инклюдам.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `manifest` | string | Для определения версии из `amxmodx.version` |
+| `version` | string | Версия AMXX (по умолчанию: из манифеста, иначе latest) |
+| `no_fetch` | boolean | Не качать — только состояние кэша |
+
+Ответ:
+
+```json
+{
+  "version": "1.10.5428",
+  "platform": "linux",
+  "compilerPath": "/home/user/.cache/amxx-builder/amxxpc/1.10.5428/linux/amxxpc",
+  "includeDir": "/home/user/.cache/amxx-builder/amxxpc/1.10.5428/linux/include",
+  "cached": true
+}
+```
+
+Без `no_fetch` компилятор будет скачан при первом обращении (как в обычной сборке); с `no_fetch: true` ответ отражает только текущее состояние кэша (`compilerPath: null`, если компилятор ещё не скачан).
 
 #### `build.plan`
 
@@ -350,12 +407,71 @@ child.stdin.write(JSON.stringify({
 {
   "ok": true,
   "amxxName": "hello.amxx",
+  "output": "AMX Mod X Compiler 1.10.0.5428\n...\nDone.\n",
   "output_path": "/tmp/amxb-serve-compile/amxmodx/plugins/hello.amxx",
   "dep_errors": []
 }
 ```
 
-При ошибке — `{"ok": false, "amxxName": null, "output_path": null, "dep_errors": [...]}`. Вывод самого amxxpc (текст ошибок компиляции) в ответ **не включается** — при необходимости ошибку можно получить полной сборкой через `build.start` (там вывод уходит в уведомления `build.compiled`). Определения компилятора (`-D`) берутся из `amxmodx.defines` манифеста.
+При ошибке — `{"ok": false, "amxxName": null, "output": "<вывод amxxpc с текстом ошибок>", "output_path": null, "dep_errors": [...]}`. Поле `output` содержит полный вывод компилятора (текст ошибок компиляции) — как в уведомлениях `build.compiled` полной сборки. Определения компилятора (`-D`) берутся из `amxmodx.defines` манифеста.
+
+### Деплой
+
+Методы деплоя копируют файлы из `buildDir` (по умолчанию `./build`) в целевой путь из `deploy.path`. Требуют настроенный деплой — либо `deploy.path` в манифесте, либо `AMXB_DEPLOY_PATH` в `.env`. Исключения (`deploy.exclude`) соблюдаются, как в CLI.
+
+#### `deploy.start`
+
+Полный деплой `build/amxmodx/` и `build/assets/`.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `manifest` | string | Путь к манифесту |
+| `buildDir` | string | Папка сборки (по умолчанию `./build`) |
+| `set` / `define` | string[] | Переопределения манифеста |
+| `incremental` | boolean | Копировать только изменённые файлы (по mtime) |
+
+Ответ: `{"ok": true, "copied": 42}` — или `{"ok": false, "message": "Deploy path not configured..."}`.
+
+#### `deploy.file`
+
+Задеплоить один файл (например, скомпилированный `.amxx`) — то же, что делает watch при изменении файла.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `relPath` | string | **Обязателен**, путь относительно корня секции |
+| `section` | string | `"amxmodx"` (по умолчанию) или `"assets"` |
+| `manifest` | string | Путь к манифесту |
+| `buildDir` | string | Папка сборки — для hot-reload передавайте `buildDir` из `compile.single` (`output_path`) |
+
+Ответ: `{"ok": true, "dest": "/server/addons/amxmodx/plugins/x.amxx"}` — `ok: false` если файл не задеплоен (нет `deploy.path`, нет исходника, или файл в `deploy.exclude`).
+
+#### `deploy.remove`
+
+Удалить задеплоенный файл (watch при удалении локального файла).
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `relPath` | string | **Обязателен**, путь относительно корня секции |
+| `section` | string | `"amxmodx"` (по умолчанию) или `"assets"` |
+| `manifest` | string | Путь к манифесту |
+
+Ответ: `{"ok": true, "dest": "/server/addons/amxmodx/plugins/x.amxx"}`.
+
+### RCON
+
+#### `rcon.send`
+
+Отправить команду RCON на GoldSrc-сервер (HL1 / CS 1.6, UDP).
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `command` | string | **Обязателен**, команда, напр. `"amxx list"` |
+| `host` | string | Хост (по умолчанию: из `deploy.rcon.host` манифеста) |
+| `port` | number | Порт (по умолчанию: из `deploy.rcon.port`, иначе 27015) |
+| `password` | string | Пароль (по умолчанию: из `deploy.rcon.password` манифеста) |
+| `manifest` | string | Манифест с конфигурацией `deploy.rcon` |
+
+Если `host`/`password` не переданы — берутся из `deploy.rcon` манифеста (с интерполяцией `${VAR}`). Ответ: `{"ok": true, "response": "<ответ сервера>"}`. При недоступном сервере — ошибка `-32603` (timeout).
 
 ### Watch
 
@@ -383,6 +499,20 @@ child.stdin.write(JSON.stringify({
 
 Остановить watch. Ответ: `{"ok": true}` — или `{"ok": false, "error": "No watcher running"}`.
 
+### Health check
+
+#### `serve.ping`
+
+Проверка, что канал жив, без побочных эффектов.
+
+Без параметров. Ответ:
+
+```json
+{"ok": true, "pid": 12345, "version": "1.5.2", "node": "v22.22.2"}
+```
+
+Удобно вызывать первым при подключении клиента.
+
 ## Полный список методов
 
 | Метод | Категория | Что делает | Core-функция |
@@ -394,19 +524,27 @@ child.stdin.write(JSON.stringify({
 | `amxmodx.includes.list` | include | Список stdlib `.inc` | `compiler-fetcher.fetchCompiler` + glob |
 | `amxmodx.include.get` | include | Содержимое stdlib `.inc` | `compiler-fetcher.fetchCompiler` + glob + read |
 | `deps.tree` | deps | Дерево зависимостей | `deps-tree.buildDepTree` + `assembleRootDeps` |
+| `dep-graph.get` | deps | Граф `#include`-зависимостей `.sma` | `dep-graph.DepGraph` (`parseFile` + `snapshot` + `getSmasDependingOn`) |
 | `releases.list` | releases | Релизы/тэги GitHub | `release-lister.listReleases`/`listTags` |
 | `cache.info` | cache | Содержимое кэша | `cache-info.getCacheInfo` |
+| `compiler.info` | compiler | Информация об amxxpc | `compiler-fetcher.getCompilerInfo` |
 | `build.plan` | build | План без выполнения | `build-plan.buildPlanData` |
 | `build.start` | build | Полная сборка + прогресс | `build-service.runBuild` |
 | `build.cancel` | build | Отмена сборки | AbortController |
-| `compile.single` | compile | Компиляция одного `.sma` | `compiler.compileSingle` |
+| `compile.single` | compile | Компиляция одного `.sma` (+ вывод) | `compiler.compileSingle` |
+| `deploy.start` | deploy | Полный деплой build/ | `deployer.deployBuild` |
+| `deploy.file` | deploy | Деплой одного файла | `deployer.deployFile` |
+| `deploy.remove` | deploy | Удаление задеплоенного файла | `deployer.removeDeployedFile` |
+| `rcon.send` | rcon | RCON-команда на сервер | `rcon.sendRcon` |
 | `watch.start` | watch | Подписка на изменения | `watcher.startWatch` |
 | `watch.stop` | watch | Остановка watch | `watcher.close` |
+| `serve.ping` | serve | Health-check канала | — (pid/version) |
 
 **Уведомления**: `build.stage`, `build.compiled`, `build.progress`, `build.done`, `build.error`, `watch.changed`.
 
 ## Практические советы
 
+- **Демо-клиент.** `examples/amxb-live.js` в репозитории — готовый пример клиента: живой дашборд сборки (этапы, прогресс, результат) через `build.start`, с опцией `--watch` для потока `watch.changed`. Ноль зависимостей, работает и в TTY, и в пайпе.
 - **Один клиент на процесс.** `amxb serve` обслуживает один stdin-канал. Для нескольких потребителей запустите несколько процессов или реализуйте прокси.
 - **Автоопределение манифеста** работает от cwd процесса, в котором запущен `amxb serve`. Чтобы явно указать проект — запускайте из его корня или передавайте `manifest` в каждый запрос.
 - **Сеть.** Запросы, которые тянут репозитории/релизы/компилятор (`include.list`, `deps.tree`, `build.start`, ...), могут ходить в сеть. `no_fetch: true` ограничивает работу кэшем.

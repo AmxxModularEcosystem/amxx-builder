@@ -92,9 +92,11 @@ function deployPlugin(manifest, buildDir, amxxName) {
 /**
  * Deploy a single changed local file (watch mode for amxmodx/ or assets/).
  * relPath is relative to the section root (amxmodx/ or assets/).
+ * Returns the destination path, or null when not deployed (no deploy path,
+ * missing source, or excluded).
  */
 function deployFile(manifest, buildDir, relPath, section) {
-  if (!manifest.deploy.path) return;
+  if (!manifest.deploy.path) return null;
 
   const { amxmodxDest, assetsDest, deployRoot } = resolveDeployDirs(manifest);
 
@@ -104,24 +106,26 @@ function deployFile(manifest, buildDir, relPath, section) {
   const src  = path.join(srcBase, relPath);
   const dest = path.join(destBase, relPath);
 
-  if (!fs.existsSync(src)) return;
+  if (!fs.existsSync(src)) return null;
   if (isExcluded(dest, deployRoot, manifest.deploy.exclude || [])) {
     logger.verbose(`  skip (excluded): ${relPath}`);
-    return;
+    return null;
   }
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(src, dest);
   logger.success(`Deployed: ${relPath}`);
   logger.verbose(`  → ${dest}`);
+  return dest;
 }
 
 /**
  * Removes a deployed file that was deleted locally (watch mode).
  * relPath is relative to the section root. Honours deploy.exclude.
+ * Returns the removed destination path, or null when nothing was removed.
  */
 function removeDeployedFile(manifest, buildDir, relPath, section) {
-  if (!manifest.deploy.path) return;
+  if (!manifest.deploy.path) return null;
 
   const { amxmodxDest, assetsDest, deployRoot } = resolveDeployDirs(manifest);
 
@@ -130,12 +134,13 @@ function removeDeployedFile(manifest, buildDir, relPath, section) {
 
   if (isExcluded(dest, deployRoot, manifest.deploy.exclude || [])) {
     logger.verbose(`  skip delete (excluded): ${relPath}`);
-    return;
+    return null;
   }
 
-  if (!fs.existsSync(dest)) return;
+  if (!fs.existsSync(dest)) return null;
   fs.rmSync(dest, { force: true });
   logger.success(`Removed: ${relPath}`);
+  return dest;
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

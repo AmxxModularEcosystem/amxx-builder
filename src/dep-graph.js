@@ -24,6 +24,8 @@ class DepGraph {
     this._includeDirs = includeDirs;
     // absPath → Set<absPath>: direct includes of each file
     this._deps = new Map();
+    // absPath → [{name, isAngle}]: includes that could not be resolved
+    this._missing = new Map();
     this._parsed = new Set();
   }
 
@@ -34,21 +36,42 @@ class DepGraph {
     if (!fs.existsSync(absPath)) return;
 
     const directs = new Set();
+    const missing = [];
     for (const { name, isAngle } of extractIncludes(absPath)) {
       const resolved = this._resolve(absPath, name, isAngle);
       if (resolved) {
         directs.add(resolved);
         this.parseFile(resolved);
+      } else {
+        missing.push({ name, isAngle });
       }
     }
     this._deps.set(absPath, directs);
+    if (missing.length) this._missing.set(absPath, missing);
+    else this._missing.delete(absPath);
   }
 
   // Re-parse a changed file (drops stale edges, keeps the rest of the graph).
   update(absPath) {
     this._parsed.delete(absPath);
     this._deps.delete(absPath);
+    this._missing.delete(absPath);
     this.parseFile(absPath);
+  }
+
+  // Structured snapshot of the parsed graph: every parsed file with its direct
+  // (resolved) includes, plus includes that could not be resolved. Exposed to
+  // interface layers (serve/JSON-RPC) so the graph can be serialized.
+  snapshot() {
+    const files = [];
+    for (const [file, deps] of this._deps) {
+      files.push({ file, isSma: file.endsWith('.sma'), includes: [...deps].sort() });
+    }
+    const missing = [];
+    for (const [file, list] of this._missing) {
+      for (const { name, isAngle } of list) missing.push({ file, name, isAngle });
+    }
+    return { files, missing };
   }
 
   // Returns Set<absPath> of .sma files that transitively depend on incPath.

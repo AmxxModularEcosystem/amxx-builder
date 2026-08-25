@@ -23,13 +23,21 @@ const EXPECTED_METHODS = [
   'deps.tree',
   'releases.list',
   'cache.info',
+  'compiler.info',
+  'dep-graph.get',
   'build.plan',
   // mutation
   'build.start',
   'build.cancel',
   'compile.single',
+  'deploy.start',
+  'deploy.file',
+  'deploy.remove',
+  'rcon.send',
   'watch.start',
   'watch.stop',
+  // health
+  'serve.ping',
 ];
 
 test('createServeServer wires all documented request methods', () => {
@@ -53,4 +61,13 @@ test('createServeServer returns a JsonRpcServer (has connect/sendResult)', () =>
   assert.equal(typeof server.sendResult, 'function');
   assert.equal(typeof server.notify, 'function');
   assert.equal(typeof server.onRequest, 'function');
+});
+
+test('serve.ping returns ok with process info (no network)', async () => {
+  const server = createServeServer();
+  const result = await server._requests.get('serve.ping')();
+  assert.equal(result.ok, true);
+  assert.equal(typeof result.pid, 'number');
+  assert.equal(typeof result.version, 'string');
+  assert.equal(typeof result.node, 'string');
 });

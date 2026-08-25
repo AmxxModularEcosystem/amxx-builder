@@ -23,11 +23,16 @@
  *   deps.tree               → deps-tree buildDepTree + assembleRootDeps
  *   releases.list           → release-lister listReleases / listTags
  *   cache.info              → cache-info getCacheInfo
+ *   compiler.info           → compiler-fetcher getCompilerInfo
+ *   dep-graph.get           → dep-graph DepGraph
  *   build.plan              → build-plan buildPlanData
  *   build.start             → build-service runBuild (+ event notifications)
  *   build.cancel            → abort the running build (AbortController)
- *   compile.single          → compiler.compileSingle
+ *   compile.single          → compiler.compileSingle (+ captured output)
+ *   deploy.start / deploy.file / deploy.remove → deployer deployBuild/deployFile/removeDeployedFile
+ *   rcon.send               → rcon sendRcon
  *   watch.start / watch.stop → watcher.startWatch (+ watch.changed notifications)
+ *   serve.ping              → process info (health check)
  */
 
 const fs   = require('fs');
@@ -46,14 +51,18 @@ const { resolveManifestPath } = require('../manifest-path');
 const { resolveManifest, parseManifest, resolveGithubToken, parseDepString } = require('../manifest');
 const { validateManifestFile } = require('../validate');
 const { fetchDepIncludeDir, collectIncFiles, parseIncludeDirective, searchIncludeFile } = require('../include-tree');
-const { fetchCompiler, resolveAmxmodxVersion } = require('../compiler-fetcher');
+const { fetchCompiler, resolveAmxmodxVersion, getCompilerInfo } = require('../compiler-fetcher');
 const { buildDepTree, assembleRootDeps } = require('../deps-tree');
 const { listReleases, listTags } = require('../release-lister');
 const { getCacheInfo } = require('../cache-info');
 const { buildPlanData } = require('../build-plan');
 const { runBuild } = require('../build-service');
 const { compileSingle } = require('../compiler');
+const { deployBuild, deployFile, removeDeployedFile } = require('../deployer');
+const { sendRcon } = require('../rcon');
+const { DepGraph } = require('../dep-graph');
 const { startWatch } = require('../watcher');
+const pkg = require('../../package.json');
 
 // ─── Small interface helpers (no domain logic) ────────────────────────────────
 
@@ -86,6 +95,23 @@ function manifestPathFor(params) {
   return params?.manifest ? path.resolve(params.manifest) : resolveManifestPath().path;
 }
 
+// dotenv@17 prints an "injected env" line to stdout by default, which would
+// break the pure-JSON-RPC stdout contract — always load quietly here.
+function loadEnvQuiet(manifestPath) {
+  loadEnv(manifestPath, { quiet: true });
+}
+
+// Full manifest (defaults merged, set/define applied) for deploy methods.
+function deployRequestManifest(params) {
+  const manifestPath = manifestPathFor(params);
+  loadEnvQuiet(manifestPath);
+  return resolveManifest(manifestPath, { set: params?.set, define: params?.define });
+}
+
+function buildDirFor(params) {
+  return params?.buildDir ? path.resolve(params.buildDir) : path.join(process.cwd(), 'build');
+}
+
 /**
  * Create and configure the JSON-RPC server with all methods wired to core.
  * Does NOT connect or set up the environment — call runServe() for that.
@@ -97,6 +123,15 @@ function createServeServer() {
   let activeBuild   = null; // AbortController for the running build
   let activeWatcher = null; // chokidar watcher instance
 
+  // ─── Health check ────────────────────────────────────────────────────────
+
+  server.onRequest('serve.ping', () => ({
+    ok: true,
+    pid: process.pid,
+    version: pkg.version,
+    node: process.version,
+  }));
+
   // ─── Read-only: manifest ──────────────────────────────────────────────────
 
   server.onRequest('manifest.validate', (params) => {
@@ -105,7 +140,7 @@ function createServeServer() {
 
   server.onRequest('manifest.resolve', (params) => {
     const manifestPath = manifestPathFor(params);
-    loadEnv(manifestPath);
+    loadEnvQuiet(manifestPath);
     return resolveManifest(manifestPath, { set: params?.set, define: params?.define });
   });
 
@@ -266,7 +301,7 @@ function createServeServer() {
     }
 
     const manifestPath = manifestPathFor(params);
-    loadEnv(manifestPath);
+    loadEnvQuiet(manifestPath);
     const manifest = parseManifest(manifestPath);
     const assembled = assembleRootDeps(manifest);
     return buildDepTree(assembled.rootDeps, {
@@ -277,6 +312,65 @@ function createServeServer() {
       from: 'manifest',
       getDepsOverride: assembled.getDepsOverride,
     });
+  });
+
+  // ─── Include dependency graph ────────────────────────────────────────────
+
+  server.onRequest('dep-graph.get', async (params) => {
+    if (!params?.sma_file) {
+      const err = new Error('Missing required "sma_file" parameter');
+      err.code = -32602;
+      throw err;
+    }
+    const smaPath = path.resolve(params.sma_file);
+    if (!fs.existsSync(smaPath)) {
+      const err = new Error(`File not found: ${smaPath}`);
+      err.code = -32602;
+      throw err;
+    }
+
+    const noFetch = params?.noFetch === true;
+
+    const manifestPath = manifestPathFor(params);
+    let manifest = null;
+    if (fs.existsSync(manifestPath)) {
+      try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
+    }
+
+    const version = await resolveVersionFromParams(params);
+    const { includeDir } = await fetchCompiler(version);
+
+    // Dep includes come BEFORE the stdlib — matching the real build's search order.
+    const includeDirs = [];
+    if (manifest) {
+      for (const dep of manifest.globalDeps) {
+        try {
+          includeDirs.push(await fetchDepIncludeDir(
+            dep, resolveGithubToken(manifest, dep.repo), noFetch, manifest.github.ssh
+          ));
+        } catch (err) { /* keep the rest of the dirs on partial failure */ }
+      }
+    }
+    if (includeDir) includeDirs.push(includeDir);
+    for (const d of (params?.include_dirs || [])) includeDirs.push(path.resolve(d));
+
+    const graph = new DepGraph(includeDirs);
+    graph.parseFile(smaPath);
+
+    const result = {
+      sma_file: smaPath,
+      version,
+      include_dirs: includeDirs,
+      ...graph.snapshot(),
+    };
+
+    // Reverse query: which .sma files transitively depend on this .inc?
+    if (params?.inc) {
+      const incAbs = path.resolve(params.inc);
+      result.smas_depending_on = [...graph.getSmasDependingOn(incAbs)].sort();
+    }
+
+    return result;
   });
 
   // ─── Releases / cache / plan ─────────────────────────────────────────────
@@ -296,6 +390,11 @@ function createServeServer() {
   server.onRequest('cache.info', (params) => {
     const manifestPath = params?.manifest ? path.resolve(params.manifest) : undefined;
     return getCacheInfo(manifestPath);
+  });
+
+  server.onRequest('compiler.info', async (params) => {
+    const version = await resolveVersionFromParams(params);
+    return getCompilerInfo(version, { noFetch: params?.noFetch === true });
   });
 
   server.onRequest('build.plan', (params) => {
@@ -321,7 +420,7 @@ function createServeServer() {
     activeBuild = controller;
 
     const manifestPath = manifestPathFor(params);
-    loadEnv(manifestPath);
+    loadEnvQuiet(manifestPath);
     const manifest = resolveManifest(manifestPath, { set: params?.set, define: params?.define });
 
     // Forward core lifecycle events as server→client notifications while the
@@ -359,6 +458,85 @@ function createServeServer() {
     if (!activeBuild) return { ok: false, error: 'No build running' };
     activeBuild.abort();
     return { ok: true };
+  });
+
+  // ─── Deploy ──────────────────────────────────────────────────────────────
+
+  server.onRequest('deploy.start', async (params) => {
+    const manifest = deployRequestManifest(params);
+    if (!manifest.deploy || !manifest.deploy.path) {
+      return { ok: false, message: 'Deploy path not configured.\n  → Set AMXB_DEPLOY_PATH in .env, or add deploy.path to your manifest' };
+    }
+    const copied = await deployBuild(manifest, buildDirFor(params), {
+      incremental: params?.incremental === true,
+    });
+    return { ok: true, copied };
+  });
+
+  server.onRequest('deploy.file', (params) => {
+    if (!params?.relPath) {
+      const err = new Error('Missing required "relPath" parameter');
+      err.code = -32602;
+      throw err;
+    }
+    const section = params?.section === 'assets' ? 'assets' : 'amxmodx';
+    const manifest = deployRequestManifest(params);
+    if (!manifest.deploy || !manifest.deploy.path) {
+      return { ok: false, message: 'Deploy path not configured' };
+    }
+    const dest = deployFile(manifest, buildDirFor(params), params.relPath, section);
+    return { ok: dest != null, dest: dest || null };
+  });
+
+  server.onRequest('deploy.remove', (params) => {
+    if (!params?.relPath) {
+      const err = new Error('Missing required "relPath" parameter');
+      err.code = -32602;
+      throw err;
+    }
+    const section = params?.section === 'assets' ? 'assets' : 'amxmodx';
+    const manifest = deployRequestManifest(params);
+    if (!manifest.deploy || !manifest.deploy.path) {
+      return { ok: false, message: 'Deploy path not configured' };
+    }
+    const dest = removeDeployedFile(manifest, buildDirFor(params), params.relPath, section);
+    return { ok: dest != null, dest: dest || null };
+  });
+
+  // ─── RCON ────────────────────────────────────────────────────────────────
+
+  server.onRequest('rcon.send', async (params) => {
+    if (!params?.command) {
+      const err = new Error('Missing required "command" parameter');
+      err.code = -32602;
+      throw err;
+    }
+
+    let host = params?.host;
+    let port = params?.port;
+    let password = params?.password;
+
+    // Fall back to the manifest's deploy.rcon config when host/password are omitted.
+    if ((host == null || password == null) && fs.existsSync(manifestPathFor(params))) {
+      try {
+        const rconCfg = parseManifest(manifestPathFor(params)).deploy?.rcon;
+        if (rconCfg) {
+          if (host == null) host = rconCfg.host;
+          if (port == null) port = rconCfg.port;
+          if (password == null) password = rconCfg.password;
+        }
+      } catch { /* unparseable manifest — explicit params only */ }
+    }
+    if (port == null) port = 27015;
+
+    if (!host || !password) {
+      const err = new Error('RCON host/password not provided (pass explicitly or configure deploy.rcon in the manifest)');
+      err.code = -32602;
+      throw err;
+    }
+
+    const response = await sendRcon({ host, port, password, command: params.command });
+    return { ok: true, response };
   });
 
   // ─── Single-file compile ─────────────────────────────────────────────────
@@ -408,18 +586,30 @@ function createServeServer() {
 
     const buildDir = path.join(os.tmpdir(), 'amxb-serve-compile');
     const compileManifest = manifest || { amxmodx: { defines: [] } };
-    const amxxName = await compileSingle(
-      compileManifest,
-      smaPath,
-      compilerPath,
-      includeDirs,
-      buildDir,
-      params?.scripting_root ? path.resolve(params.scripting_root) : undefined
-    );
+
+    // Capture the compiler output emitted as an event by compileSingle.
+    const baseName = path.basename(smaPath);
+    let compiled = null;
+    const onCompiled = (p) => { if (p.baseName === baseName) compiled = p; };
+    on(EVENTS.COMPILED, onCompiled);
+    let amxxName;
+    try {
+      amxxName = await compileSingle(
+        compileManifest,
+        smaPath,
+        compilerPath,
+        includeDirs,
+        buildDir,
+        params?.scripting_root ? path.resolve(params.scripting_root) : undefined
+      );
+    } finally {
+      off(EVENTS.COMPILED, onCompiled);
+    }
 
     return {
       ok: amxxName != null,
       amxxName,
+      output: compiled ? compiled.output : undefined,
       output_path: amxxName ? path.join(buildDir, 'amxmodx', 'plugins', amxxName) : null,
       dep_errors: depErrors.length ? depErrors : undefined,
     };

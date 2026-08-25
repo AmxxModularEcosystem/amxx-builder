@@ -65,6 +65,39 @@ async function fetchCompiler(version, options = {}) {
   return { compilerPath: binaryPath, includeDir: fs.existsSync(includeDir) ? includeDir : null };
 }
 
+/**
+ * Compiler info without necessarily downloading. With noFetch the report only
+ * reflects what is already cached; otherwise the compiler is ensured to be
+ * present (downloaded on first use), exactly like fetchCompiler.
+ *
+ * @param {string} [version] - explicit version (else resolved like the CLI: manifest → latest)
+ * @param {object} [options]
+ * @param {boolean} [options.noFetch] - don't download; report cache state only
+ * @returns {Promise<{version: string, platform: string, compilerPath: string|null, includeDir: string|null, cached: boolean}>}
+ */
+async function getCompilerInfo(version, options = {}) {
+  const { noFetch = false } = options;
+  const resolved = version || await fetchLatestVersion({ noFetch });
+  const platform = getPlatform();
+  const cacheDir = path.join(getCacheDir(), 'amxxpc', resolved, platform);
+  const binaryName = platform === 'windows' ? 'amxxpc.exe' : 'amxxpc';
+  const compilerPath = path.join(cacheDir, binaryName);
+  const includeDir = path.join(cacheDir, 'include');
+
+  if (!fs.existsSync(compilerPath) && !noFetch) {
+    await fetchCompiler(resolved);
+  }
+
+  const cached = fs.existsSync(compilerPath);
+  return {
+    version: resolved,
+    platform,
+    compilerPath: cached ? compilerPath : null,
+    includeDir: fs.existsSync(includeDir) ? includeDir : null,
+    cached,
+  };
+}
+
 // "1.10.5428" → { major: '1', minor: '10', build: '5428' }
 function parseVersion(versionStr) {
   const parts = String(versionStr).split('.');
@@ -324,4 +357,4 @@ function findDir(root, name) {
   return null;
 }
 
-module.exports = { fetchCompiler, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion, resolveAmxmodxVersion };
+module.exports = { fetchCompiler, getCompilerInfo, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion, resolveAmxmodxVersion };
