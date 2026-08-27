@@ -167,7 +167,8 @@ class JsonRpcServer {
       result = await handler(params);
     } catch (err) {
       if (typeof err.code === 'number') {
-        this.sendError(id, err.code, err.message || 'Error');
+        // Handlers may attach structured details via err.data (e.g. GitHub status).
+        this.sendError(id, err.code, err.message || 'Error', err.data);
       } else {
         this.sendError(
           id,

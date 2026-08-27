@@ -22,6 +22,9 @@
  *   amxmodx.include.get     → compiler-fetcher fetchCompiler + glob + read
  *   deps.tree               → deps-tree buildDepTree + assembleRootDeps
  *   releases.list           → release-lister listReleases / listTags
+ *   repos.info              → github-api getRepoInfo
+ *   repos.branches          → github-api listBranches
+ *   repos.structure         → github-api getRepoStructure
  *   cache.info              → cache-info getCacheInfo
  *   compiler.info           → compiler-fetcher getCompilerInfo
  *   dep-graph.get           → dep-graph DepGraph
@@ -54,6 +57,10 @@ const { fetchDepIncludeDir, collectIncFiles, parseIncludeDirective, searchInclud
 const { fetchCompiler, resolveAmxmodxVersion, getCompilerInfo } = require('../compiler-fetcher');
 const { buildDepTree, assembleRootDeps } = require('../deps-tree');
 const { listReleases, listTags } = require('../release-lister');
+const {
+  getRepoInfo, listBranches, getRepoStructure,
+  GithubError, isValidRepo, validateRepoStructureOptions,
+} = require('../github-api');
 const { getCacheInfo } = require('../cache-info');
 const { buildPlanData } = require('../build-plan');
 const { runBuild } = require('../build-service');
@@ -93,6 +100,52 @@ async function resolveVersionFromParams(params) {
 
 function manifestPathFor(params) {
   return params?.manifest ? path.resolve(params.manifest) : resolveManifestPath().path;
+}
+
+/**
+ * GitHub token for repo-scope methods. Manifest tokens win: the .env next to
+ * the manifest is loaded first (it overrides the cwd .env loaded at startup —
+ * per the env convention: manifest .env is primary, cwd is the fallback).
+ * Then the explicit `token` param, then the process env, then anonymous.
+ */
+function resolveGithubTokenFor(params, repo) {
+  const manifestPath = manifestPathFor(params);
+  if (fs.existsSync(manifestPath)) {
+    loadEnvQuiet(manifestPath);
+    try {
+      const fromManifest = resolveGithubToken(parseManifest(manifestPath), repo);
+      if (fromManifest) return fromManifest;
+    } catch { /* unparseable manifest — fall back to explicit/env token */ }
+  }
+  return params?.token || process.env.GITHUB_TOKEN || null;
+}
+
+/**
+ * Shape a GitHub API error into the JSON-RPC error contract: -32603 with
+ * error.data = { status, repo, message }. Returns null for non-GitHub errors
+ * so the caller rethrows them unchanged.
+ */
+function githubRpcError(err, repo) {
+  if (err instanceof GithubError) {
+    err.code = -32603;
+    err.data = { status: err.status, repo, message: err.message };
+    return err;
+  }
+  if (err && err.response && typeof err.response.status === 'number') {
+    // Raw axios error (release-lister path) — normalize to the same contract.
+    const message = (err.response.data && err.response.data.message) || err.message;
+    const shaped = new Error(message);
+    shaped.code = -32603;
+    shaped.data = { status: err.response.status, repo, message };
+    return shaped;
+  }
+  return null;
+}
+
+function repoParamError(params) {
+  if (!params?.repo) return 'Missing required "repo" field';
+  if (!isValidRepo(params.repo)) return 'Invalid "repo": expected "owner/repo"';
+  return null;
 }
 
 // dotenv@17 prints an "injected env" line to stdout by default, which would
@@ -173,6 +226,7 @@ function createServeServer() {
     let manifest = null;
     const manifestPath = manifestPathFor(params);
     if (fs.existsSync(manifestPath)) {
+      loadEnvQuiet(manifestPath);
       try {
         manifest = parseManifest(manifestPath);
         for (const dep of manifest.globalDeps) {
@@ -221,6 +275,7 @@ function createServeServer() {
       err.code = -32602;
       throw err;
     }
+    loadEnvQuiet(manifestPath);
     const manifest = parseManifest(manifestPath);
 
     const deps = [];
@@ -334,6 +389,7 @@ function createServeServer() {
     const manifestPath = manifestPathFor(params);
     let manifest = null;
     if (fs.existsSync(manifestPath)) {
+      loadEnvQuiet(manifestPath);
       try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
     }
 
@@ -373,18 +429,81 @@ function createServeServer() {
     return result;
   });
 
-  // ─── Releases / cache / plan ─────────────────────────────────────────────
+  // ─── Releases / repos / cache / plan ─────────────────────────────────────
 
   server.onRequest('releases.list', async (params) => {
-    if (!params?.repo) {
-      const err = new Error('Missing required "repo" field');
+    const invalid = repoParamError(params);
+    if (invalid) {
+      const err = new Error(invalid);
       err.code = -32602;
       throw err;
     }
-    const token = params?.token || process.env.GITHUB_TOKEN || null;
+    const repo = params.repo;
+    const token = resolveGithubTokenFor(params, repo);
     const limit = params?.limit || 10;
-    if (params?.tags) return listTags(params.repo, { token, limit });
-    return listReleases(params.repo, { token, limit, includeAssets: params?.includeAssets });
+    try {
+      if (params?.tags) return await listTags(repo, { token, limit });
+      return await listReleases(repo, { token, limit, includeAssets: params?.includeAssets });
+    } catch (err) {
+      throw githubRpcError(err, repo) || err;
+    }
+  });
+
+  server.onRequest('repos.info', async (params) => {
+    const invalid = repoParamError(params);
+    if (invalid) {
+      const err = new Error(invalid);
+      err.code = -32602;
+      throw err;
+    }
+    const repo = params.repo;
+    const token = resolveGithubTokenFor(params, repo);
+    try {
+      return await getRepoInfo(repo, { token });
+    } catch (err) {
+      throw githubRpcError(err, repo) || err;
+    }
+  });
+
+  server.onRequest('repos.branches', async (params) => {
+    const invalid = repoParamError(params);
+    if (invalid) {
+      const err = new Error(invalid);
+      err.code = -32602;
+      throw err;
+    }
+    const repo = params.repo;
+    const token = resolveGithubTokenFor(params, repo);
+    const limit = Math.min(100, Math.max(1, params?.limit ?? 10));
+    const page = Math.max(1, params?.page ?? 1);
+    try {
+      return await listBranches(repo, { token, limit, page });
+    } catch (err) {
+      throw githubRpcError(err, repo) || err;
+    }
+  });
+
+  server.onRequest('repos.structure', async (params) => {
+    const invalid = repoParamError(params) || validateRepoStructureOptions(params);
+    if (invalid) {
+      const err = new Error(invalid);
+      err.code = -32602;
+      throw err;
+    }
+    const repo = params.repo;
+    const token = resolveGithubTokenFor(params, repo);
+    try {
+      return await getRepoStructure(repo, {
+        token,
+        ref: params?.ref || null,
+        depth: params?.depth,
+        dirsOnly: params?.dirsOnly === true,
+        ext: params?.ext,
+        maxEntries: params?.maxEntries,
+      });
+    } catch (err) {
+      throw githubRpcError(err, repo) || err;
+    }
   });
 
   server.onRequest('cache.info', (params) => {
@@ -559,6 +678,7 @@ function createServeServer() {
     const manifestPath = manifestPathFor(params);
     let manifest = null;
     if (fs.existsSync(manifestPath)) {
+      loadEnvQuiet(manifestPath);
       try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
     }
 

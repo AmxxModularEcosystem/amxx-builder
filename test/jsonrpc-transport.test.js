@@ -63,6 +63,34 @@ test('JsonRpcServer: thrown Error with numeric .code is sent verbatim', async ()
   assert.equal(errors[0].message, 'nope');
 });
 
+test('JsonRpcServer: thrown Error with numeric .code and .data forwards data', async () => {
+  const { server, results, errors } = makeHarness();
+  server.onRequest('gh', () => {
+    const err = new Error('Not Found');
+    err.code = -32603;
+    err.data = { status: 404, repo: 'a/b', message: 'Not Found' };
+    throw err;
+  });
+  await server._handleMessage({ jsonrpc: '2.0', id: 4, method: 'gh' });
+  assert.equal(results.length, 0);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].id, 4);
+  assert.equal(errors[0].code, -32603);
+  assert.equal(errors[0].message, 'Not Found');
+  assert.deepEqual(errors[0].data, { status: 404, repo: 'a/b', message: 'Not Found' });
+});
+
+test('JsonRpcServer: thrown Error with .code but no .data keeps data undefined', async () => {
+  const { server, errors } = makeHarness();
+  server.onRequest('plain', () => {
+    const err = new Error('nope');
+    err.code = -32000;
+    throw err;
+  });
+  await server._handleMessage({ jsonrpc: '2.0', id: 8, method: 'plain' });
+  assert.equal(errors[0].data, undefined);
+});
+
 test('JsonRpcServer: thrown Error without .code maps to -32603', async () => {
   const { server, errors } = makeHarness();
   server.onRequest('boom', () => { throw new Error('kaboom'); });

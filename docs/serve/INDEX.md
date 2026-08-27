@@ -34,7 +34,7 @@ amxb serve
 |---|---|
 | **stdout** | Только JSON-RPC (строки). Никаких логов, прогресс-баров, `console.log`. |
 | **stderr** | Логи и ошибки сервера (в т.ч. ошибки notification-хендлеров). |
-| **`.env`** | Загружается из рабочей директории (cwd) при старте. `manifest.resolve`/`build.plan`/`deps.tree`/`build.start` дополнительно подгружают `.env` рядом с манифестом. |
+| **`.env`** | Загружается из рабочей директории (cwd) при старте. Методы с `manifest`-параметром, резолвящие GitHub-токены (`repos.*`, `releases.list`, `deps.tree`, `include.resolve`, `include.list`, `dep-graph.get`, `compile.single`, ...), дополнительно подгружают `.env` рядом с манифестом — он **первичен** (перекрывает cwd), cwd-`.env` служит фолбеком, если рядом с манифестом его нет. |
 | **GITHUB_TOKEN** | Берётся из `.env` / окружения; приватные репо работают как в CLI. |
 
 ### Пример клиента за 30 секунд (Node.js)
@@ -97,7 +97,7 @@ child.stdin.write(JSON.stringify({
 | `-32700` | Parse error | Строка не является валидным JSON (сервер пытается извлечь `id` из строки) |
 | `-32601` | Method not found | Неизвестный метод |
 | `-32602` | Invalid params | Отсутствует/невалиден обязательный параметр (см. методы ниже) |
-| `-32603` | Internal error | Ошибка внутри core-логики |
+| `-32603` | Internal error | Ошибка внутри core-логики. Для GitHub-ошибок (`repos.*`, `releases.list`) содержит структурированные детали в `error.data = { "status", "repo", "message" }` |
 | `-32000` | Server error | Конфликт состояния: `build.start` при уже идущей сборке, `watch.start` при уже активном watcher'е |
 
 ## Методы
@@ -283,9 +283,127 @@ child.stdin.write(JSON.stringify({
 | `tags` | boolean | Список тэгов вместо релизов |
 | `limit` | number | Макс. результатов (по умолчанию 10) |
 | `includeAssets` | boolean | Детали ассетов релизов |
-| `token` | string | GitHub PAT |
+| `manifest` | string | Абсолютный путь до `amxbuild.yml` — для резолюции токена (`github.tokens[owner]` / `github.token_env`) |
+| `token` | string | GitHub PAT (фолбек, если токена нет в манифесте) |
 
 Ответ — массив релизов/тэгов (см. `listReleases`/`listTags` в `src/release-lister.js`).
+
+Ошибка GitHub API (в т.ч. 404 на несуществующее репо) — `-32603` с `error.data = { "status": 404, "repo": "owner/repo", "message": "..." }`. Клиент по `status` различает: `404` — «не существует или нет доступа» (warning), `403`/`429` — rate-limit, остальное — общая ошибка. В отличие от методов `repos.*`, 404 здесь остаётся ошибкой, а не `{ exists: false }` — проверка существования репо идёт через `repos.info`.
+
+### Репозитории (GitHub)
+
+Методы для проверки и изучения репозиториев — подсказки в `repos`/`deps` и диагностика «репо существует?». Общие конвенции:
+
+- **Токен-модель**: манифест (per-owner `github.tokens[owner]` → глобальный `github.token_env`, по умолчанию `GITHUB_TOKEN`) → параметр `token` → анонимно. `.env` рядом с манифестом подгружается автоматически.
+- **404 от GitHub — не ошибка**: ответ `{ "exists": false, "reason": "not_found_or_no_access" }`. GitHub намеренно отдаёт 404 и для несуществующих, и для приватных/недоступных репо — различить их нельзя даже с токеном.
+- **Ошибки GitHub** (403 rate-limit, 429, 5xx, сеть) — `-32603` с `error.data = { "status", "repo", "message" }` (`status` — HTTP-статус, `null` при сетевой ошибке).
+
+#### `repos.info`
+
+Проверка, что репозиторий существует и доступен, + метаданные.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `repo` | string | **Обязателен**, `"owner/repo"` |
+| `manifest` | string | Абсолютный путь до манифеста — для резолюции токена |
+| `token` | string | Явный токен-фолбек |
+
+Ответ (репо существует):
+
+```json
+{
+  "repo": "AmxxModularEcosystem/amxx-builder",
+  "exists": true,
+  "private": false,
+  "archived": false,
+  "disabled": false,
+  "defaultBranch": "main",
+  "description": "Build and package AMX Mod X server plugins",
+  "pushedAt": "2026-08-24T23:47:41Z"
+}
+```
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `repo` | string | `"owner/repo"` из запроса |
+| `exists` | boolean | `true` для существующего репо |
+| `private` / `archived` / `disabled` | boolean | Флаги репо (`archived: true` — клиент предупреждает «не обновлять») |
+| `defaultBranch` | string \| null | Ветка по умолчанию |
+| `description` | string \| null | Описание репо |
+| `pushedAt` | string \| null | ISO-дата последнего пуша (подсказка «заброшен», сортировка) |
+
+Ответ (не найдено / нет доступа) — HTTP 200, не ошибка:
+
+```json
+{ "repo": "octocat/this-repo-does-not-exist", "exists": false, "reason": "not_found_or_no_access" }
+```
+
+#### `repos.branches`
+
+Список веток (подсказки `repos[].ref` / `deps[].ref` — теги отдаёт `releases.list(tags: true)`).
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `repo` | string | **Обязателен**, `"owner/repo"` |
+| `manifest` | string | Абсолютный путь до манифеста — для резолюции токена |
+| `token` | string | Явный токен-фолбек |
+| `limit` | number | Макс. веток (по умолчанию 10, максимум 100) |
+| `page` | number | Пагинация (по умолчанию 1) |
+
+Ответ:
+
+```json
+{
+  "repo": "AmxxModularEcosystem/amxx-builder",
+  "branches": [
+    { "name": "main", "commitSha": "fe35d0db7959bbe1253a6031a5e10b900c723dba" },
+    { "name": "dev",  "commitSha": "0b7e6f..." }
+  ]
+}
+```
+
+`commitSha` — SHA головы ветки (бесплатно из GitHub-ответа, пригодится для диагностики). Пустой репозиторий (без коммитов) → `{ "repo": ..., "branches": [] }`. Не найдено / нет доступа → `{ "exists": false, "reason": "not_found_or_no_access" }`.
+
+#### `repos.structure`
+
+Файлы/папки репозитория (подсказки `repos[].amxmodx_dir`, `repos[].exclude` / `exclude_files`).
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `repo` | string | **Обязателен**, `"owner/repo"` |
+| `ref` | string | Ветка/тег/SHA. По умолчанию — default branch (сервер резолвит через запрос метаданных репо — он же проверяет существование) |
+| `manifest` | string | Абсолютный путь до манифеста — для резолюции токена |
+| `token` | string | Явный токен-фолбек |
+| `depth` | number | Глубина обхода от корня (1 = только верхний уровень). По умолчанию 1; **если задан `ext`, а `depth` опущен — без ограничения** (весь файл-дерево) |
+| `dirsOnly` | boolean | Только директории (для `amxmodx_dir`) |
+| `ext` | string[] | Только файлы с этими расширениями, напр. `["sma"]` (для `exclude`) |
+| `maxEntries` | number | Лимит записей в ответе (по умолчанию 500, максимум 2000) |
+
+Ответ:
+
+```json
+{
+  "repo": "AmxxModularEcosystem/CustomWeaponsAPI",
+  "ref": "main",
+  "truncated": false,
+  "entries": [
+    { "path": "amxmodx", "type": "dir" },
+    { "path": "scripting", "type": "dir" },
+    { "path": "scripting/CWAPI-A-Test.sma", "type": "file" }
+  ]
+}
+```
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `repo` | string | `"owner/repo"` |
+| `ref` | string \| null | Реально использованный ref (после резолва default branch — её имя; если передан — как передан) |
+| `truncated` | boolean | `true`, если достигнут `maxEntries` или дерево обрезано GitHub'ом (лимит 100k записей) |
+| `entries` | array | `{ path, type: "dir" \| "file" }`, относительные пути от корня, разделитель `/` |
+
+Семантика фильтров: `dirsOnly: true` → только `type: "dir"`; `ext: ["sma"]` → только файлы `.sma` (рекурсивно, директории отфильтровываются); `depth: N` ограничивает записи глубиной ≤ N от корня. `ref: "latest"` не поддерживается (это семантика релизов, а не структуры).
+
+Ошибки: несуществующий `ref` (ветка/тег) у **существующего** репо — `-32603` с `error.data.status = 404`, message «Ref not found: \<ref\>». Trees API отдаёт 404 и для отсутствующего репо, и для несуществующего ref — сервер перепроверяет существование репо через `repos.info`, чтобы их различить (422 бывает только для невалидного 40-hex SHA). Пустой репозиторий (409) — успех с `entries: []`; 404 на репо — `{ "exists": false, "reason": "not_found_or_no_access" }`.
 
 #### `cache.info`
 
@@ -526,6 +644,9 @@ child.stdin.write(JSON.stringify({
 | `deps.tree` | deps | Дерево зависимостей | `deps-tree.buildDepTree` + `assembleRootDeps` |
 | `dep-graph.get` | deps | Граф `#include`-зависимостей `.sma` | `dep-graph.DepGraph` (`parseFile` + `snapshot` + `getSmasDependingOn`) |
 | `releases.list` | releases | Релизы/тэги GitHub | `release-lister.listReleases`/`listTags` |
+| `repos.info` | repos | Существование + метаданные репо | `github-api.getRepoInfo` |
+| `repos.branches` | repos | Ветки репозитория | `github-api.listBranches` |
+| `repos.structure` | repos | Файлы/папки репозитория | `github-api.getRepoStructure` |
 | `cache.info` | cache | Содержимое кэша | `cache-info.getCacheInfo` |
 | `compiler.info` | compiler | Информация об amxxpc | `compiler-fetcher.getCompilerInfo` |
 | `build.plan` | build | План без выполнения | `build-plan.buildPlanData` |
@@ -547,7 +668,7 @@ child.stdin.write(JSON.stringify({
 - **Демо-клиент.** `examples/amxb-live.js` в репозитории — готовый пример клиента: живой дашборд сборки (этапы, прогресс, результат) через `build.start`, с опцией `--watch` для потока `watch.changed`. Ноль зависимостей, работает и в TTY, и в пайпе.
 - **Один клиент на процесс.** `amxb serve` обслуживает один stdin-канал. Для нескольких потребителей запустите несколько процессов или реализуйте прокси.
 - **Автоопределение манифеста** работает от cwd процесса, в котором запущен `amxb serve`. Чтобы явно указать проект — запускайте из его корня или передавайте `manifest` в каждый запрос.
-- **Сеть.** Запросы, которые тянут репозитории/релизы/компилятор (`include.list`, `deps.tree`, `build.start`, ...), могут ходить в сеть. `no_fetch: true` ограничивает работу кэшем.
+- **Сеть.** Запросы, которые тянут репозитории/релизы/компилятор (`repos.*`, `releases.list`, `include.list`, `deps.tree`, `build.start`, ...), ходят в GitHub API и могут быть медленными или упереться в rate-limit (403/429 — см. `error.data.status`). `no_fetch: true` ограничивает работу кэшем там, где это применимо.
 - **Долгие запросы.** `build.start` отвечает только по завершении сборки; не блокируйте чтение stdout на время сборки — читайте уведомления, иначе буфер stdout переполнится.
 - **Ошибки депов не роняют запрос.** Там, где это осмысленно, частичные ошибки попадают в `errors`/`dep_errors` результата, а не в `error`-ответ.
 
