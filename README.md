@@ -56,6 +56,10 @@ $env:AMXB_VERSION="v1.2.3"; irm https://raw.githubusercontent.com/AmxxModularEco
 
 Требования: **Node.js 18+**. git не требуется для установки и сборки — нужен только если манифест использует `github.ssh: true` (приватные репозитории по SSH-ключам).
 
+**Visual Studio Code**
+
+Расширение для VSCode - [AMXB — AMX Mod X Builder](https://marketplace.visualstudio.com/items?itemName=amxx-modular-ecosystem.amxb-vscode).
+
 ## Использование
 
 ```bash
