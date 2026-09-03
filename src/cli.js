@@ -248,6 +248,7 @@ program
   .option('--opencode',      'Create .opencode/opencode.json with MCP config (amxb mcp)')
   .option('--deploy',        'Create .env with deploy stubs (AMXB_DEPLOY_*)')
   .option('--script',        'Create build.bat and build.sh quick-build scripts')
+  .option('-f, --force',     'Overwrite existing files instead of skipping them')
   .option('-i, --interactive', 'Interactive mode with prompts')
   .action(async (options) => {
     try {

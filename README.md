@@ -80,6 +80,7 @@ amxb init --deploy                  # + создать .env с заготовк�
 amxb init --plugin <name>           # + создать amxmodx/scripting/<name>.sma
 amxb init --workflow                # + создать .github/workflows/ci.yml
 amxb init --script                  # + создать build.bat / build.sh для быстрого запуска amxb build
+amxb init --force                   # перезаписать существующие файлы (по умолчанию пропускаются)
 
 amxb clean                          # очистить build/ и кэш клонов
 amxb clean --all                    # + кэш компилятора
@@ -336,7 +337,7 @@ name: CI
 
 on:
   push:
-    branches: [master, feature/**, fix/**]
+    branches: [master, main, feature/**, fix/**]
     paths-ignore:
       - "**.md"
   pull_request:

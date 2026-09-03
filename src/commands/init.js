@@ -80,28 +80,28 @@ async function runInitInteractive(options) {
   const version = require('../../package.json').version;
   const actionTag = `v${version.split('.')[0]}`;
 
-  writeIfAbsent('amxbuild.yml', renderTemplate('init-manifest.yml', { name, schemaUrl: SCHEMA_URL }));
+  writeIfAbsent('amxbuild.yml', renderTemplate('init-manifest.yml', { name, schemaUrl: SCHEMA_URL }), options.force);
 
   if (doWorkflow) {
     const dest = path.join('.github', 'workflows', 'ci.yml');
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    writeIfAbsent(dest, renderTemplate('init-workflow.yml', { actionTag }));
+    writeIfAbsent(dest, renderTemplate('init-workflow.yml', { actionTag }), options.force);
   }
 
   if (pluginName) {
     const dest = path.join('amxmodx', 'scripting', `${pluginName}.sma`);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    writeIfAbsent(dest, '');
+    writeIfAbsent(dest, '', options.force);
   }
 
   if (doGitignore) {
     writeIfAbsent('.gitignore', [
       '*.amxx', '*.zip', '.env', '.amxb-cache', '.claude', 'build', 'dist', '',
-    ].join('\n'));
+    ].join('\n'), options.force);
   }
 
   if (doDeploy) {
-    writeIfAbsent('.env', renderTemplate('init-deploy.env'));
+    writeIfAbsent('.env', renderTemplate('init-deploy.env'), options.force);
   }
 
   if (doOpencode) {
@@ -109,7 +109,7 @@ async function runInitInteractive(options) {
   }
 
   if (doScript) {
-    writeBuildScripts();
+    writeBuildScripts(options.force);
   }
 }
 
@@ -118,28 +118,28 @@ function runInit(options) {
   const version = require('../../package.json').version;
   const actionTag = `v${version.split('.')[0]}`;
 
-  writeIfAbsent('amxbuild.yml', renderTemplate('init-manifest.yml', { name: pkgName, schemaUrl: SCHEMA_URL }));
+  writeIfAbsent('amxbuild.yml', renderTemplate('init-manifest.yml', { name: pkgName, schemaUrl: SCHEMA_URL }), options.force);
 
   if (options.workflow || options.ci) {
     const dest = path.join('.github', 'workflows', 'ci.yml');
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    writeIfAbsent(dest, renderTemplate('init-workflow.yml', { actionTag }));
+    writeIfAbsent(dest, renderTemplate('init-workflow.yml', { actionTag }), options.force);
   }
 
   if (options.plugin) {
     const dest = path.join('amxmodx', 'scripting', `${options.plugin}.sma`);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    writeIfAbsent(dest, '');
+    writeIfAbsent(dest, '', options.force);
   }
 
   if (options.gitignore) {
     writeIfAbsent('.gitignore', [
       '*.amxx', '*.zip', '.env', '.amxb-cache', '.claude', 'build', 'dist', '',
-    ].join('\n'));
+    ].join('\n'), options.force);
   }
 
   if (options.deploy) {
-    writeIfAbsent('.env', renderTemplate('init-deploy.env'));
+    writeIfAbsent('.env', renderTemplate('init-deploy.env'), options.force);
   }
 
   if (options.opencode) {
@@ -147,13 +147,13 @@ function runInit(options) {
   }
 
   if (options.script) {
-    writeBuildScripts();
+    writeBuildScripts(options.force);
   }
 }
 
-function writeBuildScripts() {
-  const batCreated = writeIfAbsent('build.bat', renderTemplate('init-build.bat').replace(/\r?\n/g, '\r\n'));
-  const shCreated  = writeIfAbsent('build.sh',  renderTemplate('init-build.sh'));
+function writeBuildScripts(force) {
+  const batCreated = writeIfAbsent('build.bat', renderTemplate('init-build.bat').replace(/\r?\n/g, '\r\n'), force);
+  const shCreated  = writeIfAbsent('build.sh',  renderTemplate('init-build.sh'), force);
 
   if (shCreated && process.platform !== 'win32') {
     try {
@@ -167,13 +167,14 @@ function writeBuildScripts() {
   return batCreated || shCreated;
 }
 
-function writeIfAbsent(filePath, content) {
-  if (fs.existsSync(filePath)) {
+function writeIfAbsent(filePath, content, force) {
+  const existed = fs.existsSync(filePath);
+  if (existed && !force) {
     logger.warn(`${filePath} already exists, skipping`);
     return false;
   }
   fs.writeFileSync(filePath, content);
-  logger.success(`Created ${filePath}`);
+  logger.success(existed ? `Overwritten ${filePath}` : `Created ${filePath}`);
   return true;
 }
 
