@@ -151,6 +151,10 @@ test('collectDepDocs: read error becomes a placeholder, does not throw', async (
     t.skip('root ignores file permissions — read cannot be forced to fail');
     return;
   }
+  if (process.platform === 'win32') {
+    t.skip('chmod cannot make a file unreadable on Windows (only toggles read-only) — read cannot be forced to fail');
+    return;
+  }
   const root = makeTmpDir('amxb-unreadable-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const brokenPath = path.join(root, 'broken.md');
