@@ -172,34 +172,35 @@
       "properties": {
         "dir": {
           "type": "string",
-          "description": "Directory to write the output archive or copied files (default: \"./dist\").",
+          "description": "Directory to write the output archive or copied files (default: \"./\").",
           "default": "./"
         },
         "archive_name": {
           "type": "string",
-          "description": "Archive filename. Supports {name} and {version} placeholders (default: \"{name}-{version}.zip\").",
+          "description": "Archive filename. Supports {name} and {version} placeholders (default: \"{name}.zip\").",
           "default": "{name}.zip",
           "examples": ["{name}.zip", "{name}-{version}.zip"]
         },
         "amxmodx_path": {
           "type": "string",
-          "description": "Path of the amxmodx directory inside the archive (default: \"addons/amxmodx\").",
-          "default": "addons/amxmodx",
+          "description": "Path of the amxmodx directory inside the archive (default: \"{name}/addons/amxmodx\").",
+          "default": "{name}/addons/amxmodx",
           "examples": ["{name}/addons/amxmodx", "addons/amxmodx"]
         },
         "assets_path": {
           "type": "string",
-          "description": "Local directory whose contents are copied to the archive root alongside amxmodx_path."
+          "description": "Destination of asset contents inside the archive (default: \"{name}\").",
+          "default": "{name}"
         },
         "readme": {
           "type": "boolean",
-          "description": "Include the project README.md in the archive root (default: false).",
-          "default": false
+          "description": "Include the project README.md in the archive root (default: true).",
+          "default": true
         },
         "generate_ini": {
           "type": "boolean",
-          "description": "Generate plugins-*.ini files listing compiled plugins (default: true).",
-          "default": true
+          "description": "Generate plugins-*.ini files listing compiled plugins (default: false).",
+          "default": false
         },
         "pack": {
           "type": "boolean",
@@ -264,7 +265,7 @@
             },
             "ref": {
               "type": "string",
-              "description": "Tag, branch, or commit SHA."
+              "description": "For source=git: tag, branch, or commit SHA. For source=release: release tag, or \"latest\" to resolve the latest GitHub release."
             },
             "include_path": {
               "type": "string",
