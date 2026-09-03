@@ -256,26 +256,36 @@
         },
         {
           "type": "object",
-          "required": ["repo", "ref"],
           "additionalProperties": false,
           "properties": {
             "repo": {
               "type": "string",
-              "description": "GitHub repository in \"owner/repo\" format."
+              "description": "GitHub repository in \"owner/repo\" format. Required for source=git/release; not used for source=fungun."
             },
             "ref": {
               "type": "string",
-              "description": "For source=git: tag, branch, or commit SHA. For source=release: release tag, or \"latest\" to resolve the latest GitHub release."
+              "description": "For source=git: tag, branch, or commit SHA. For source=release: release tag, or \"latest\" to resolve the latest GitHub release. Not used for source=fungun."
             },
             "include_path": {
               "type": "string",
-              "description": "Path inside the repo or release asset where .inc files are located."
+              "description": "Path inside the repo or release asset where .inc files are located. Not used for source=fungun."
             },
             "source": {
               "type": "string",
-              "description": "How to fetch the dependency: \"git\" clones the repo, \"release\" downloads a release asset (default: \"git\").",
-              "enum": ["git", "release"],
+              "description": "How to fetch the dependency: \"git\" clones the repo, \"release\" downloads a release asset, \"fungun\" takes the .inc file(s) from a fungun.net plugin page (default: \"git\").",
+              "enum": ["git", "release", "fungun"],
               "default": "git"
+            },
+            "id": {
+              "description": "For source=fungun: plugin index on fungun.net (e.g. 106), as a number or numeric string. Alternative to \"url\".",
+              "oneOf": [
+                { "type": "integer", "minimum": 1 },
+                { "type": "string", "pattern": "^[0-9]+$" }
+              ]
+            },
+            "url": {
+              "type": "string",
+              "description": "For source=fungun: full plugin page URL instead of \"id\" (e.g. \"https://fungun.net/shop/?p=show&id=106\")."
             },
             "asset": {
               "description": "For source=release: which release asset to download.",
@@ -298,7 +308,30 @@
                 { "type": "array", "items": { "type": "string" } }
               ]
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "source": { "const": "fungun" } },
+                "required": ["source"]
+              },
+              "then": {
+                "anyOf": [
+                  { "required": ["id"] },
+                  { "required": ["url"] }
+                ]
+              }
+            },
+            {
+              "if": {
+                "not": {
+                  "properties": { "source": { "const": "fungun" } },
+                  "required": ["source"]
+                }
+              },
+              "then": { "required": ["repo", "ref"] }
+            }
+          ]
         }
       ]
     },

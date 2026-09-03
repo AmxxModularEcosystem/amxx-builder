@@ -54,6 +54,7 @@ const { resolveManifestPath } = require('../manifest-path');
 const { resolveManifest, parseManifest, resolveGithubToken, parseDepString } = require('../manifest');
 const { validateManifestFile } = require('../validate');
 const { fetchDepIncludeDir, collectIncFiles, parseIncludeDirective, searchIncludeFile } = require('../include-tree');
+const { depLabel } = require('../deps-resolver');
 const { fetchCompiler, resolveAmxmodxVersion, getCompilerInfo } = require('../compiler-fetcher');
 const { buildDepTree, assembleRootDeps } = require('../deps-tree');
 const { listReleases, listTags } = require('../release-lister');
@@ -235,9 +236,9 @@ function createServeServer() {
               dep, resolveGithubToken(manifest, dep.repo),
               params?.noFetch === true, manifest.github.ssh
             );
-            searchPaths.push({ path: depDir, label: `${dep.repo}@${dep.ref}` });
+            searchPaths.push({ path: depDir, label: depLabel(dep) });
           } catch (err) {
-            errors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
+            errors.push(`${depLabel(dep)}: ${err.message}`);
           }
         }
       } catch (err) {
@@ -280,6 +281,9 @@ function createServeServer() {
 
     const deps = [];
     for (const dep of manifest.globalDeps) {
+      const base = dep.source === 'fungun'
+        ? { source: 'fungun', id: dep.id, url: dep.url }
+        : { source: dep.source || 'git', repo: dep.repo, ref: dep.ref };
       try {
         const includeDir = await fetchDepIncludeDir(
           dep, resolveGithubToken(manifest, dep.repo),
@@ -287,15 +291,14 @@ function createServeServer() {
         );
         const files = await collectIncFiles(includeDir);
         deps.push({
-          repo: dep.repo,
-          ref: dep.ref,
+          ...base,
           include_path: dep.include_path || null,
           include_dir: includeDir,
           count: files.length,
           files: files.map((f) => ({ rel: f.rel, abs: f.abs })),
         });
       } catch (err) {
-        deps.push({ repo: dep.repo, ref: dep.ref, error: err.message, files: [], count: 0 });
+        deps.push({ ...base, error: err.message, files: [], count: 0 });
       }
     }
     return { manifest: manifestPath, deps };
@@ -695,7 +698,7 @@ function createServeServer() {
             dep, resolveGithubToken(manifest, dep.repo), noFetch, manifest.github.ssh
           ));
         } catch (err) {
-          depErrors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
+          depErrors.push(`${depLabel(dep)}: ${err.message}`);
         }
       }
     }

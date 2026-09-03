@@ -221,3 +221,55 @@ test('validateManifestFile: docs as array of numbers → schema error under /dep
   const depsErr = result.errors.find((e) => e.path.startsWith('/deps'));
   assert.ok(depsErr, `expected a schema error under /deps, got: ${JSON.stringify(result.errors)}`);
 });
+
+test('validateManifestFile: fungun dep with numeric id is valid', (t) => {
+  const dir = makeTmpDir('amxb-val-fg-id-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'deps:',
+    '  - source: fungun',
+    '    id: 106',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('validateManifestFile: fungun dep with page URL is valid', (t) => {
+  const dir = makeTmpDir('amxb-val-fg-url-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'deps:',
+    '  - source: fungun',
+    '    url: https://fungun.net/shop/?p=show&id=106',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+});
+
+test('validateManifestFile: fungun dep without id/url → schema error under /deps', (t) => {
+  const dir = makeTmpDir('amxb-val-fg-none-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'deps:',
+    '  - source: fungun',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, false);
+  const depsErr = result.errors.find((e) => e.path.startsWith('/deps'));
+  assert.ok(depsErr, `expected a schema error under /deps, got: ${JSON.stringify(result.errors)}`);
+});

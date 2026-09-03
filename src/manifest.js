@@ -3,6 +3,7 @@ const yaml = require('js-yaml');
 const path = require('path');
 
 const { validateManifest: validateSchema } = require('./schema');
+const { parsePluginRef } = require('./fungun-fetcher');
 
 const DEFAULTS_PATH  = path.join(__dirname, '..', 'defaults', 'amxbuild.defaults.yml');
 
@@ -188,22 +189,87 @@ function normalizeDocs(val) {
 /**
  * Parse a long-form dep object (manifest `deps` entries).
  *
+ * git / release entries: `{ repo, ref, source?, include_path?, asset?, docs? }`
+ * fungun entries:        `{ source: 'fungun', id: <index> }` or
+ *                        `{ source: 'fungun', url: <page link> }`
+ *
  * @param {object} line
- * @returns {{ repo: string, ref: string, include_path: string|null, source: string, asset: *, docs: string[]|null }}
+ * @returns {{ repo: string, ref: string|null, include_path: string|null, source: string, asset: *, docs: string[]|null }}
  */
 function parseDepObject(line) {
+  const source = line.source || 'git';
+
+  if (source === 'fungun') return parseFungunDepObject(line);
+
+  if (!['git', 'release'].includes(source)) {
+    throw new Error(`Dep entry "source" must be "git", "release" or "fungun": ${JSON.stringify(line)}`);
+  }
+  if (line.id != null || line.url != null) {
+    throw new Error(`Dep entry "id"/"url" are only valid with "source: fungun": ${JSON.stringify(line)}`);
+  }
   if (!line.repo) throw new Error(`Dep entry missing "repo": ${JSON.stringify(line)}`);
   if (!line.ref)  throw new Error(`Dep entry missing "ref": ${JSON.stringify(line)}`);
-  const source = line.source || 'git';
-  if (!['git', 'release'].includes(source)) {
-    throw new Error(`Dep entry "source" must be "git" or "release": ${JSON.stringify(line)}`);
-  }
   return {
     repo:         String(line.repo).trim(),
     ref:          String(line.ref).trim(),
     include_path: line.include_path ? String(line.include_path).trim() : null,
     source,
     asset:        line.asset != null ? line.asset : null,
+    docs:         normalizeDocs(line.docs),
+  };
+}
+
+/**
+ * Parse a long-form fungun dep. fungun.net plugins are closed-source and are
+ * addressed by their shop page index (`id`) or page URL (`url`) — there is no
+ * GitHub repo/ref. The parsed object carries a synthetic stable `repo`
+ * (`fungun.net/<id>`) so shared dep-dedup / dest-dir / cache-key logic in
+ * deps-resolver and include-tree keeps working unchanged.
+ */
+function parseFungunDepObject(line) {
+  const rawId  = line.id  != null ? String(line.id).trim()  : '';
+  const rawUrl = line.url != null ? String(line.url).trim() : '';
+  const hasId  = rawId  !== '';
+  const hasUrl = rawUrl !== '';
+
+  if (hasId && hasUrl) {
+    throw new Error(
+      `Dep entry source "fungun" — give either "id" or "url", not both: ${JSON.stringify(line)}`
+    );
+  }
+  if (!hasId && !hasUrl) {
+    throw new Error(
+      `Dep entry source "fungun" requires "id" (plugin index) or "url" (page link): ${JSON.stringify(line)}`
+    );
+  }
+  if (line.include_path != null || line.asset != null) {
+    throw new Error(
+      `Dep entry source "fungun" does not support include_path/asset — ` +
+      `the .inc files come from the plugin page: ${JSON.stringify(line)}`
+    );
+  }
+  if (line.repo != null || line.ref != null) {
+    throw new Error(
+      `Dep entry source "fungun" does not support repo/ref — ` +
+      `address the plugin by "id" or "url": ${JSON.stringify(line)}`
+    );
+  }
+
+  let ref;
+  try {
+    ref = parsePluginRef(hasId ? rawId : rawUrl);
+  } catch (err) {
+    throw new Error(`Dep entry source "fungun": ${err.message}`);
+  }
+
+  return {
+    repo:         `fungun.net/${ref.id}`,
+    ref:          null,
+    source:       'fungun',
+    id:           ref.id,
+    url:          ref.url,
+    include_path: null,
+    asset:        null,
     docs:         normalizeDocs(line.docs),
   };
 }

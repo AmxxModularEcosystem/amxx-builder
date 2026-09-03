@@ -5,6 +5,7 @@ const logger = require('./logger');
 const { parseDepsLines, resolveGithubToken } = require('./manifest');
 const { fetchRepo, resolveRefIfLatest } = require('./repo-fetcher');
 const { fetchReleaseDep } = require('./release-fetcher');
+const { fetchFungunDep } = require('./fungun-fetcher');
 
 /**
  * Resolves all deps, clones them, copies .inc files to build/_includes/,
@@ -52,11 +53,14 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
   const includeDirs = [];
 
   for (const [k, dep] of merged) {
-    const token = resolveGithubToken(manifest, dep.repo);
     let srcDir;
     if (dep.source === 'release') {
+      const token = resolveGithubToken(manifest, dep.repo);
       srcDir = await fetchReleaseDep(dep, token, noFetch);
+    } else if (dep.source === 'fungun') {
+      srcDir = await fetchFungunDep(dep, noFetch);
     } else {
+      const token = resolveGithubToken(manifest, dep.repo);
       const resolvedDepRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
       const depDir = await fetchRepo(dep.repo, resolvedDepRef, token, noFetch, manifest.github.ssh);
       srcDir = resolveIncludePath(depDir, dep.include_path, dep.repo);
@@ -72,7 +76,7 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
       fs.copyFileSync(path.join(srcDir, f), dest);
     }
 
-    logger.dim(`  ${dep.repo}@${dep.ref}: ${files.length} .inc files`);
+    logger.dim(`  ${depLabel(dep)}: ${files.length} .inc files`);
     includeDirs.push(destDir);
   }
 
@@ -128,6 +132,11 @@ async function fetchDepRoot(dep, { token, noFetch, ssh = false } = {}) {
     return { rootDir: dir, label: `${dep.repo}@${dep.ref} (release)` };
   }
 
+  if (dep.source === 'fungun') {
+    const dir = await fetchFungunDep(dep, noFetch);
+    return { rootDir: dir, label: depLabel(dep) };
+  }
+
   const resolvedRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
   const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, ssh);
   if (dep.include_path) {
@@ -144,6 +153,14 @@ async function fetchDepRoot(dep, { token, noFetch, ssh = false } = {}) {
 // and dedup by core modules that previously inlined repo.toLowerCase()).
 function normalize(repo) { return repo.toLowerCase(); }
 
+// Human-readable dep label (fungun deps: no repo@ref — addressed by shop page id).
+function depLabel(dep) {
+  if (dep && dep.source === 'fungun') {
+    return `fungun.net plugin #${dep.id}`;
+  }
+  return `${dep.repo}@${dep.ref || 'default branch'}`;
+}
+
 function repoKey(repoConfig) {
   return `${repoConfig.repo}@${repoConfig._resolvedRef || repoConfig.ref || 'HEAD'}`;
 }
@@ -158,4 +175,4 @@ function countIncFiles(dir) {
   return n;
 }
 
-module.exports = { resolveDeps, readDepsListFile, normalize, repoKey, fetchDepRoot };
+module.exports = { resolveDeps, readDepsListFile, normalize, repoKey, fetchDepRoot, depLabel };

@@ -28,6 +28,10 @@ function printDryRun(manifest) {
   if (manifest.globalDeps.length) {
     logger.info(`\nGlobal deps (${manifest.globalDeps.length}):`);
     for (const d of manifest.globalDeps) {
+      if (d.source === 'fungun') {
+        logger.dim(`  [fungun] plugin #${d.id}  (${d.url})`);
+        continue;
+      }
       const src = d.source === 'release' ? 'release' : 'git';
       logger.dim(`  [${src}] ${d.repo}@${d.ref}${d.include_path ? ':' + d.include_path : ''}`);
     }

@@ -56,7 +56,10 @@ function printNode(node, prefix, isLast) {
   const childPrefix = isLast ? '    ' : '│   ';
 
   const tag = buildNodeTag(node);
-  logger.dim(`${prefix}${connector}${node.repo}@${node.ref || 'HEAD'}${tag}`);
+  const label = node.source === 'fungun'
+    ? `[fungun] plugin #${node.id}`
+    : `${node.repo}@${node.ref || 'HEAD'}`;
+  logger.dim(`${prefix}${connector}${label}${tag}`);
 
   if (node.cycle) return;
 

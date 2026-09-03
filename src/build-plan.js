@@ -41,8 +41,10 @@ function buildPlanData(manifest, options = {}) {
     })),
     globalDeps: manifest.globalDeps.map((d) => ({
       source: d.source,
-      repo: d.repo,
+      repo: d.source === 'fungun' ? null : d.repo,
       ref: d.ref,
+      id: d.id ?? null,
+      url: d.url ?? null,
       include_path: d.include_path || null,
       asset: d.asset ?? null,
     })),

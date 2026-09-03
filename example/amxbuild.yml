@@ -34,6 +34,13 @@ deps:
     # docs: docs/API.md   # необязательно: агент-доки зависимости (путь внутри репо, markdown); без него ищутся docs/API.md / API.md
     # asset: "*.zip"          # необязательно: glob-паттерн имени файла (дефолт: первый .zip)
 
+  # Полная форма — .inc закрытого плагина с fungun.net (ни репо, ни архива нет;
+  # .inc берётся из модалки на странице плагина). id — индекс плагина в магазине.
+  # Вместо id можно указать полную ссылку на страницу плагина (url:).
+  - source: fungun
+    id: 106                   # https://fungun.net/shop/?p=show&id=106
+    # url: https://fungun.net/shop/?p=show&id=106   # альтернатива id
+
 # ── Имя ini-файла: plugins-{postfix}.ini ─────────────────────────────────────
 plugins_ini_postfix: myserver
 

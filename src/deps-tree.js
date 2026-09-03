@@ -100,6 +100,24 @@ function assembleRootDeps(manifest) {
 // ─── Recursive walk ────────────────────────────────────────────────────────────
 
 async function walkDep(dep, ctx) {
+  // Fungun: closed-source page dep — no repo to resolve a ref on, no DEPS_LIST to recurse into.
+  if (dep.source === 'fungun') {
+    return {
+      repo:         dep.repo || `fungun.net/#${dep.id}`,
+      ref:          null,
+      resolvedRef:  null,
+      id:           dep.id,
+      source:       'fungun',
+      include_path: null,
+      asset:        null,
+      from:         ctx.from,
+      error:        null,
+      cycle:        false,
+      shared:       false,
+      dependencies: [],
+    };
+  }
+
   const { resolveToken, noFetch, depth, visited, pathStack, getDepsOverride } = ctx;
 
   const repo = dep.repo;

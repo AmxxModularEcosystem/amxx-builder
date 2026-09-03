@@ -104,7 +104,7 @@ test('parseDepObject: missing ref throws', () => {
 test('parseDepObject: bad source throws', () => {
   assert.throws(
     () => parseDepObject({ repo: 'a/b', ref: 'v1', source: 'npm' }),
-    /"source" must be "git" or "release"/
+    /"source" must be "git", "release" or "fungun"/
   );
 });
 
@@ -130,6 +130,74 @@ test('parseDepObject: docs absent → null', () => {
 
 test('parseDepObject: docs number coerced to string', () => {
   assert.deepEqual(parseDepObject({ repo: 'a/b', ref: 'v1', docs: 123 }).docs, ['123']);
+});
+
+// ─── parseDepObject: fungun ────────────────────────────────────────────────────
+
+test('parseDepObject: fungun by numeric id', () => {
+  assert.deepEqual(parseDepObject({ source: 'fungun', id: 106 }), {
+    repo: 'fungun.net/106',
+    ref: null,
+    source: 'fungun',
+    id: '106',
+    url: 'https://fungun.net/shop/?p=show&id=106',
+    include_path: null,
+    asset: null,
+    docs: null,
+  });
+});
+
+test('parseDepObject: fungun by string id', () => {
+  assert.deepEqual(parseDepObject({ source: 'fungun', id: '106' }).id, '106');
+});
+
+test('parseDepObject: fungun by full page URL', () => {
+  const parsed = parseDepObject({ source: 'fungun', url: 'https://fungun.net/shop/?p=show&id=106' });
+  assert.equal(parsed.id, '106');
+  assert.equal(parsed.url, 'https://fungun.net/shop/?p=show&id=106');
+});
+
+test('parseDepObject: fungun missing id and url throws', () => {
+  assert.throws(
+    () => parseDepObject({ source: 'fungun' }),
+    /requires "id" \(plugin index\) or "url"/
+  );
+});
+
+test('parseDepObject: fungun with both id and url throws', () => {
+  assert.throws(
+    () => parseDepObject({ source: 'fungun', id: 1, url: 'https://fungun.net/shop/?p=show&id=2' }),
+    /either "id" or "url", not both/
+  );
+});
+
+test('parseDepObject: fungun rejects non-numeric id', () => {
+  assert.throws(() => parseDepObject({ source: 'fungun', id: 'latest' }), /Invalid fungun plugin reference/);
+});
+
+test('parseDepObject: fungun rejects foreign url host', () => {
+  assert.throws(
+    () => parseDepObject({ source: 'fungun', url: 'https://evil.example/?id=106' }),
+    /expected a fungun\.net page/
+  );
+});
+
+test('parseDepObject: fungun rejects repo/ref and include_path/asset', () => {
+  assert.throws(
+    () => parseDepObject({ source: 'fungun', id: 106, repo: 'a/b', ref: 'v1' }),
+    /does not support repo\/ref/
+  );
+  assert.throws(
+    () => parseDepObject({ source: 'fungun', id: 106, include_path: 'inc' }),
+    /does not support include_path\/asset/
+  );
+});
+
+test('parseDepObject: git/release reject id/url fields', () => {
+  assert.throws(
+    () => parseDepObject({ repo: 'a/b', ref: 'v1', url: 'https://fungun.net/shop/?p=show&id=1' }),
+    /only valid with "source: fungun"/
+  );
 });
 
 // ─── parseDepsLines ──────────────────────────────────────────────────────────

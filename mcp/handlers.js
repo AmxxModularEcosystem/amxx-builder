@@ -84,6 +84,13 @@ function resolveDepRef(dep, token) {
   return resolveRefIfLatest(dep.ref, dep.repo, token);
 }
 
+// Fungun deps have a synthetic repo and no GitHub ref — label as plugin #id.
+function depRefLabel(dep, resolvedRef) {
+  return dep.source === 'fungun'
+    ? `fungun.net plugin #${dep.id}`
+    : `${dep.repo}@${resolvedRef || dep.ref}`;
+}
+
 function readFileSafe(absPath) {
   try {
     const buf = fs.readFileSync(absPath);
@@ -168,7 +175,7 @@ async function handleGetDepInterface(args, token, noFetch) {
 
   if (incFiles.length === 0) {
     return textResult(
-      `Dependency ${dep.repo}@${resolvedRef} has no .inc files in its include path.`
+      `Dependency ${depRefLabel(dep, resolvedRef)} has no .inc files in its include path.`
     );
   }
 
@@ -184,7 +191,7 @@ async function handleGetDepInterface(args, token, noFetch) {
   const shown    = limitFiles(files, args);
   const skipped  = files.length - shown.length;
   let out =
-    `Found ${files.length} .inc file(s) in ${dep.repo}@${resolvedRef}:\n\n` +
+    `Found ${files.length} .inc file(s) in ${depRefLabel(dep, resolvedRef)}:\n\n` +
     shown
       .map(
         (f) =>
@@ -213,14 +220,14 @@ async function handleListDepIncs(args, token, noFetch) {
 
   if (incFiles.length === 0) {
     return textResult(
-      `Dependency ${dep.repo}@${resolvedRef} has no .inc files in its include path.`
+      `Dependency ${depRefLabel(dep, resolvedRef)} has no .inc files in its include path.`
     );
   }
 
   const listing = incFiles.map((f) => `  ${f.rel}`).join('\n');
 
   return textResult(
-    applyOutputLimit(`Dependency ${dep.repo}@${resolvedRef} — ${incFiles.length} .inc file(s):\n\n${listing}`, args)
+    applyOutputLimit(`Dependency ${depRefLabel(dep, resolvedRef)} — ${incFiles.length} .inc file(s):\n\n${listing}`, args)
   );
 }
 

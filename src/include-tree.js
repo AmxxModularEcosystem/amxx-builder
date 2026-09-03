@@ -30,7 +30,8 @@ const { parseManifest, parseDepsLines, resolveGithubToken } = require('./manifes
 const { fetchCompiler, fetchLatestVersion } = require('./compiler-fetcher');
 const { fetchRepo, resolveRefIfLatest, resolveRepoRefs } = require('./repo-fetcher');
 const { fetchReleaseDep }   = require('./release-fetcher');
-const { normalize }         = require('./deps-resolver');
+const { fetchFungunDep }    = require('./fungun-fetcher');
+const { normalize, depLabel } = require('./deps-resolver');
 const { loadEnv }           = require('./env');
 const { resolveManifestPath } = require('./manifest-path');
 
@@ -614,7 +615,7 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
     seenDeps.add(key);
     try {
       const depDir = await fetchDepIncludeDir(dep, tokenFor(dep.repo), noFetch, manifest.github.ssh);
-      graph.includeDirs.push({ path: depDir, label: `dep: ${dep.repo}@${dep.ref}` });
+      graph.includeDirs.push({ path: depDir, label: `dep: ${depLabel(dep)}` });
     } catch (_) { /* skip unresolvable */ }
   }
 
@@ -816,6 +817,10 @@ async function fetchDepIncludeDir(dep, token, noFetch, ssh = false) {
       token,
       noFetch
     );
+  }
+
+  if (dep.source === 'fungun') {
+    return fetchFungunDep(dep, noFetch);
   }
 
   const resolvedRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
