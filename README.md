@@ -475,6 +475,72 @@ MCP сервер предоставляет агенту opencode информа
 описаны в [`docs/mcp/INDEX.md`](docs/mcp/INDEX.md) с таблицей и ссылками на полную документацию каждого инструмента.
 Плюс `get_dep_docs` / `list_dep_docs` — агент-доки, которые автор зависимости может приложить через поле `docs` у зависимости (или файлы `docs/API.md` / `API.md` в корне репо).
 
+## Скилл миграции для ИИ-агентов
+
+Для проектов, которые ещё не используют amxb, есть готовый скилл **amxb-migration**:
+он переводит репозиторий AMXX-плагинов на `amxbuild.yml`, подключает `deps`,
+настраивает `.gitignore` / CI / MCP и заменяет старые скрипты сборки.
+
+Канонический файл скилла (можно подключать по прямой ссылке до установки самого amxb —
+шаг 0 скилла ставит amxb при необходимости):
+
+- `skills/amxb-migration/SKILL.md` в этом репозитории
+- Прямая ссылка: <https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/skills/amxb-migration/SKILL.md>
+
+### Использование без установки (по ссылке)
+
+Установка нужна только для **авто-подхвата** скилла (агент сам находит его по
+`description` в frontmatter) и для работы **без доступа в сеть**. Но скилл —
+это просто самодостаточный markdown: агенту достаточно явно дать ссылку на
+файл, и он сам прочитает инструкции и будет им следовать.
+
+Пример промпта агенту (opencode, Claude Code и т.п.):
+
+> Мигрируй проект на amxb. Прочитай и следуй: https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/skills/amxb-migration/SKILL.md
+
+Условия работоспособности этого способа:
+
+- у агента есть доступ в сеть (разрешён `webfetch` / `curl`); в песочнице
+  без сети остаётся только установка или вставка текста файла в промпт;
+- давать **raw-ссылку** (`raw.githubusercontent.com`), а не страницу
+  репозитория — иначе агент получит HTML-обёртку GitHub;
+- скилл надо явно упоминать в каждом запросе — авто-триггер по описанию
+  работает только у установленного скилла;
+- файл должен быть запушен в `master` (пока правки не в репозитории,
+  ссылка вернёт 404).
+
+Для разовой миграции достаточно ссылки. Для регулярного использования —
+установите скилл один раз глобально, дальше он будет подхватываться сам.
+
+### Установка в сторонний проект
+
+**opencode** (в проект):
+
+```bash
+mkdir -p .opencode/skills/amxb-migration
+curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/skills/amxb-migration/SKILL.md \
+  -o .opencode/skills/amxb-migration/SKILL.md
+```
+
+**opencode** (глобально, во все проекты):
+
+```bash
+mkdir -p ~/.config/opencode/skills/amxb-migration
+curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/skills/amxb-migration/SKILL.md \
+  -o ~/.config/opencode/skills/amxb-migration/SKILL.md
+```
+
+**Claude Code** (в проект или глобально):
+
+```bash
+mkdir -p .claude/skills/amxb-migration      # или ~/.claude/skills/amxb-migration
+curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/skills/amxb-migration/SKILL.md \
+  -o .claude/skills/amxb-migration/SKILL.md
+```
+
+После установки перезапустите агента, чтобы скилл подхватился. Скилл сам подскажет
+установку amxb, если тот ещё не установлен в окружении.
+
 ## Приоритеты
 
 | Что | Порядок (↑ выше) |

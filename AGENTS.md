@@ -109,3 +109,8 @@ This is automated in `.github/workflows/release.yml` on `v*.*.*` tags.
 ## DEPS_LIST files
 Repos can contain a `DEPS_LIST` file (one dep per line, `owner/repo@ref[:include_path]`).
 Overridden by `deps_override` on that repo. Global `deps` in manifest win over everything.
+
+## AI skill: migration (`skills/`)
+- `skills/amxb-migration/SKILL.md` is a standalone agent skill for migrating existing AMXX projects onto amxb. It ships in the npm package (`files` includes `skills/`) and is referenced by direct raw URL from the README.
+- The skill MUST stay self-contained: it may reference only public docs/URLs and amxb CLI behavior, never local repo files (`templates/`, `defaults/`, `src/`, …) — it runs inside third-party projects before amxb is installed.
+- It can bootstrap amxb itself (step 0: global install via npm/install scripts or `npx --yes amxx-builder@latest`). When changing the CLI surface (commands, flags, manifest fields), keep this file in sync.
