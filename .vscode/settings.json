@@ -6,5 +6,9 @@
       "example/amxbuild.yml",
       "example/amxbuild.local.yml"
     ]
-  }
+  },
+  "amxxPawnAllIn.globalIncludePaths": [
+    "C:\\Users\\arkan\\AppData\\Local\\amxx-builder\\amxxpc\\1.10.5481\\windows\\include",
+    "C:\\Users\\arkan\\AmxModX\\1.9.0\\include"
+  ]
 }

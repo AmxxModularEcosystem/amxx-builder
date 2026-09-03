@@ -273,6 +273,31 @@ test('parseManifest: throws when version is a number (not quoted)', () => {
   assert.throws(() => parseManifest(file), /must be string/);
 });
 
+test('parseManifest: long-form dep docs field normalizes to array', () => {
+  const { file } = writeTmpYaml([
+    'name: DocsServer',
+    'version: "1.0.0"',
+    'deps:',
+    '  - repo: org/util',
+    '    ref: v1.0',
+    '    docs: docs/API.md',
+  ].join('\n'));
+  const m = parseManifest(file);
+  assert.deepEqual(m.globalDeps[0].docs, ['docs/API.md']);
+});
+
+test('parseManifest: long-form dep without docs → docs null', () => {
+  const { file } = writeTmpYaml([
+    'name: NoDocsServer',
+    'version: "1.0.0"',
+    'deps:',
+    '  - repo: org/util',
+    '    ref: v1.0',
+  ].join('\n'));
+  const m = parseManifest(file);
+  assert.equal(m.globalDeps[0].docs, null);
+});
+
 // ─── resolveManifest ─────────────────────────────────────────────────────────
 
 test('resolveManifest: applies --set overrides', () => {

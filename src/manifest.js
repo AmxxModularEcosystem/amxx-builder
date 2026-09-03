@@ -172,10 +172,24 @@ function makeRepo(r, globalPostfix, globalAmxDir) {
 const DEP_STRING_RE = /^([^@\s]+)@([^:\s]+)(?::(.+))?$/;
 
 /**
+ * Normalize a `docs` value (long-form dep entries only) to an array of
+ * trimmed, non-empty doc paths, or null when nothing is specified.
+ *
+ * @param {*} val
+ * @returns {string[]|null}
+ */
+function normalizeDocs(val) {
+  if (val == null) return null;
+  const list = Array.isArray(val) ? val.map(String) : [String(val)];
+  const trimmed = list.map((s) => s.trim()).filter(Boolean);
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
  * Parse a long-form dep object (manifest `deps` entries).
  *
  * @param {object} line
- * @returns {{ repo: string, ref: string, include_path: string|null, source: string, asset: * }}
+ * @returns {{ repo: string, ref: string, include_path: string|null, source: string, asset: *, docs: string[]|null }}
  */
 function parseDepObject(line) {
   if (!line.repo) throw new Error(`Dep entry missing "repo": ${JSON.stringify(line)}`);
@@ -190,6 +204,7 @@ function parseDepObject(line) {
     include_path: line.include_path ? String(line.include_path).trim() : null,
     source,
     asset:        line.asset != null ? line.asset : null,
+    docs:         normalizeDocs(line.docs),
   };
 }
 
@@ -370,4 +385,4 @@ function resolveManifest(manifestPath, options = {}) {
   return manifest;
 }
 
-module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge };
+module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, normalizeDocs, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge };

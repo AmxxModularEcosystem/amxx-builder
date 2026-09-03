@@ -106,6 +106,40 @@ function resolveIncludePath(repoDir, explicitPath, repoName) {
   return repoDir;
 }
 
+/**
+ * Fetch a dependency's root directory and return a human-readable label for it.
+ * Single source of truth shared by the build pipeline, the MCP server and
+ * dep-docs resolution.
+ *
+ * `dep` is a parsed dep OBJECT ({ repo, ref, source, include_path, asset }).
+ * GitHub token resolution (per-owner fallbacks) is an interface-layer concern —
+ * callers pass the already-resolved token, this function never calls fallbackToken.
+ *
+ * @param {object} dep - parsed dep object
+ * @param {object} [opts]
+ * @param {string} [opts.token]     - GitHub token or null (anonymous)
+ * @param {boolean} [opts.noFetch]  - only use cache, skip network fetches
+ * @param {boolean} [opts.ssh]      - clone via system git instead of tarball
+ * @returns {Promise<{ rootDir: string, label: string }>}
+ */
+async function fetchDepRoot(dep, { token, noFetch, ssh = false } = {}) {
+  if (dep.source === 'release') {
+    const dir = await fetchReleaseDep(dep, token, noFetch);
+    return { rootDir: dir, label: `${dep.repo}@${dep.ref} (release)` };
+  }
+
+  const resolvedRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
+  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, ssh);
+  if (dep.include_path) {
+    const sub = path.join(repoDir, dep.include_path);
+    if (!fs.existsSync(sub)) {
+      throw new Error(`include_path "${dep.include_path}" not found in ${dep.repo}`);
+    }
+    return { rootDir: sub, label: `${dep.repo}@${dep.ref || 'default branch'}` };
+  }
+  return { rootDir: repoDir, label: `${dep.repo}@${dep.ref || 'default branch'}` };
+}
+
 // Single source of truth for repo-name normalization (used for cache keys
 // and dedup by core modules that previously inlined repo.toLowerCase()).
 function normalize(repo) { return repo.toLowerCase(); }
@@ -124,4 +158,4 @@ function countIncFiles(dir) {
   return n;
 }
 
-module.exports = { resolveDeps, readDepsListFile, normalize, repoKey };
+module.exports = { resolveDeps, readDepsListFile, normalize, repoKey, fetchDepRoot };

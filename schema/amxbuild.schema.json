@@ -289,6 +289,13 @@
                   "minimum": 0
                 }
               ]
+            },
+            "docs": {
+              "description": "Path(s) inside the repo/asset to agent-facing documentation (markdown), relative to the repo root. Optional — falls back to docs/API.md / API.md in the repo root.",
+              "oneOf": [
+                { "type": "string" },
+                { "type": "array", "items": { "type": "string" } }
+              ]
             }
           }
         }

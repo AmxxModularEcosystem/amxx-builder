@@ -89,6 +89,7 @@ test('parseDepObject: valid long-form object', () => {
     include_path: 'inc',
     source: 'release',
     asset: 'plug.zip',
+    docs: null,
   });
 });
 
@@ -109,6 +110,26 @@ test('parseDepObject: bad source throws', () => {
 
 test('parseDepObject: defaults source to git', () => {
   assert.equal(parseDepObject({ repo: 'a/b', ref: 'v1' }).source, 'git');
+});
+
+test('parseDepObject: docs string normalizes to single-entry array', () => {
+  assert.deepEqual(parseDepObject({ repo: 'a/b', ref: 'v1', docs: 'docs/API.md' }).docs, ['docs/API.md']);
+});
+
+test('parseDepObject: docs array trims and drops empty entries', () => {
+  assert.deepEqual(parseDepObject({ repo: 'a/b', ref: 'v1', docs: [' a.md ', '', ' b.md '] }).docs, ['a.md', 'b.md']);
+});
+
+test('parseDepObject: docs empty string → null', () => {
+  assert.equal(parseDepObject({ repo: 'a/b', ref: 'v1', docs: '' }).docs, null);
+});
+
+test('parseDepObject: docs absent → null', () => {
+  assert.equal(parseDepObject({ repo: 'a/b', ref: 'v1' }).docs, null);
+});
+
+test('parseDepObject: docs number coerced to string', () => {
+  assert.deepEqual(parseDepObject({ repo: 'a/b', ref: 'v1', docs: 123 }).docs, ['123']);
 });
 
 // ─── parseDepsLines ──────────────────────────────────────────────────────────
@@ -140,6 +161,12 @@ test('parseDepsLines: strict regex rejects whitespace in repo/ref', () => {
 
 test('parseDepsLines: object missing repo propagates parseDepObject error', () => {
   assert.throws(() => parseDepsLines([{ ref: 'v1' }]), /Dep entry missing "repo"/);
+});
+
+test('parseDepsLines: long-form object docs passes through', () => {
+  const parsed = parseDepsLines([{ repo: 'org/b', ref: 'v2', docs: 'docs/API.md' }]);
+  assert.equal(parsed.length, 1);
+  assert.deepEqual(parsed[0].docs, ['docs/API.md']);
 });
 
 // ─── resolveManifestPath ─────────────────────────────────────────────────────

@@ -181,3 +181,43 @@ test('validateManifestFile: invalid manifest accumulates multiple errors', (t) =
   assert.ok(paths.includes('/version'), 'missing /version error');
   assert.ok(paths.includes('/repos'), 'missing /repos error');
 });
+
+test('validateManifestFile: long-form dep with docs (string) is valid', (t) => {
+  const dir = makeTmpDir('amxb-val-docs-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'deps:',
+    '  - repo: org/util',
+    '    ref: v1.0',
+    '    docs: docs/API.md',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('validateManifestFile: docs as array of numbers → schema error under /deps', (t) => {
+  const dir = makeTmpDir('amxb-val-docsnum-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'deps:',
+    '  - repo: org/util',
+    '    ref: v1.0',
+    '    docs:',
+    '      - 1',
+    '      - 2',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, false);
+  const depsErr = result.errors.find((e) => e.path.startsWith('/deps'));
+  assert.ok(depsErr, `expected a schema error under /deps, got: ${JSON.stringify(result.errors)}`);
+});

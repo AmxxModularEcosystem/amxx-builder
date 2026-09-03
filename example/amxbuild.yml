@@ -31,6 +31,7 @@ deps:
     ref: latest               # 'latest' или конкретный тег
     source: release           # скачать release-asset вместо git clone
     include_path: addons/amxmodx/scripting/include
+    # docs: docs/API.md   # необязательно: агент-доки зависимости (путь внутри репо, markdown); без него ищутся docs/API.md / API.md
     # asset: "*.zip"          # необязательно: glob-паттерн имени файла (дефолт: первый .zip)
 
 # ── Имя ini-файла: plugins-{postfix}.ini ─────────────────────────────────────
