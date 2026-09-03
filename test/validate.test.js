@@ -257,6 +257,23 @@ test('validateManifestFile: fungun dep with page URL is valid', (t) => {
   assert.deepEqual(result.errors, []);
 });
 
+test('validateManifestFile: fungun dep accepts a page URL given as id', (t) => {
+  const dir = makeTmpDir('amxb-val-fg-idurl-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'deps:',
+    '  - source: fungun',
+    '    id: https://fungun.net/shop/?p=show&id=106',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+});
+
 test('validateManifestFile: fungun dep without id/url → schema error under /deps', (t) => {
   const dir = makeTmpDir('amxb-val-fg-none-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

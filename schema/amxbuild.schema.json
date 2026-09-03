@@ -277,15 +277,16 @@
               "default": "git"
             },
             "id": {
-              "description": "For source=fungun: plugin index on fungun.net (e.g. 106), as a number or numeric string. Alternative to \"url\".",
+              "description": "For source=fungun: plugin index on fungun.net (e.g. 106), or the full plugin page URL as a convenience (e.g. \"https://fungun.net/shop/?p=show&id=106\"). The exact format is validated at parse time with a human-readable error.",
               "oneOf": [
                 { "type": "integer", "minimum": 1 },
-                { "type": "string", "pattern": "^[0-9]+$" }
+                { "type": "string", "minLength": 1 }
               ]
             },
             "url": {
               "type": "string",
-              "description": "For source=fungun: full plugin page URL instead of \"id\" (e.g. \"https://fungun.net/shop/?p=show&id=106\")."
+              "minLength": 1,
+              "description": "For source=fungun: full plugin page URL instead of \"id\" (e.g. \"https://fungun.net/shop/?p=show&id=106\"). The exact format is validated at parse time with a human-readable error."
             },
             "asset": {
               "description": "For source=release: which release asset to download.",

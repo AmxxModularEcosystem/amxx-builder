@@ -157,6 +157,13 @@ test('parseDepObject: fungun by full page URL', () => {
   assert.equal(parsed.url, 'https://fungun.net/shop/?p=show&id=106');
 });
 
+test('parseDepObject: fungun accepts a full page URL in "id"', () => {
+  const parsed = parseDepObject({ source: 'fungun', id: 'https://fungun.net/shop/?p=show&id=106' });
+  assert.equal(parsed.id, '106');
+  assert.equal(parsed.repo, 'fungun.net/106');
+  assert.equal(parsed.url, 'https://fungun.net/shop/?p=show&id=106');
+});
+
 test('parseDepObject: fungun missing id and url throws', () => {
   assert.throws(
     () => parseDepObject({ source: 'fungun' }),
