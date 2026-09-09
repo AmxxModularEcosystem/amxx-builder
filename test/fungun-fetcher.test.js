@@ -293,3 +293,46 @@ test('fetchFungunDep: HTTP error is not retried and surfaces', async (t) => {
 
   await assert.rejects(() => fetchFungunDep({ id: '106' }, false), /404/);
 });
+
+test('fetchFungunDep: stale cache does NOT mask a successful fetch with no .inc (FUNGUN_NO_INC)', async (t) => {
+  makeCacheDir(t);
+  let html = pageHtml([{ filename: 'plug.inc', content: INC_CONTENT }]);
+  const restore = stubAxios(async () => ({ status: 200, data: html }));
+  t.after(restore);
+
+  const dir = await fetchFungunDep({ id: '106' }, false);
+  ageSentinel(path.join(dir, '.fungun'), DAY_MS + 60 * 1000);
+
+  // Vendor removed the include / changed the page: fetch succeeds, 0 .inc.
+  html = pageHtml([{ filename: 'plug.cfg', content: CFG_CONTENT }]);
+  await assert.rejects(
+    () => fetchFungunDep({ id: '106' }, false),
+    (err) => err && err.code === 'FUNGUN_NO_INC' && /No \.inc include found/.test(err.message)
+  );
+});
+
+test('fetchFungunDep: refreshed page prunes cached .inc the vendor dropped', async (t) => {
+  makeCacheDir(t);
+  let html = pageHtml([
+    { filename: 'old.inc', content: '/* old */' },
+    { filename: 'keep.inc', content: '/* keep */' },
+  ]);
+  const restore = stubAxios(async () => ({ status: 200, data: html }));
+  t.after(restore);
+
+  const dir = await fetchFungunDep({ id: '106' }, false);
+  assert.ok(fs.existsSync(path.join(dir, 'old.inc')));
+  ageSentinel(path.join(dir, '.fungun'), DAY_MS + 60 * 1000);
+
+  // Vendor renamed old.inc → new.inc: stale old.inc must be removed on refetch.
+  html = pageHtml([
+    { filename: 'new.inc', content: '/* new */' },
+    { filename: 'keep.inc', content: '/* keep */' },
+  ]);
+  const dir2 = await fetchFungunDep({ id: '106' }, false);
+  assert.equal(dir2, dir);
+  assert.ok(fs.existsSync(path.join(dir, 'new.inc')), 'new include written');
+  assert.ok(!fs.existsSync(path.join(dir, 'old.inc')), 'orphaned include pruned');
+  assert.ok(fs.existsSync(path.join(dir, 'keep.inc')), 'unchanged include kept');
+  assert.ok(fs.existsSync(path.join(dir, '.fungun')), 'sentinel kept');
+});

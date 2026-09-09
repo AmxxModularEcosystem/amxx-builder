@@ -12,22 +12,37 @@ function expand(manifest, tpl) {
 
 function resolveDeployDirs(manifest) {
   const deploy = manifest.deploy;
-  const out    = manifest.output;
 
   // Absolute root: exclusion matching (isExcluded) compares against the deploy
   // root, so a relative deploy.path would break path.relative on every dest.
   const deployRoot = path.resolve(deploy.path);
 
-  const amxmodxDest = path.join(
-    deployRoot,
-    expand(manifest, deploy.amxmodx_path)
-  );
+  const amxmodxRel  = expand(manifest, deploy.amxmodx_path);
+  const amxmodxDest = path.join(deployRoot, amxmodxRel);
 
-  const assetsDest = deploy.assets_path != null
-    ? path.join(deployRoot, expand(manifest, deploy.assets_path))
-    : out.assets_path
-      ? path.join(deployRoot, expand(manifest, out.assets_path))
-      : deployRoot; // root
+  // Deploy layout is decoupled from the archive layout: assets go to the
+  // server root by default (schema: "Defaults to deploy root") so local
+  // assets/ models+sound land where the game reads them — unlike
+  // output.assets_path ('{name}'), which only shapes the zip.
+  const assetsRel  = deploy.assets_path ? expand(manifest, deploy.assets_path) : '';
+  const assetsDest = assetsRel ? path.join(deployRoot, assetsRel) : deployRoot;
+
+  // Deploy destinations must stay inside deployRoot: exclusion matching and the
+  // relative-path safety of every deploy helper assume it. An escaping path
+  // (absolute or ../-traversing amxmodx_path/assets_path) would write outside
+  // the configured server root and silently disable exclude patterns.
+  for (const [label, rel, dest] of [
+    ['deploy.amxmodx_path', amxmodxRel, amxmodxDest],
+    ['deploy.assets_path',  assetsRel,  assetsDest],
+  ]) {
+    if (path.isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) {
+      throw new Error(
+        `${label} resolves outside the deploy path: ${rel}\n` +
+        `  Deploy root: ${deployRoot}\n` +
+        '  Use a path inside deploy.path (relative), e.g. "addons/amxmodx".'
+      );
+    }
+  }
 
   return { amxmodxDest, assetsDest, deployRoot };
 }
@@ -92,19 +107,28 @@ function deployPlugin(manifest, buildDir, amxxName) {
 /**
  * Deploy a single changed local file (watch mode for amxmodx/ or assets/).
  * relPath is relative to the section root (amxmodx/ or assets/).
+ * srcRoot overrides the directory relPath is resolved against — watch mode
+ * passes the live project dir (manifestDir/amxmodx or manifestDir/assets) so
+ * the freshly-edited file is deployed; when no srcRoot is given (or the file
+ * does not exist there), it falls back to the build tree, which is what the
+ * editor interface (serve deploy.file) relies on for files that only exist in
+ * a build (e.g. downloaded assets).
  * Returns the destination path, or null when not deployed (no deploy path,
  * missing source, or excluded).
  */
-function deployFile(manifest, buildDir, relPath, section) {
+function deployFile(manifest, buildDir, relPath, section, srcRoot = null) {
   if (!manifest.deploy.path) return null;
 
   const { amxmodxDest, assetsDest, deployRoot } = resolveDeployDirs(manifest);
 
-  const srcBase  = path.join(buildDir, section === 'assets' ? 'assets' : 'amxmodx');
-  const destBase = section === 'assets' ? assetsDest : amxmodxDest;
+  const buildBase = path.join(buildDir, section === 'assets' ? 'assets' : 'amxmodx');
+  const destBase  = section === 'assets' ? assetsDest : amxmodxDest;
 
-  const src  = path.join(srcBase, relPath);
   const dest = path.join(destBase, relPath);
+
+  const projectSrc = srcRoot ? path.join(srcRoot, relPath) : null;
+  const buildSrc   = path.join(buildBase, relPath);
+  const src        = projectSrc && fs.existsSync(projectSrc) ? projectSrc : buildSrc;
 
   if (!fs.existsSync(src)) return null;
   if (isExcluded(dest, deployRoot, manifest.deploy.exclude || [])) {

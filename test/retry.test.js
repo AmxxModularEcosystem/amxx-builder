@@ -174,6 +174,17 @@ test('withRetry: label is accepted and does not affect the result', async () => 
   assert.equal(calls, 2);
 });
 
+test('withRetry: err.retryable === false is never retried', async () => {
+  let calls = 0;
+  const err = new Error('too big');
+  err.retryable = false; // e.g. a download exceeding its byte cap
+  await assert.rejects(
+    withRetry(async () => { calls++; throw err; }, { attempts: 3, baseDelayMs: 5 }),
+    (e) => e === err
+  );
+  assert.equal(calls, 1, 'retryable:false must not be retried');
+});
+
 // ─── retryDelayMs behavior (captured via stubbed timers) ───────────────────
 
 test('retryDelayMs: Retry-After header honored (integer seconds)', async () => {

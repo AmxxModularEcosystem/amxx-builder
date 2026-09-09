@@ -38,7 +38,7 @@ const { emit, EVENTS } = require('./events');
 const { resolveGithubToken } = require('./manifest');
 const { fetchCompiler }  = require('./compiler-fetcher');
 const { fetchRepo, resolveRepoRefs } = require('./repo-fetcher');
-const { resolveDeps, repoKey } = require('./deps-resolver');
+const { resolveDeps, repoKey, normalizeRepo } = require('./deps-resolver');
 const { compilePlugins } = require('./compiler');
 const { collectAll }     = require('./collector');
 const { fetchAssets }    = require('./asset-fetcher');
@@ -118,19 +118,27 @@ async function runBuild(manifest, options = {}) {
       await resolveRepoRefs(manifest.repos, (repo) => resolveGithubToken(manifest, repo));
       checkCancelled();
 
-      const cloneJobs = new Map();
+      const cloneJobs = new Map(); // normalized repo identity → fetch promise
       for (const repoConfig of manifest.repos) {
-        const key = repoKey(repoConfig);
-        if (!cloneJobs.has(key)) {
-          cloneJobs.set(key,
+        const identity = normalizeRepo(repoConfig);
+        if (!cloneJobs.has(identity)) {
+          cloneJobs.set(identity,
             fetchRepo(repoConfig.repo, repoConfig._resolvedRef, resolveGithubToken(manifest, repoConfig.repo), noFetch, manifest.github.ssh)
           );
         }
       }
-      const cloned = await Promise.all(
-        [...cloneJobs.entries()].map(async ([key, p]) => ({ key, dir: await p }))
+      const cloned = new Map();
+      await Promise.all(
+        [...cloneJobs.entries()].map(async ([identity, p]) => {
+          const dir = await p;
+          cloned.set(identity, dir);
+        })
       );
-      for (const { key, dir } of cloned) repoLocalDirs[key] = dir;
+      // Map every manifest entry (raw spelling) to its clone dir; duplicate
+      // spellings of the same repo share the clone but each repoKey stays valid.
+      for (const repoConfig of manifest.repos) {
+        repoLocalDirs[repoKey(repoConfig)] = cloned.get(normalizeRepo(repoConfig));
+      }
       checkCancelled();
     }
 
@@ -166,6 +174,7 @@ async function runBuild(manifest, options = {}) {
     if (noArchive) {
       logger.info('--no-archive: skipping zip creation');
       const elapsed = ((Date.now() - buildStart) / 1000).toFixed(1);
+      emitEvent(EVENTS.DONE, { ok: true, elapsed, noArchive: true, message: `Done in ${elapsed}s` });
       return { ok: true, elapsed, noArchive: true };
     }
 

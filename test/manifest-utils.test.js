@@ -125,6 +125,7 @@ test('loadDefaultsRaw: known default values', () => {
   assert.equal(defaults.output.on_conflict, 'last_wins');
   assert.equal(defaults.assets.on_conflict, 'last_wins');
   assert.equal(defaults.deploy.watch_debounce_ms, 500);
+  assert.equal(defaults.deploy.assets_path, '', 'deploy assets default to the server root, not output.assets_path');
 });
 
 // ─── parseOverrideValue ──────────────────────────────────────────────────────

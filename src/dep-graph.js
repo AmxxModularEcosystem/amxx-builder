@@ -93,6 +93,33 @@ class DepGraph {
     return smas;
   }
 
+  // A previously-missing include has just appeared (watch 'add' on a new .inc).
+  // Re-resolve outstanding missing includes; files whose include now resolves
+  // to incPath are re-parsed and every depending .sma is returned.
+  reattachMissingIncludes(incPath) {
+    const referencing = [];
+    for (const [file, missingList] of this._missing) {
+      if (referencing.includes(file)) continue;
+      for (const { name, isAngle } of missingList) {
+        if (this._resolve(file, name, isAngle) === incPath) {
+          referencing.push(file);
+          break;
+        }
+      }
+    }
+
+    const smas = new Set();
+    for (const file of referencing) {
+      this.update(file);
+      if (file.endsWith('.sma')) smas.add(file);
+    }
+    for (const file of referencing) {
+      if (file.endsWith('.sma')) continue;
+      for (const sma of this.getSmasDependingOn(file)) smas.add(sma);
+    }
+    return smas;
+  }
+
   _resolve(fromFile, name, isAngle) {
     const withExt = /\.inc$/i.test(name) ? name : name + '.inc';
 

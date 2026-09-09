@@ -95,13 +95,49 @@ async function runWatch(options) {
     await deployBuild(state.manifest, buildDir, { incremental: true });
   }
 
-  // Serialize incremental work; full rebuilds flush the queue before wiping build/.
+  // Serialize all incremental work through a single promise chain so no two
+  // tasks ever touch build/ at the same time.
   let queue = Promise.resolve();
   const enqueue = (fn) => {
     queue = queue.then(() => fn()).catch((err) => logger.error(`Watch task error: ${err.message}`));
     return queue;
   };
-  const flushQueue = () => queue.catch(() => {});
+
+  // Full rebuilds (manifest change) run on the same chain. Coalescing: a second
+  // manifest save while a rebuild is queued/running only marks a re-run instead
+  // of starting a second concurrent rebuild over the same build/.
+  let rebuildQueued = false;
+  let rebuildAgain  = false;
+
+  async function performRebuild() {
+    logger.info('Rebuilding...');
+    await runBuild({ manifest: manifestPath, buildDir: options.buildDir });
+    state = await buildWatchState();
+    if (doDeploy && state.manifest.deploy.path) {
+      await deployBuild(state.manifest, buildDir, { incremental: true });
+      const pluginNames = gatherPluginNames(buildDir);
+      await sendRconForPlugins(state.manifest.deploy, pluginNames);
+    }
+    logger.warn('Note: if new watch paths were added, restart amxb watch to pick them up');
+  }
+
+  function scheduleRebuild() {
+    if (rebuildQueued) {
+      rebuildAgain = true;
+      return;
+    }
+    rebuildQueued = true;
+    return enqueue(async () => {
+      try {
+        do {
+          rebuildAgain = false;
+          await performRebuild();
+        } while (rebuildAgain);
+      } finally {
+        rebuildQueued = false;
+      }
+    });
+  }
 
   const handlers = {
     onSmaChange(smaPath) {
@@ -127,6 +163,11 @@ async function runWatch(options) {
       return enqueue(async () => {
         state.depGraph.update(incPath);
         const affected = state.depGraph.getSmasDependingOn(incPath);
+        // A newly-added .inc can satisfy includes that were previously missing
+        // (e.g. a plugin saved with #include <newlib> before newlib.inc existed).
+        for (const smaPath of state.depGraph.reattachMissingIncludes(incPath)) {
+          affected.add(smaPath);
+        }
 
         if (affected.size === 0) {
           logger.dim(`  No plugins depend on ${path.relative(state.manifestDir, incPath)}, skipping`);
@@ -162,7 +203,10 @@ async function runWatch(options) {
     onFileChange(relPath, section) {
       return enqueue(() => {
         if (doDeploy && state.manifest.deploy.path) {
-          deployFile(state.manifest, buildDir, relPath, section);
+          const srcRoot = section === 'assets'
+            ? path.join(state.manifestDir, 'assets')
+            : path.join(state.manifestDir, state.manifest.amxmodx.dir);
+          deployFile(state.manifest, buildDir, relPath, section, srcRoot);
         }
       });
     },
@@ -176,22 +220,7 @@ async function runWatch(options) {
     },
 
     onManifestChange() {
-      return (async () => {
-        try {
-          await flushQueue(); // let in-flight compiles finish before build/ is wiped
-          logger.info('Rebuilding...');
-          await runBuild({ manifest: manifestPath, buildDir: options.buildDir });
-          state = await buildWatchState();
-          if (doDeploy && state.manifest.deploy.path) {
-            await deployBuild(state.manifest, buildDir, { incremental: true });
-            const pluginNames = gatherPluginNames(buildDir);
-            await sendRconForPlugins(state.manifest.deploy, pluginNames);
-          }
-          logger.warn('Note: if new watch paths were added, restart amxb watch to pick them up');
-        } catch (err) {
-          logger.error(err.message);
-        }
-      })();
+      return scheduleRebuild();
     },
   };
 

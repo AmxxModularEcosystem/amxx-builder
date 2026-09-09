@@ -5,6 +5,7 @@ const micromatch = require('micromatch');
 const logger = require('./logger');
 const { emit, EVENTS } = require('./events');
 const { spawnCompiler, buildIncludeArgs, buildDefineArgs } = require('./compile-utils');
+const { repoKey, normalizeRepo } = require('./deps-resolver');
 
 /**
  * Applies plugin rules to a local .sma file path (relative to scripting/).
@@ -30,17 +31,24 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
 
   // ── Build unified source list ──────────────────────────────────────────────
-  const sources = manifest.repos.map((repoConfig) => ({
-    label:        repoConfig.repo,
-    ref:          repoConfig._resolvedRef || repoConfig.ref || 'HEAD',
-    scriptingDir: path.join(
-      repoLocalDirs[`${repoConfig.repo}@${repoConfig._resolvedRef || repoConfig.ref || 'HEAD'}`],
-      repoConfig.amxmodx_dir,
-      'scripting'
-    ),
-    exclude: repoConfig.exclude,
-    postfix: repoConfig.plugins_ini_postfix,
-  }));
+  const seenSources = new Set(); // case-insensitive repo identity (dedupe)
+  const sources = [];
+  for (const repoConfig of manifest.repos) {
+    const identity = normalizeRepo(repoConfig);
+    if (seenSources.has(identity)) continue;
+    seenSources.add(identity);
+    sources.push({
+      label:        repoConfig.repo,
+      ref:          repoConfig._resolvedRef || repoConfig.ref || 'HEAD',
+      scriptingDir: path.join(
+        repoLocalDirs[repoKey(repoConfig)],
+        repoConfig.amxmodx_dir,
+        'scripting'
+      ),
+      exclude: repoConfig.exclude,
+      postfix: repoConfig.plugins_ini_postfix,
+    });
+  }
 
   const localScriptingDir = path.join(path.dirname(manifest._path), manifest.amxmodx.dir, 'scripting');
   if (fs.existsSync(localScriptingDir)) {
@@ -194,8 +202,12 @@ async function findExcluded(dir, patterns) {
 /**
  * Compiles a single .sma file. Used by watch mode.
  * Returns the .amxx filename on success, null on failure.
+ *
+ * eventTag (optional) is echoed in the emitted EVENTS.COMPILED payload so a
+ * subscriber can attribute the event to a specific call — needed when several
+ * compiles of same-named files run concurrently (serve compile.single).
  */
-async function compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir) {
+async function compileSingle(manifest, smaPath, compilerPath, includeDirs, buildDir, scriptingRootDir, eventTag = null) {
   const pluginsDir      = path.join(buildDir, 'amxmodx', 'plugins');
   const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
 
@@ -217,11 +229,11 @@ async function compileSingle(manifest, smaPath, compilerPath, includeDirs, build
   const { status, output } = await spawnCompiler(compilerPath, [smaPath, `-o${outPath}`, ...includes, ...defines]);
 
   if (status !== 0) {
-    emit(EVENTS.COMPILED, { baseName, ok: false, output, amxxName: null, repo: null, ref: null, outName });
+    emit(EVENTS.COMPILED, { baseName, ok: false, output, amxxName: null, repo: null, ref: null, outName, tag: eventTag });
     return null;
   }
 
-  emit(EVENTS.COMPILED, { baseName, ok: true, output, amxxName: outName, repo: null, ref: null, outName });
+  emit(EVENTS.COMPILED, { baseName, ok: true, output, amxxName: outName, repo: null, ref: null, outName, tag: eventTag });
   return outName;
 }
 

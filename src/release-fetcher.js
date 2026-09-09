@@ -7,8 +7,8 @@ const AdmZip = require('adm-zip');
 const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
-const { safeExtractTar } = require('./fs-utils');
-const { withRetry } = require('./retry');
+const { safeExtractTar, makeSiblingTmpDir, publishDir } = require('./fs-utils');
+const { downloadToFile } = require('./download');
 const { resolveRefIfLatest } = require('./repo-fetcher');
 
 /**
@@ -69,15 +69,24 @@ async function ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, l
 
   logger.dim(`  Asset: ${asset.name}`);
 
-  fs.mkdirSync(cacheDir, { recursive: true });
-  const archivePath = path.join(cacheDir, asset.name);
-
-  await downloadAsset(asset.browser_download_url, archivePath, headers);
-  extractArchive(archivePath, cacheDir);
-  fs.rmSync(archivePath, { force: true });
-  const sentinelTmp = sentinelFile + '.tmp';
-  fs.writeFileSync(sentinelTmp, resolvedRef, 'utf8');
-  fs.renameSync(sentinelTmp, sentinelFile);
+  // Download + extract into a unique sibling temp dir, then rename into place:
+  // a concurrent build or a killed process can never leave — or observe — a
+  // half-written cache dir (mirrors repo-fetcher).
+  const tmpDir = makeSiblingTmpDir(cacheDir);
+  try {
+    const archivePath = path.join(tmpDir, asset.name);
+    await downloadAsset(asset.browser_download_url, archivePath, headers);
+    extractArchive(archivePath, tmpDir);
+    fs.rmSync(archivePath, { force: true });
+    // Sentinel written into tmpDir first: only complete dirs become the cache.
+    const sentinelTmp = path.join(tmpDir, '.extracted.tmp');
+    fs.writeFileSync(sentinelTmp, resolvedRef, 'utf8');
+    fs.renameSync(sentinelTmp, path.join(tmpDir, '.extracted'));
+    publishDir(tmpDir, cacheDir, () => fs.existsSync(sentinelFile));
+  } catch (err) {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    throw err;
+  }
 
   logger.info(`${label}: ${repo}@${resolvedRef} ready`);
   return cacheDir;
@@ -161,28 +170,12 @@ function buildHeaders(token) {
 
 async function downloadAsset(url, dest, headers) {
   const filename = path.basename(url);
-  const bar = require('./progress').createBar(100, `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`);
-
-  const response = await withRetry(
-    () => axios.get(url, {
-      // Default to octet-stream but let callers override (API tarball fallback
-      // needs application/vnd.github+json).
-      headers: { Accept: 'application/octet-stream', ...headers },
-      responseType: 'arraybuffer',
-      maxRedirects: 5,
-      timeout: 600000, // large assets — allow slow links, still bound hangs
-      onDownloadProgress: (e) => {
-        if (bar && e.total) {
-          bar.update(Math.round(e.loaded / e.total * 100));
-        }
-      },
-    }),
-    { label: filename }
-  );
-  if (bar) bar.stop();
-  const part = dest + '.part';
-  fs.writeFileSync(part, Buffer.from(response.data));
-  fs.renameSync(part, dest);
+  return downloadToFile(url, dest, {
+    // Default to octet-stream but let callers override (API tarball fallback
+    // needs application/vnd.github+json).
+    headers: { Accept: 'application/octet-stream', ...headers },
+    progressLabel: `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`,
+  });
 }
 
 function extractArchive(archivePath, destDir) {

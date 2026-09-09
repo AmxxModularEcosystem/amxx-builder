@@ -75,11 +75,10 @@ class JsonRpcServer {
       try {
         msg = JSON.parse(line);
       } catch (_) {
-        // JSON parse error — try to extract id from the raw line
+        // JSON parse error — spec: always answer -32700; when the id cannot be
+        // recovered from the raw line it MUST be null.
         const id = this._extractId(line);
-        if (id != null) {
-          this.sendError(id, -32700, 'Parse error');
-        }
+        this.sendError(id, -32700, 'Parse error');
         continue;
       }
 
@@ -136,7 +135,15 @@ class JsonRpcServer {
   // ─── Message dispatch ────────────────────────────────────────────────────
 
   async _handleMessage(msg) {
-    if (!msg || typeof msg !== 'object' || !msg.method) return;
+    // Batch request (array) → one response array (or single -32600 when empty).
+    if (Array.isArray(msg)) return this._handleBatch(msg);
+
+    // Not a Request/Notification object at all → -32600 Invalid Request.
+    if (!msg || typeof msg !== 'object' || typeof msg.method !== 'string') {
+      const id = msg && typeof msg === 'object' && this._isValidId(msg.id) ? msg.id : null;
+      this.sendError(id, -32600, 'Invalid Request');
+      return;
+    }
 
     const { method, id, params } = msg;
 
@@ -179,6 +186,47 @@ class JsonRpcServer {
       return;
     }
     this.sendResult(id, result);
+  }
+
+  /**
+   * JSON-RPC 2.0 batch: each element is handled like a standalone message and
+   * the responses are collected into one response array. Elements that are not
+   * valid Requests/Notifications yield -32600. If every element is a
+   * notification, no response is written (spec: an empty response array MUST
+   * NOT be sent).
+   */
+  async _handleBatch(batch) {
+    const responses = [];
+    const realSendResult = this.sendResult.bind(this);
+    const realSendError  = this.sendError.bind(this);
+    this.sendResult = (id, result) => responses.push({ jsonrpc: '2.0', id, result });
+    this.sendError = (id, code, message, data) => {
+      const err = { jsonrpc: '2.0', id, error: { code, message } };
+      if (data !== undefined) err.error.data = data;
+      responses.push(err);
+    };
+
+    try {
+      for (const item of batch) {
+        if (item && typeof item === 'object' && !Array.isArray(item) && typeof item.method === 'string') {
+          await this._handleMessage(item);
+        } else {
+          const id = item && typeof item === 'object' && this._isValidId(item.id) ? item.id : null;
+          this.sendError(id, -32600, 'Invalid Request');
+        }
+      }
+    } finally {
+      this.sendResult = realSendResult;
+      this.sendError  = realSendError;
+    }
+
+    if (responses.length) {
+      process.stdout.write(JSON.stringify(responses) + '\n');
+    }
+  }
+
+  _isValidId(id) {
+    return typeof id === 'string' || (typeof id === 'number' && Number.isFinite(id));
   }
 
   /**

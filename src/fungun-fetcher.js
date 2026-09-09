@@ -229,9 +229,11 @@ function codePointToString(cp) {
  * after the modal title (path traversal is stripped via basename). The
  * sentinel `.fungun` marks a complete fetch. Because fungun pages have no
  * version to pin, the cache expires after FUNGUN_CACHE_TTL_MS and is
- * refetched on the next build. A refetch that fails (network, or the page
- * no longer exposing the include) falls back to the last known-good copy,
- * so an expired cache never breaks a build by itself.
+ * refetched on the next build. A refetch that fails on a *transport* error
+ * falls back to the last known-good copy, so an expired cache never breaks a
+ * build by itself; a refetch that *succeeds* but finds no include
+ * (FUNGUN_NO_INC — vendor removed it or changed the page markup) always
+ * fails loudly instead of silently building against a stale include.
  *
  * @param {object|number|string} dep - parsed fungun dep ({ id } / { url }) or a raw reference
  * @param {boolean} [noFetch=false] - only use the cache, skip network
@@ -287,24 +289,42 @@ async function fetchFungunDep(dep, noFetch = false) {
     if (incs.length === 0) {
       const pageUrl = ref.url || pluginPageUrl(ref.id);
       const titles  = extractIncModals(html).map((m) => m.filename);
-      throw new Error(
+      const err = new Error(
         `No .inc include found on fungun.net plugin page #${ref.id} (${pageUrl}).\n` +
         `Shipped file modals: ${titles.length ? titles.join(', ') : 'none'} — this plugin exposes no include file.`
       );
+      // The page fetched fine but exposes no include — the vendor removed it or
+      // changed the page. A stale cache must NOT mask that: never fall back.
+      err.code = 'FUNGUN_NO_INC';
+      throw err;
     }
 
     fs.mkdirSync(cacheDir, { recursive: true });
+    // Write the freshly-fetched includes and remove cached ones the page no
+    // longer ships, so a renamed/dropped include cannot linger on disk forever.
+    const shippedNames = new Set();
     for (const inc of incs) {
-      fs.writeFileSync(path.join(cacheDir, safeFileName(inc.filename)), inc.content, 'utf8');
+      const fileName = safeFileName(inc.filename);
+      shippedNames.add(fileName);
+      fs.writeFileSync(path.join(cacheDir, fileName), inc.content, 'utf8');
+    }
+    for (const existing of fs.existsSync(cacheDir) ? fs.readdirSync(cacheDir) : []) {
+      if (existing === SENTINEL_FILE || shippedNames.has(existing)) continue;
+      if (existing.endsWith('.inc')) {
+        logger.dim(`  fungun.net plugin #${ref.id}: removing stale cached ${existing}`);
+        fs.rmSync(path.join(cacheDir, existing), { force: true });
+      }
     }
     touchSentinel(sentinelFile, ref.id);
 
     logger.info(`Fungun dep: plugin #${ref.id} ready (${incs.map((f) => f.filename).join(', ')})`);
     return cacheDir;
   } catch (err) {
-    if (staleCache) {
-      // Refetch failed but the previous copy is still on disk — keep the build
-      // green and reset freshness so we don't hammer the site on every build.
+    if (staleCache && err.code !== 'FUNGUN_NO_INC') {
+      // Transport/parse failure while a previous copy is on disk — keep the
+      // build green and reset freshness so we don't hammer the site on every
+      // build. A *successful* fetch with no include (FUNGUN_NO_INC) always
+      // propagates: silently building against a removed include is worse.
       logger.warn(`Fungun dep: refetch of plugin #${ref.id} failed (${err.message}) — using cached copy`);
       touchSentinel(sentinelFile, ref.id);
       return cacheDir;

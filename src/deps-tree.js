@@ -91,7 +91,8 @@ function assembleRootDeps(manifest) {
     rootDeps.push({ ...dep, _from: 'manifest' });
   }
   const getDepsOverride = (repo) => {
-    const config = manifest.repos.find((r) => r.repo === repo);
+    const normalized = repo.toLowerCase();
+    const config = manifest.repos.find((r) => r.repo.toLowerCase() === normalized);
     return config ? config.deps_override : null;
   };
   return { rootDeps, getDepsOverride };

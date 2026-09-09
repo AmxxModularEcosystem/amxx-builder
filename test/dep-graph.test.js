@@ -72,3 +72,55 @@ test('DepGraph.update drops stale missing entries and re-snapshots', () => {
   assert.ok(snap.missing.some((m) => m.name === 'still_missing'), 'still_missing stays missing');
   assert.ok(!snap.missing.some((m) => m.name === 'newly_added'), 'stale missing entry dropped');
 });
+
+test('DepGraph.reattachMissingIncludes: adding a missing .inc returns waiting smas', () => {
+  const dir = tmpDir();
+  const sma = path.join(dir, 'plugin.sma');
+  fs.writeFileSync(sma, '#include <newlib>\n');
+
+  const graph = new DepGraph([dir]);
+  graph.parseFile(sma);
+  assert.equal(graph.snapshot().missing.length, 1, 'newlib is missing at first');
+
+  const inc = path.join(dir, 'newlib.inc');
+  fs.writeFileSync(inc, '');
+
+  const affected = graph.reattachMissingIncludes(inc);
+  assert.ok([...affected][0].endsWith('plugin.sma'), 'plugin.sma must be returned for recompile');
+
+  const snap = graph.snapshot();
+  assert.ok(snap.files.some((f) => f.file.endsWith('plugin.sma')), 'plugin re-parsed');
+  assert.ok(!snap.missing.some((m) => m.name === 'newlib'), 'missing entry cleared');
+  assert.equal(graph.getSmasDependingOn(inc).size, 1, 'edge recorded for future changes');
+});
+
+test('DepGraph.reattachMissingIncludes: .inc with missing include is resolved via its sma dependents', () => {
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'p1.sma'), '#include <mid>\n');
+  fs.writeFileSync(path.join(dir, 'mid.inc'), '#include <deep>\n');
+
+  const graph = new DepGraph([dir]);
+  graph.parseFile(path.join(dir, 'p1.sma'));
+  assert.ok(graph.snapshot().missing.some((m) => m.name === 'deep'), 'deep is missing');
+
+  const deep = path.join(dir, 'deep.inc');
+  fs.writeFileSync(deep, '');
+
+  const affected = graph.reattachMissingIncludes(deep);
+  assert.equal(affected.size, 1, 'p1.sma affected transitively via mid.inc');
+  assert.ok([...affected][0].endsWith('p1.sma'));
+  assert.equal(graph.getSmasDependingOn(deep).size, 1, 'edge from mid.inc to deep.inc recorded');
+});
+
+test('DepGraph.reattachMissingIncludes: unrelated file is not affected', () => {
+  const dir = tmpDir();
+  const sma = path.join(dir, 'plugin.sma');
+  fs.writeFileSync(sma, '#include <aaa>\n');
+
+  const graph = new DepGraph([dir]);
+  graph.parseFile(sma);
+
+  const other = path.join(dir, 'zzz.inc');
+  fs.writeFileSync(other, '');
+  assert.equal(graph.reattachMissingIncludes(other).size, 0, 'no sma waits for zzz.inc');
+});

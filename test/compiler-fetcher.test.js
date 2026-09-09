@@ -15,8 +15,16 @@ const assert = require('node:assert/strict');
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
+const { Readable } = require('node:stream');
+const { spawnSync } = require('child_process');
 
-const { resolveAmxmodxVersion, findNewestCachedCompiler } = require('../src/compiler-fetcher');
+const axios = require('axios');
+const AdmZip = require('adm-zip');
+
+const { resolveAmxmodxVersion, findNewestCachedCompiler, fetchCompiler, getAmxmodxFullDir, resolveStdlibVersion } = require('../src/compiler-fetcher');
+const { setEnabled } = require('../src/progress');
+
+setEnabled(false); // keep test output clean — no \r progress bars
 
 const PLATFORM = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : 'linux';
 const BIN      = PLATFORM === 'windows' ? 'amxxpc.exe' : 'amxxpc';
@@ -66,6 +74,54 @@ function seedCompiler(cache, version, { withInclude = false } = {}) {
 // NOTE: the module keeps a process-lifetime latest-version memory. The
 // LATEST_NOT_CACHED test below must run first (empty cache → nothing cached),
 // before the cached-latest test populates that memory.
+
+// ─── resolveStdlibVersion: offline degradation matrix ────────────────────────
+// NOTE: must run BEFORE the resolveAmxmodxVersion "latest" tests below seed the
+// module-level latest-version memory — the graceful-empty case depends on
+// fetchLatestVersion actually throwing LATEST_NOT_CACHED.
+
+test('resolveStdlibVersion: noFetch + empty cache + no manifest → graceful empty (version null)', async (t) => {
+  useTempCache(t, 'amxb-rsv-a-');
+  const result = await resolveStdlibVersion({ noFetch: true });
+  assert.deepEqual(result, { version: null, degraded: false, error: null });
+});
+
+test('resolveStdlibVersion: noFetch + empty cache + explicit "latest" → graceful empty', async (t) => {
+  useTempCache(t, 'amxb-rsv-b-');
+  const result = await resolveStdlibVersion({ version: 'latest', noFetch: true });
+  assert.deepEqual(result, { version: null, degraded: false, error: null });
+});
+
+test('resolveStdlibVersion: noFetch + cached compiler + no latest metadata → newest cached + degraded', async (t) => {
+  const cache = useTempCache(t, 'amxb-rsv-c-');
+  seedCompiler(cache, '1.10.5428', { withInclude: true });
+  seedCompiler(cache, '1.9.0', { withInclude: true });
+  const result = await resolveStdlibVersion({ noFetch: true });
+  assert.equal(result.version, '1.10.5428');
+  assert.equal(result.degraded, true);
+  assert.equal(result.error, null);
+});
+
+test('resolveStdlibVersion: explicit version passes through verbatim (no network)', async (t) => {
+  useTempCache(t, 'amxb-rsv-d-');
+  const result = await resolveStdlibVersion({ version: '1.10.9999', noFetch: true });
+  assert.deepEqual(result, { version: '1.10.9999', degraded: false, error: null });
+});
+
+test('resolveStdlibVersion: manifest amxmodx.version used verbatim (no network)', async (t) => {
+  useTempCache(t, 'amxb-rsv-e-');
+  const result = await resolveStdlibVersion({ manifest: { amxmodx: { version: '1.9.0.5299' } }, noFetch: true });
+  assert.deepEqual(result, { version: '1.9.0.5299', degraded: false, error: null });
+});
+
+test('resolveStdlibVersion: invalid explicit version → error carrying INVALID_AMXMODX_VERSION', async (t) => {
+  useTempCache(t, 'amxb-rsv-f-');
+  const result = await resolveStdlibVersion({ version: 'banana' });
+  assert.equal(result.version, null);
+  assert.equal(result.degraded, false);
+  assert.ok(result.error instanceof Error);
+  assert.equal(result.error.code, 'INVALID_AMXMODX_VERSION');
+});
 
 // ─── resolveAmxmodxVersion: explicit version option ─────────────────────────
 
@@ -161,4 +217,144 @@ test('findNewestCachedCompiler: empty amxxpc dir → null', (t) => {
   mkdir(cache, 'amxxpc');
 
   assert.equal(findNewestCachedCompiler(), null);
+});
+
+// ─── fetchCompiler: completion marker / atomic cache ─────────────────────────
+
+const HAVE_TAR = !spawnSync('tar', ['--version']).error;
+
+// The real amxxdrop package wraps everything in addons/amxmodx/scripting/.
+const SCRIPTING_PREFIX = 'addons/amxmodx/scripting/';
+const INC_CONTENT = '// amxmodx include\n';
+
+// Builds a synthetic base archive (zip on Windows, tar.gz elsewhere) whose
+// scripting/ subtree carries amxxpc[.exe] and include/amxmodx.inc.
+function makeCompilerArchive() {
+  if (PLATFORM === 'windows') {
+    const zip = new AdmZip();
+    zip.addFile(SCRIPTING_PREFIX + BIN, Buffer.from('mock-amxxpc'));
+    zip.addFile(SCRIPTING_PREFIX + 'include/amxmodx.inc', Buffer.from(INC_CONTENT));
+    return zip.toBuffer();
+  }
+  const src = makeTmpDir('amxb-cf-src-');
+  writeFile(src, SCRIPTING_PREFIX + BIN, 'mock-amxxpc');
+  writeFile(src, SCRIPTING_PREFIX + 'include/amxmodx.inc', INC_CONTENT);
+  const out = path.join(src, 'pack.tar.gz');
+  const res = spawnSync('tar', ['-czf', out, 'addons'], { cwd: src, stdio: 'pipe' });
+  if (res.status !== 0) {
+    fs.rmSync(src, { recursive: true, force: true });
+    throw new Error('test setup: tar creation failed');
+  }
+  const buf = fs.readFileSync(out);
+  fs.rmSync(src, { recursive: true, force: true });
+  return buf;
+}
+
+function stubCompilerDownload(bytes) {
+  const calls = [];
+  const orig = axios.get;
+  axios.get = async () => {
+    calls.push(1);
+    const s = new Readable();
+    s.push(bytes);
+    s.push(null);
+    return {
+      data: s,
+      headers: { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length) },
+    };
+  };
+  return { calls, restore() { axios.get = orig; } };
+}
+
+function compilerCachePaths(cache, version) {
+  return {
+    dir:      path.join(cache, 'amxxpc', version, PLATFORM),
+    binary:   path.join(cache, 'amxxpc', version, PLATFORM, BIN),
+    include:  path.join(cache, 'amxxpc', version, PLATFORM, 'include'),
+    complete: path.join(cache, 'amxxpc', version, PLATFORM, '.complete'),
+  };
+}
+
+function fetchCompilerTests() {
+  const bytes = makeCompilerArchive();
+  return {
+    bytes,
+    stub: stubCompilerDownload(bytes),
+  };
+}
+
+test('fetchCompiler: legacy binary cache without .complete is used as-is and backfills the marker', async (t) => {
+  const cache = useTempCache(t, 'amxb-cf-k-');
+  seedCompiler(cache, '1.10.5428', { withInclude: true });
+  const paths = compilerCachePaths(cache, '1.10.5428');
+
+  const stub = stubCompilerDownload(Buffer.from('should-not-download'));
+  t.after(stub.restore);
+
+  const result = await fetchCompiler('1.10.5428');
+  assert.equal(result.compilerPath, paths.binary);
+  assert.equal(result.includeDir, paths.include);
+  assert.equal(stub.calls.length, 0, 'legacy cache must not trigger a download');
+  assert.equal(fs.readFileSync(paths.complete, 'utf8'), '1.10.5428');
+});
+
+test('fetchCompiler: marker-less partial cache is re-downloaded and a leftover temp dir is ignored', async (t) => {
+  if (PLATFORM !== 'windows' && !HAVE_TAR) return t.skip('tar binary not available');
+  const cache = useTempCache(t, 'amxb-cf-l-');
+  const paths = compilerCachePaths(cache, '1.10.5428');
+
+  // A killed extraction left marker-less junk (old include, no binary, no
+  // .complete) plus an orphaned sibling temp dir with a fake binary.
+  writeFile(cache, `amxxpc/1.10.5428/${PLATFORM}/include/amxmodx.inc`, 'old partial');
+  writeFile(cache, `amxxpc/1.10.5428/${PLATFORM}.tmp-999-beef/${BIN}`, 'fake');
+
+  const fx = fetchCompilerTests();
+  t.after(fx.stub.restore);
+
+  const result = await fetchCompiler('1.10.5428');
+  assert.equal(result.compilerPath, paths.binary);
+  assert.equal(result.includeDir, paths.include);
+  assert.equal(fs.readFileSync(path.join(paths.include, 'amxmodx.inc'), 'utf8'), INC_CONTENT, 'stale include overwritten');
+  assert.equal(fs.readFileSync(paths.complete, 'utf8'), '1.10.5428');
+  assert.equal(fx.stub.calls.length, 1);
+  assert.equal(fs.existsSync(path.join(cache, 'amxxpc', '1.10.5428', `${PLATFORM}.tmp-999-beef`)), true,
+    'other process temp dir left alone');
+  // The whole amxxpc/<version> tree only contains the platform dir (plus the stray).
+  const leftovers = fs.readdirSync(path.join(cache, 'amxxpc', '1.10.5428')).filter((n) => !n.includes('.tmp-'));
+  assert.deepEqual(leftovers, [PLATFORM]);
+});
+
+test('fetchCompiler: .complete present but binary deleted → re-downloaded (self-heal)', async (t) => {
+  if (PLATFORM !== 'windows' && !HAVE_TAR) return t.skip('tar binary not available');
+  const cache = useTempCache(t, 'amxb-cf-m-');
+  const paths = compilerCachePaths(cache, '1.10.5428');
+  writeFile(cache, `amxxpc/1.10.5428/${PLATFORM}/.complete`, '1.10.5428');
+  mkdir(cache, `amxxpc/1.10.5428/${PLATFORM}/include`);
+
+  const fx = fetchCompilerTests();
+  t.after(fx.stub.restore);
+
+  const result = await fetchCompiler('1.10.5428');
+  assert.equal(result.compilerPath, paths.binary);
+  assert.equal(fx.stub.calls.length, 1, 'sentinel without a binary must re-download');
+  assert.equal(fs.readFileSync(paths.complete, 'utf8'), '1.10.5428');
+});
+
+test('getAmxmodxFullDir: missing sentinel is re-downloaded without clobbering an existing compiler cache', async (t) => {
+  if (PLATFORM !== 'windows' && !HAVE_TAR) return t.skip('tar binary not available');
+  const cache = useTempCache(t, 'amxb-cf-n-');
+  seedCompiler(cache, '1.10.5428'); // compiler scripting/ already cached in the shared dir
+
+  const fx = fetchCompilerTests();
+  t.after(fx.stub.restore);
+
+  const dir = await getAmxmodxFullDir('1.10.5428', PLATFORM);
+  assert.equal(fx.stub.calls.length, 1, 'missing .addons-extracted must trigger a download');
+  assert.equal(fs.existsSync(path.join(dir, 'addons', 'amxmodx', 'scripting', 'include', 'amxmodx.inc')), true);
+  assert.equal(fs.existsSync(path.join(dir, '.addons-extracted')), true);
+  assert.equal(fs.existsSync(path.join(dir, BIN)), true, 'existing compiler kept after merge');
+
+  // Second call hits the sentinel — no download.
+  await getAmxmodxFullDir('1.10.5428', PLATFORM);
+  assert.equal(fx.stub.calls.length, 1, 'sentinel-marked cache must not re-download');
 });

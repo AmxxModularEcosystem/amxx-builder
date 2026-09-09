@@ -274,7 +274,7 @@ test('compilePlugins: repo script is passed -o with abs path and -i include dirs
   ]);
 });
 
-test('compilePlugins: defines are passed to the compiler', async () => {
+test('compilePlugins: value-less defines are normalized to NAME=1 and passed to the compiler', async () => {
   const dir = makeTmpDir('amxb-cp-def-');
   const { compilerPath } = makeMockCompiler(dir);
 
@@ -286,16 +286,19 @@ test('compilePlugins: defines are passed to the compiler', async () => {
   const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
   const manifest = makeManifest(dir, {
     repos: [repo],
-    amxmodx: { dir: 'amxmodx', defines: ['DEBUG'] },
+    amxmodx: { dir: 'amxmodx', defines: ['DEBUG', 'VERSION=2'] },
   });
   const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
 
-  // NOTE: the mock (like real amxxpc on Linux) REJECTS -D... — so a define
-  // currently produces a compile failure, mirroring the real compiler.
-  await assert.rejects(
-    () => compilePlugins(manifest, repoLocalDirs, compilerPath, [], buildDir),
-    /Compilation failed/
+  const compiled = await compilePlugins(manifest, repoLocalDirs, compilerPath, [], buildDir);
+  assert.equal(compiled.length, 1);
+
+  // The mock records the parsed invocation; value-less defines must arrive as
+  // NAME=1 (amxxpc has no -DNAME syntax — see buildDefineArgs).
+  const argsJson = JSON.parse(
+    fs.readFileSync(path.join(buildDir, 'amxmodx', 'plugins', 'p.amxx.args.json'), 'utf8')
   );
+  assert.deepEqual(argsJson.defines, ['DEBUG=1', 'VERSION=2']);
 });
 
 test('compilePlugins: plugin rule enabled:false skips the plugin', async () => {

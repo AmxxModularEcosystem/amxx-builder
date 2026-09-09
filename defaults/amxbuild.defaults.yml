@@ -34,6 +34,10 @@ assets:
 
 deploy:
   amxmodx_path: addons/amxmodx
+  # Empty assets path = deploy root (server root), matching the schema default:
+  # local assets/ land where the game reads them, NOT under a {name}/ subfolder
+  # (output.assets_path '{name}' only shapes the distribution archive).
+  assets_path: ""
   watch_debounce_ms: 500
   exclude: []
   rcon:

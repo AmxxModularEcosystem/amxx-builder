@@ -57,9 +57,18 @@ function buildIncludeArgs({ scriptingDir, localIncDir, collectedIncDir, includeD
   return includes;
 }
 
-/** Turns manifest defines (e.g. ['DEBUG']) into `-DDEBUG` compiler flags. */
+/**
+ * Turns manifest defines (e.g. ['DEBUG', 'VERSION=2']) into amxxpc CLI args.
+ *
+ * amxxpc (Pawn compiler fork) does NOT accept `-D<name>` defines: on Linux the
+ * -D flag is compiled out (dead dos_setdrive code) and rejected; on Windows it
+ * is silently treated as chdir. Its only CLI define syntax is a bare
+ * `sym=val` argument (sc1.c parseoptions). A value-less flag is therefore
+ * normalized to `NAME=1` (semantics of `-DNAME` elsewhere: `#if NAME` and
+ * `#if defined NAME` both see it enabled).
+ */
 function buildDefineArgs(defines) {
-  return (defines || []).map((d) => `-D${d}`);
+  return (defines || []).map((d) => (d.includes('=') ? d : `${d}=1`));
 }
 
 module.exports = { spawnCompiler, buildIncludeArgs, buildDefineArgs };

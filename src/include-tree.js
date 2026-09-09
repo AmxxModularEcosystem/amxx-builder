@@ -26,12 +26,10 @@ const fs   = require('fs');
 const path = require('path');
 const glob = require('fast-glob');
 
-const { parseManifest, parseDepsLines, resolveGithubToken } = require('./manifest');
+const { parseManifest, resolveGithubToken } = require('./manifest');
 const { fetchCompiler, fetchLatestVersion } = require('./compiler-fetcher');
-const { fetchRepo, resolveRefIfLatest, resolveRepoRefs } = require('./repo-fetcher');
-const { fetchReleaseDep }   = require('./release-fetcher');
-const { fetchFungunDep }    = require('./fungun-fetcher');
-const { normalize, depLabel } = require('./deps-resolver');
+const repoFetcher = require('./repo-fetcher');
+const { normalize, normalizeRepo, depLabel, fetchDepIncludeDir, readDepsListFile } = require('./deps-resolver');
 const { loadEnv }           = require('./env');
 const { resolveManifestPath } = require('./manifest-path');
 
@@ -580,9 +578,26 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
   // undefined and is skipped below (ref-less repos still clone default branch).
   await Promise.all(manifest.repos.map(async (repoConfig) => {
     try {
-      await resolveRepoRefs([repoConfig], tokenFor);
+      await repoFetcher.resolveRepoRefs([repoConfig], tokenFor);
     } catch (_) { /* ref failed — repo skipped by the fetch loops below */ }
   }));
+
+  // Per-run fetch cache: each manifest repo is fetched at most once, shared by
+  // its DEPS_LIST scan (3a) and its scripting-dir include scan (4b). Failure is
+  // cached too (null), so a repo that cannot be fetched contributes nothing —
+  // exactly the silent-failure behavior of the previous per-section fetches.
+  const repoDirs = new Map(); // normalizeRepo(repoConfig) → local dir | null
+  const repoDirOf = async (repoConfig) => {
+    if (repoConfig._resolvedRef === undefined) return null; // ref failed → skip
+    const key = normalizeRepo(repoConfig);
+    if (repoDirs.has(key)) return repoDirs.get(key);
+    let dir = null;
+    try {
+      dir = await repoFetcher.fetchRepo(repoConfig.repo, repoConfig._resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
+    } catch (_) { /* unresolvable — cached as null below */ }
+    repoDirs.set(key, dir);
+    return dir;
+  };
 
   // ── 2. Create graph ──────────────────────────────────────────────────
   const graph = new IncludeGraph();
@@ -598,14 +613,10 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
       depEntries.push(...repoConfig.deps_override);
       continue;
     }
-    if (repoConfig._resolvedRef === undefined) continue; // ref failed → skip
     try {
-      const repoDir = await fetchRepo(repoConfig.repo, repoConfig._resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
-      const depsPath = path.join(repoDir, 'DEPS_LIST');
-      if (fs.existsSync(depsPath)) {
-        depEntries.push(...parseDepsLines(fs.readFileSync(depsPath, 'utf8').split(/\r?\n/)));
-      }
-    } catch (_) { /* skip unresolvable repos */ }
+      const repoDir = await repoDirOf(repoConfig);
+      if (repoDir) depEntries.push(...readDepsListFile(repoDir, repoConfig.repo));
+    } catch (_) { /* DEPS_LIST unreadable → repo contributes no repo-deps */ }
   }
 
   const seenDeps = new Set();
@@ -660,13 +671,8 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
 
   // 4b. Repo scripting/ dirs
   for (const repoConfig of manifest.repos) {
-    if (repoConfig._resolvedRef === undefined) continue; // ref failed → skip
-    let repoDir;
-    try {
-      repoDir = await fetchRepo(repoConfig.repo, repoConfig._resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
-    } catch (_) {
-      continue; // skip repos that can't be fetched
-    }
+    const repoDir = await repoDirOf(repoConfig); // fetched once (see 3a)
+    if (!repoDir) continue; // skip repos that can't be fetched
 
     const scriptingDir = path.join(repoDir, repoConfig.amxmodx_dir, 'scripting');
     const incDir       = path.join(scriptingDir, 'include');
@@ -796,49 +802,10 @@ async function collectIncFiles(srcDir) {
   return entries.map((rel) => ({ rel, abs: path.join(srcDir, rel) }));
 }
 
-/**
- * Fetch a dependency's include directory, using cache where possible.
- * Public single-source-of-truth shared by the build pipeline (include-tree),
- * the CLI and the MCP layer.
- *
- * Explicit-include_path semantics: silently falls back to the repo root when
- * the given path does not exist (the MCP callers rely on this).
- *
- * @param {object} dep - { repo, ref, include_path, source, asset }
- * @param {string|null} token - GitHub PAT (per-owner resolved by the caller)
- * @param {boolean} [noFetch=false] - only use cache, skip network
- * @param {boolean} [ssh=false] - clone via SSH
- * @returns {Promise<string>} directory to use as the include dir
- */
-async function fetchDepIncludeDir(dep, token, noFetch, ssh = false) {
-  if (dep.source === 'release') {
-    return fetchReleaseDep(
-      { repo: dep.repo, ref: dep.ref, include_path: dep.include_path, asset: dep.asset },
-      token,
-      noFetch
-    );
-  }
-
-  if (dep.source === 'fungun') {
-    return fetchFungunDep(dep, noFetch);
-  }
-
-  const resolvedRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
-  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, ssh);
-  const candidates = dep.include_path
-    ? [dep.include_path]
-    : ['scripting/include', 'amxmodx/scripting/include', 'include', '.'];
-
-  for (const candidate of candidates) {
-    const full = path.join(repoDir, candidate);
-    if (fs.existsSync(full)) return full;
-  }
-
-  return repoDir;
-}
-
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
+// fetchDepIncludeDir is owned by deps-resolver (single source for the
+// collect-dep-include-dirs loops); re-exported here for existing callers.
 module.exports = {
   buildIncludeTree,
   IncludeGraph,

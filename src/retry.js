@@ -28,8 +28,10 @@ async function withRetry(fn, { attempts = 3, baseDelayMs = 1000, label = '' } = 
 }
 
 // 408/429 and GitHub rate-limit 403s (X-RateLimit-Remaining: 0) are transient;
-// any other 4xx is a permanent failure.
+// any other 4xx is a permanent failure. Errors may opt out of retrying via
+// err.retryable = false (re-downloading an oversized body would not shrink it).
 function isTransient(err) {
+  if (err && err.retryable === false) return false;
   const status = err.response?.status;
   if (!status || status >= 500) return true;
   if (status === 408 || status === 429) return true;

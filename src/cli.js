@@ -30,8 +30,10 @@ program
 
 program.hook('preAction', async () => {
   // The MCP server, the serve JSON-RPC server and skills-dir own stdout; an
-  // update notice would corrupt the protocol/parseable stream.
+  // update notice would corrupt the protocol/parseable stream. The GitHub
+  // Action already pins a version and shouldn't make an extra network call.
   if (program.args[0] === 'mcp' || program.args[0] === 'serve' || program.args[0] === 'skills-dir') return;
+  if (process.env.GITHUB_ACTIONS === 'true') return;
   try {
     const latest = await checkForUpdate();
     if (latest) {

@@ -84,4 +84,38 @@ function safeExtractTar(archivePath, destDir, { stripComponents = 0 } = {}) {
   }
 }
 
-module.exports = { copyDirContents, countFiles, safeExtractTar };
+/**
+ * Creates a unique sibling temp dir for an atomic publish into finalDir.
+ * Mirrors the repo-fetcher pattern: <final>.tmp-<pid>-<rand>. The parent of
+ * finalDir is created as needed, so the temp dir is always on the same
+ * filesystem and a later renameSync into place is atomic.
+ */
+function makeSiblingTmpDir(finalDir) {
+  const tmpDir = `${finalDir}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  fs.mkdirSync(path.dirname(tmpDir), { recursive: true });
+  fs.mkdirSync(tmpDir, { recursive: true });
+  return tmpDir;
+}
+
+/**
+ * Publishes a fully-populated temp dir as finalDir (rename-or-adopt, mirroring
+ * repo-fetcher). If a concurrent run already produced a valid finalDir,
+ * tmpDir is discarded and finalDir kept; if finalDir holds stale junk
+ * (isValid false), it is replaced atomically. Callers gate validity on a
+ * sentinel, so an in-progress temp dir can never be mistaken for a cache.
+ */
+function publishDir(tmpDir, finalDir, isValid) {
+  try {
+    fs.renameSync(tmpDir, finalDir);
+  } catch {
+    if (isValid()) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    } else {
+      try { fs.rmSync(finalDir, { recursive: true, force: true }); } catch (_) {}
+      fs.renameSync(tmpDir, finalDir);
+    }
+  }
+  return finalDir;
+}
+
+module.exports = { copyDirContents, countFiles, safeExtractTar, makeSiblingTmpDir, publishDir };

@@ -3,16 +3,13 @@
 const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
-const axios  = require('axios');
-// Default for API calls; download sites pass their own longer timeout.
-axios.defaults.timeout = 30000;
 const AdmZip = require('adm-zip');
 
 const chalk = require('chalk');
-const { safeExtractTar } = require('./fs-utils');
+const { safeExtractTar, makeSiblingTmpDir, publishDir } = require('./fs-utils');
+const { downloadToFile } = require('./download');
 const logger = require('./logger');
 const { getCacheDir }        = require('./cache-dir');
-const { withRetry }          = require('./retry');
 const { getAmxmodxFullDir, getHostPlatform } = require('./compiler-fetcher');
 const { getReleaseCacheDir } = require('./release-fetcher');
 const { resolveGithubToken } = require('./manifest');
@@ -91,47 +88,34 @@ async function resolveUrlSource(source, manifestDir, buildDir, noFetch) {
 
   const filename = getFilenameFromUrl(source.url);
   logger.step(`Assets: downloading ${filename}...`);
-  fs.mkdirSync(cacheDir, { recursive: true });
 
-  const bar = require('./progress').createBar(100, `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`);
-
+  // Download + extract into a unique sibling temp dir, then rename into place:
+  // an interrupted run leaves only the temp dir (never a sentinel-marked cache)
+  // and concurrent fetches of the same URL cannot interleave writes.
+  const tmpDir = makeSiblingTmpDir(cacheDir);
   try {
-    const response    = await withRetry(
-      () => axios.get(source.url, {
-        responseType: 'arraybuffer',
-        maxRedirects: 5,
-        timeout: 600000, // large archives — allow slow links, still bound hangs
-        onDownloadProgress: (e) => {
-          if (bar && e.total) {
-            bar.update(Math.round(e.loaded / e.total * 100));
-          }
-        },
-      }),
-      { label: filename }
-    );
-    if (bar) bar.stop();
-    const contentType = response.headers['content-type'] || '';
-    const data        = Buffer.from(response.data);
+    const downloadPath = path.join(tmpDir, filename);
+    const { headers } = await downloadToFile(source.url, downloadPath, {
+      progressLabel: `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`,
+    });
+    const contentType = headers['content-type'] || '';
 
     if (isArchive(filename, contentType)) {
-      extractArchive(data, filename, cacheDir);
-    } else {
-      const filePath = path.join(cacheDir, filename);
-      const part     = filePath + '.part';
-      fs.writeFileSync(part, data);
-      fs.renameSync(part, filePath);
+      extractArchiveFile(downloadPath, tmpDir);
     }
 
-    const sentinelTmp = sentinel + '.tmp';
+    // Sentinel written into tmpDir first: only complete dirs become the cache.
+    const sentinelTmp = path.join(tmpDir, '.cached.tmp');
     fs.writeFileSync(sentinelTmp, JSON.stringify({ url: source.url, cached_at: new Date().toISOString() }));
-    fs.renameSync(sentinelTmp, sentinel);
+    fs.renameSync(sentinelTmp, path.join(tmpDir, '.cached'));
+    publishDir(tmpDir, cacheDir, () => fs.existsSync(sentinel));
     logger.info(`Assets: ${filename} ready`);
     return cacheDir;
   } catch (err) {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     // Never rmSync the whole cache dir: it may be a shared 'global' entry used
-    // by parallel sources or other projects. Invalidate the sentinel only and
-    // leave the content to be overwritten on the next fetch.
-    try { fs.rmSync(sentinel, { force: true }); } catch (_) {}
+    // by parallel sources or other projects. Only the unique temp dir above is
+    // ours to remove; a stale marker-less cache dir is replaced on next fetch.
     throw new Error(`Failed to fetch asset ${source.url}: ${err.message}`);
   }
 }
@@ -157,25 +141,26 @@ function isArchive(filename, contentType) {
   return /zip|tar|gzip|x-compressed/.test(contentType);
 }
 
-function extractArchive(data, filename, destDir) {
-  const isZip = /\.zip$/i.test(filename) || isZipMagic(data);
+function extractArchiveFile(archivePath, destDir) {
+  const isZip = /\.zip$/i.test(archivePath) || isZipMagicFile(archivePath);
   if (isZip) {
-    new AdmZip(data).extractAllTo(destDir, true);
-    return;
+    new AdmZip(archivePath).extractAllTo(destDir, true);
+  } else {
+    safeExtractTar(archivePath, destDir);
   }
-  const tmpFile = path.join(destDir, filename);
-  fs.writeFileSync(tmpFile, data);
-  try {
-    safeExtractTar(tmpFile, destDir);
-  } finally {
-    fs.rmSync(tmpFile, { force: true });
-  }
+  fs.rmSync(archivePath, { force: true });
 }
 
 // ZIP archives start with "PK" — filename extensions are unreliable for
 // CDN/redirect URLs, so sniff the actual bytes when the name is inconclusive.
-function isZipMagic(buf) {
-  return buf.length >= 2 && buf[0] === 0x50 && buf[1] === 0x4b;
+function isZipMagicFile(filePath) {
+  try {
+    const fd  = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(2);
+    fs.readSync(fd, buf, 0, 2, 0);
+    fs.closeSync(fd);
+    return buf[0] === 0x50 && buf[1] === 0x4b;
+  } catch { return false; }
 }
 
 // ─── map application ──────────────────────────────────────────────────────────

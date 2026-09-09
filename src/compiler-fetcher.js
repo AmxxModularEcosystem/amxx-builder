@@ -7,8 +7,8 @@ const AdmZip = require('adm-zip');
 const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
-const { copyDirContents, safeExtractTar } = require('./fs-utils');
-const { withRetry } = require('./retry');
+const { copyDirContents, safeExtractTar, makeSiblingTmpDir } = require('./fs-utils');
+const { downloadToFile } = require('./download');
 
 const AMXX_DROP = 'https://www.amxmodx.org/amxxdrop/';
 
@@ -31,8 +31,15 @@ async function fetchCompiler(version, options = {}) {
   const binaryName      = platform === 'windows' ? 'amxxpc.exe' : 'amxxpc';
   const binaryPath      = path.join(cacheDir, binaryName);
   const includeDir      = path.join(cacheDir, 'include');
+  const completeFile    = path.join(cacheDir, '.complete');
 
   if (fs.existsSync(binaryPath)) {
+    // Backfill the completion marker on legacy (pre-`.complete`) caches so an
+    // interrupted extraction is detectable going forward; a fresh install only
+    // gains the marker after a successful atomic extract.
+    if (!fs.existsSync(completeFile)) {
+      try { writeFileSyncAtomic(completeFile, resolvedVersion); } catch (_) {}
+    }
     logger.info(`Compiler: amxxpc ${resolvedVersion} (${process.platform}, cached)`);
     return { compilerPath: binaryPath, includeDir: fs.existsSync(includeDir) ? includeDir : null };
   }
@@ -43,15 +50,20 @@ async function fetchCompiler(version, options = {}) {
   logger.step(`Compiler: downloading amxxpc ${resolvedVersion} for ${platform}...`);
   logger.dim(`  ${downloadUrl}`);
 
-  fs.mkdirSync(cacheDir, { recursive: true });
-  const archivePath = path.join(cacheDir, path.basename(downloadUrl));
-
-  await downloadFile(downloadUrl, archivePath);
-  extractWithPrefix(archivePath, cacheDir, {
-    prefix: 'addons/amxmodx/scripting/',
-    onDone: (d) => makeBinaryExecutable(d, platform),
+  await installCompilerCache(cacheDir, {
+    isFinalValid: () => fs.existsSync(binaryPath) && fs.existsSync(completeFile),
+    sentinelName: '.complete',
+    sentinelContent: resolvedVersion,
+    populate: async (stagingDir) => {
+      const archivePath = path.join(stagingDir, path.basename(downloadUrl));
+      await downloadFile(downloadUrl, archivePath);
+      extractWithPrefix(archivePath, stagingDir, {
+        prefix: 'addons/amxmodx/scripting/',
+        onDone: (d) => makeBinaryExecutable(d, platform),
+      });
+      fs.rmSync(archivePath, { force: true });
+    },
   });
-  fs.rmSync(archivePath, { force: true });
 
   if (!fs.existsSync(binaryPath)) {
     throw new Error(
@@ -63,6 +75,52 @@ async function fetchCompiler(version, options = {}) {
 
   logger.success(`Compiler: amxxpc ${resolvedVersion} ready`);
   return { compilerPath: binaryPath, includeDir: fs.existsSync(includeDir) ? includeDir : null };
+}
+
+/**
+ * Atomic cache-write path shared by fetchCompiler (scripting/) and
+ * getAmxmodxFullDir (addons/). Stages the download+extract into a unique
+ * sibling temp dir, then:
+ *   - fresh cache dir → whole-dir rename (a kill can only orphan the temp dir,
+ *     never leave a partial cache),
+ *   - cache dir already populated (the two variants share one dir, or a
+ *     concurrent run won) → merge the staged content and write the completion
+ *     sentinel LAST, so an interrupt mid-merge cannot mark partial files valid.
+ * Cleans up its own temp dir on failure.
+ */
+async function installCompilerCache(cacheDir, { isFinalValid, sentinelName, sentinelContent, populate }) {
+  const tmpDir = makeSiblingTmpDir(cacheDir);
+  try {
+    await populate(tmpDir);
+
+    if (!fs.existsSync(cacheDir)) {
+      writeFileSyncAtomic(path.join(tmpDir, sentinelName), sentinelContent);
+      try {
+        fs.renameSync(tmpDir, cacheDir);
+        return;
+      } catch (_) {
+        // A concurrent run created cacheDir between the check and the rename.
+      }
+    }
+
+    if (isFinalValid()) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+      return;
+    }
+
+    copyDirContents(tmpDir, cacheDir);
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    writeFileSyncAtomic(path.join(cacheDir, sentinelName), sentinelContent);
+  } catch (err) {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    throw err;
+  }
+}
+
+function writeFileSyncAtomic(file, content) {
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, content);
+  fs.renameSync(tmp, file);
 }
 
 /**
@@ -238,6 +296,51 @@ async function resolveAmxmodxVersion(manifest, options = {}) {
   return fetchLatestVersion({ noFetch });
 }
 
+/**
+ * Resolve the AMX Mod X version for an informational stdlib lookup with
+ * graceful offline degradation (noFetch). The logic previously lived inline in
+ * src/commands/serve.js (resolveVersionFromParams + resolveStdlibState) and is
+ * duplicated — without the degradation — in the MCP layer.
+ *
+ * Priority: explicit `version` → manifest `amxmodx.version` (unless the literal
+ * 'latest') → the latest release.
+ *
+ * Offline (noFetch) and latest cannot be resolved:
+ *   - nothing cached                 → { version: null, degraded: false } (graceful empty)
+ *   - a cached compiler exists       → { version: <newest cached>, degraded: true }
+ * Invalid explicit versions and other real failures are returned as `error`
+ * (with code INVALID_AMXMODX_VERSION for malformed explicit versions) rather
+ * than thrown, so each interface can shape them per its convention.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.version]      - explicit version override
+ * @param {object|null} [opts.manifest] - parsed manifest (null when absent/unparseable)
+ * @param {boolean} [opts.noFetch=false] - skip network when resolving "latest"
+ * @returns {Promise<{ version: string|null, degraded: boolean, error: Error|null }>}
+ */
+async function resolveStdlibVersion({ version = null, manifest = null, noFetch = false } = {}) {
+  let degraded = false;
+  let resolved;
+  try {
+    const manifestVersion = manifest && manifest.amxmodx && manifest.amxmodx.version;
+    if (version) {
+      resolved = await resolveAmxmodxVersion(null, { version, noFetch });
+    } else if (manifestVersion && manifestVersion !== 'latest') {
+      resolved = manifestVersion;
+    } else {
+      resolved = await resolveAmxmodxVersion(manifestVersion === 'latest' ? null : manifest, { noFetch });
+    }
+  } catch (err) {
+    if (noFetch && err && err.code === 'LATEST_NOT_CACHED') {
+      const fallback = findNewestCachedCompiler();
+      if (!fallback) return { version: null, degraded: false, error: null };
+      return { version: fallback.version, degraded: true, error: null };
+    }
+    return { version: null, degraded: false, error: err };
+  }
+  return { version: resolved, degraded, error: null };
+}
+
 function getPlatform() {
   return getHostPlatform();
 }
@@ -322,15 +425,17 @@ async function getAmxmodxFullDir(version, platform) {
   logger.step(`Assets: downloading amxmodx ${version} (${platform}) for asset extraction...`);
   logger.dim(`  ${downloadUrl}`);
 
-  fs.mkdirSync(cacheDir, { recursive: true });
-  const archivePath = path.join(cacheDir, path.basename(downloadUrl));
-
-  await downloadFile(downloadUrl, archivePath);
-  extractWithPrefix(archivePath, cacheDir, { prefix: 'addons/', destSubdir: 'addons' });
-  fs.rmSync(archivePath, { force: true });
-  const sentinelTmp = sentinel + '.tmp';
-  fs.writeFileSync(sentinelTmp, '');
-  fs.renameSync(sentinelTmp, sentinel);
+  await installCompilerCache(cacheDir, {
+    isFinalValid: () => fs.existsSync(sentinel),
+    sentinelName: '.addons-extracted',
+    sentinelContent: '',
+    populate: async (stagingDir) => {
+      const archivePath = path.join(stagingDir, path.basename(downloadUrl));
+      await downloadFile(downloadUrl, archivePath);
+      extractWithPrefix(archivePath, stagingDir, { prefix: 'addons/', destSubdir: 'addons' });
+      fs.rmSync(archivePath, { force: true });
+    },
+  });
 
   logger.success(`Assets: amxmodx ${version} (${platform}) ready`);
   return cacheDir;
@@ -383,25 +488,9 @@ function extractWithPrefix(archivePath, destDir, opts) {
 
 async function downloadFile(url, dest) {
   const filename = path.basename(url);
-  const bar = require('./progress').createBar(100, `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`);
-
-  const response = await withRetry(
-    () => axios.get(url, {
-      responseType: 'arraybuffer',
-      maxRedirects: 5,
-      timeout: 600000, // large archives — allow slow links, still bound hangs
-      onDownloadProgress: (e) => {
-        if (bar && e.total) {
-          bar.update(Math.round(e.loaded / e.total * 100));
-        }
-      },
-    }),
-    { label: filename }
-  );
-  if (bar) bar.stop();
-  const part = dest + '.part';
-  fs.writeFileSync(part, Buffer.from(response.data));
-  fs.renameSync(part, dest);
+  return downloadToFile(url, dest, {
+    progressLabel: `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`,
+  });
 }
 
 function makeBinaryExecutable(destDir, platform) {
@@ -423,4 +512,4 @@ function findDir(root, name) {
   return null;
 }
 
-module.exports = { fetchCompiler, getCompilerInfo, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion, findNewestCachedCompiler, resolveAmxmodxVersion };
+module.exports = { fetchCompiler, getCompilerInfo, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion, findNewestCachedCompiler, resolveAmxmodxVersion, resolveStdlibVersion };

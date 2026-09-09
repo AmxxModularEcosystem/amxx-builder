@@ -10,6 +10,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
+const fs   = require('fs');
+const os   = require('os');
+const path = require('path');
+
 const { createServeServer } = require('../src/commands/serve');
 
 const EXPECTED_METHODS = [
@@ -73,4 +77,67 @@ test('serve.ping returns ok with process info (no network)', async () => {
   assert.equal(typeof result.pid, 'number');
   assert.equal(typeof result.version, 'string');
   assert.equal(typeof result.node, 'string');
+});
+
+test('build.start with a missing manifest does not wedge the server (regression B4)', async () => {
+  const server = createServeServer();
+  const buildStart = server._requests.get('build.start');
+  const missingManifest = path.join(os.tmpdir(), `amxb-serve-no-manifest-${Date.now()}.yml`);
+
+  const first = await buildStart({ manifest: missingManifest }).catch((e) => e);
+  assert.ok(first instanceof Error, 'first call rejects (manifest not found)');
+  assert.ok(!/Build already running/.test(first.message), 'first failure is the manifest error');
+  assert.ok(!/already running/i.test(first.message));
+
+  const second = await buildStart({ manifest: missingManifest }).catch((e) => e);
+  assert.ok(second instanceof Error, 'second call also rejects');
+  assert.ok(!/Build already running/.test(second.message),
+    'second call must NOT die with "Build already running" (activeBuild was released)');
+});
+
+// ─── include.resolve: dep include-dir collection over core (no hang) ────────
+
+function makeTmpDir(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function writeFile(dir, rel, content = '') {
+  const p = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, content);
+  return p;
+}
+
+const ORIG_CACHE_ENV = process.env.AMXX_BUILDER_CACHE;
+
+test('include.resolve: github.ssh manifest + unresolvable dep + noFetch → dep error captured, no hang', async (t) => {
+  const cache = makeTmpDir('amxb-serve-deperr-');
+  process.env.AMXX_BUILDER_CACHE = cache;
+  t.after(() => {
+    fs.rmSync(cache, { recursive: true, force: true });
+    if (ORIG_CACHE_ENV === undefined) delete process.env.AMXX_BUILDER_CACHE;
+    else process.env.AMXX_BUILDER_CACHE = ORIG_CACHE_ENV;
+  });
+
+  const project = makeTmpDir('amxb-serve-proj-');
+  const manifest = writeFile(project, 'amxbuild.yml', [
+    'name: T',
+    'github:',
+    '  ssh: true',
+    'deps:',
+    '  - nowhere/missing@abc9999',
+    '',
+  ].join('\n'));
+
+  const server = createServeServer();
+  const result = await server._requests.get('include.resolve')({
+    manifest,
+    directive: '#include <amxmodx.inc>',
+    noFetch: true,
+  });
+
+  assert.equal(result.found, false);
+  assert.ok(Array.isArray(result.errors) && result.errors.length === 1,
+    'unresolvable dep is reported in errors, not thrown');
+  assert.match(result.errors[0], /^nowhere\/missing@abc9999: /);
 });

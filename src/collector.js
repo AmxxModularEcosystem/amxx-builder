@@ -2,7 +2,7 @@ const fs   = require('fs');
 const path = require('path');
 const glob = require('fast-glob');
 const logger = require('./logger');
-const { repoKey } = require('./deps-resolver');
+const { repoKey, normalizeRepo } = require('./deps-resolver');
 
 /**
  * Copies everything from each repo's amxmodx_dir into build/amxmodx/,
@@ -25,9 +25,17 @@ async function collectAll(manifest, repoLocalDirs, buildDir) {
   fs.mkdirSync(amxmodxBuildDir, { recursive: true });
 
   const origins = new Map(); // rel path → repo label (conflict tracking)
+  const seenRepos = new Set(); // case-insensitive repo identity (dedupe)
 
   // Copy from each remote repo
   for (const repoConfig of manifest.repos) {
+    const repoIdentity = normalizeRepo(repoConfig);
+    if (seenRepos.has(repoIdentity)) {
+      logger.dim(`  ${repoConfig.repo}: duplicate entry, skipping`);
+      continue;
+    }
+    seenRepos.add(repoIdentity);
+
     const repoDir = repoLocalDirs[repoKey(repoConfig)];
     const srcDir  = path.join(repoDir, repoConfig.amxmodx_dir);
 

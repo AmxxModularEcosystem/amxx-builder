@@ -247,6 +247,8 @@ AMXB_DEPLOY_RCON_CMD=amxx load {plugin}
 deploy:
   path: /home/user/hlds/cstrike    # корень сервера (где лежат addons/, models/)
   amxmodx_path: addons/amxmodx     # default: addons/amxmodx
+  assets_path: ""                  # default: "" = корень deploy.path (assets/models, assets/sound → models/, sound/)
+                                   # Задайте, например, "{name}", чтобы зеркалировать layout архива
   watch_debounce_ms: 500           # мс стабильности файла перед ребилдом (default: 500)
   exclude:                         # пути от deploy.path, которые не перезаписываются
     - addons/amxmodx/configs/      # сохранить конфиги сервера
@@ -257,6 +259,13 @@ deploy:
     password: ${RCON_PASSWORD}
     command: "amxx load {plugin}"  # {plugin} = имя без .amxx; пусто = не слать
 ```
+
+> **Деплой аддитивен.** `amxb deploy` только копирует файлы из `build/` в `deploy.path` и
+> никогда не удаляет на сервере то, чего нет в источнике — на сервере могут жить и другие
+> плагины/файлы, не управляемые этим манифестом. Удаление с сервера происходит только в
+> watch-режиме для файлов, удалённых локально во время слежения. Если нужно «вычистить»
+> осиротевшие файлы (например, после переименования плагина) — удалите их вручную или
+> очистите каталог перед `amxb deploy`.
 
 `amxb watch` отслеживает изменения в `amxmodx/` и `assets/`:
 

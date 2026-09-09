@@ -16,7 +16,7 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
-const { resolveDeps, readDepsListFile } = require('../src/deps-resolver');
+const { resolveDeps, readDepsListFile, resolveIncludePath, findDepIncludeDir, DEP_INCLUDE_CANDIDATES, fetchDepIncludeDir } = require('../src/deps-resolver');
 
 function makeTmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -74,6 +74,54 @@ test('readDepsListFile: invalid line throws', () => {
   const dir = makeTmpDir('amxb-baddeps-');
   fs.writeFileSync(path.join(dir, 'DEPS_LIST'), 'org/pkg@v1\nnot-a-valid-dep-line\n', 'utf8');
   assert.throws(() => readDepsListFile(dir, 'MyPlugin'), /Invalid dep entry/);
+});
+
+// ─── findDepIncludeDir / DEP_INCLUDE_CANDIDATES (single source) ─────────────
+
+test('findDepIncludeDir: shares one candidate list with resolveIncludePath and include-tree', () => {
+  assert.ok(Array.isArray(DEP_INCLUDE_CANDIDATES));
+  assert.deepEqual(DEP_INCLUDE_CANDIDATES, ['scripting/include', 'amxmodx/scripting/include', 'include', '.']);
+  // include-tree.fetchDepIncludeDir is the same canonical function — no
+  // duplicated implementation (and therefore no duplicated candidate list).
+  assert.equal(
+    require('../src/include-tree').fetchDepIncludeDir,
+    fetchDepIncludeDir,
+    'include-tree must re-export deps-resolver.fetchDepIncludeDir'
+  );
+});
+
+test('findDepIncludeDir: walks the canonical candidates in order, falls back to repo root', () => {
+  const dir = makeTmpDir('amxb-fdi-');
+  fs.mkdirSync(path.join(dir, 'amxmodx', 'scripting', 'include'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'include'), { recursive: true });
+
+  assert.equal(findDepIncludeDir(dir, null), path.join(dir, 'amxmodx', 'scripting', 'include'));
+  // Same pick through the exported resolveIncludePath entry point.
+  assert.equal(resolveIncludePath(dir, null, 'Repo'), path.join(dir, 'amxmodx', 'scripting', 'include'));
+
+  const empty = makeTmpDir('amxb-fdi-empty-');
+  assert.equal(findDepIncludeDir(empty, null), empty);
+  assert.equal(resolveIncludePath(empty, null, 'Repo'), empty);
+});
+
+test('throwOnMissing flips explicit include_path policy', () => {
+  const dir = makeTmpDir('amxb-fdi-throw-');
+  fs.mkdirSync(path.join(dir, 'inc'), { recursive: true });
+
+  // throwOnMissing: true → the build-pipeline policy (resolveIncludePath).
+  assert.throws(() => resolveIncludePath(dir, 'nope/inc', 'Repo'), /Include path "nope\/inc" not found in Repo/);
+  assert.equal(resolveIncludePath(dir, 'inc', 'Repo'), path.join(dir, 'inc'));
+
+  // throwOnMissing: false (default) → the interface policy: silent repo-root fallback.
+  assert.equal(findDepIncludeDir(dir, 'nope/inc'), dir);
+  assert.equal(findDepIncludeDir(dir, 'inc'), path.join(dir, 'inc'));
+});
+
+test('findDepIncludeDir: explicit path with throwOnMissing=false is found before candidates', () => {
+  const dir = makeTmpDir('amxb-fdi-exp-');
+  fs.mkdirSync(path.join(dir, 'custom', 'include'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'scripting', 'include'), { recursive: true });
+  assert.equal(findDepIncludeDir(dir, 'custom/include'), path.join(dir, 'custom', 'include'));
 });
 
 // ─── resolveDeps (early-exit paths only, no network) ─────────────────────────

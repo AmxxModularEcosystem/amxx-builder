@@ -22,7 +22,7 @@ const manifest = require('../src/manifest');
 const { parseDepsLines, parseDepString, parseDepObject } = manifest;
 const { resolveManifestPath } = require('../src/manifest-path');
 const { formatBytes } = require('../src/format');
-const { normalize, repoKey } = require('../src/deps-resolver');
+const { normalize, repoKey, collectDepIncludeDirs } = require('../src/deps-resolver');
 const { resolveRefIfLatest } = require('../src/repo-fetcher');
 const { findCaseInsensitive } = require('../src/include-tree');
 const { buildIncludeArgs, buildDefineArgs } = require('../src/compile-utils');
@@ -443,8 +443,10 @@ test('buildIncludeArgs: non-existent local/collected dirs are skipped', () => {
 
 // ─── buildDefineArgs ─────────────────────────────────────────────────────────
 
-test('buildDefineArgs: maps defines to -D flags', () => {
-  assert.deepEqual(buildDefineArgs(['DEBUG', 'X']), ['-DDEBUG', '-DX']);
+test('buildDefineArgs: maps value-less flags to NAME=1, keeps NAME=VALUE', () => {
+  assert.deepEqual(buildDefineArgs(['DEBUG', 'X']), ['DEBUG=1', 'X=1']);
+  assert.deepEqual(buildDefineArgs(['VERSION=2', 'FLAG']), ['VERSION=2', 'FLAG=1']);
+  assert.deepEqual(buildDefineArgs(['EMPTY=']), ['EMPTY=']);
 });
 
 test('buildDefineArgs: empty/undefined input → empty array', () => {
@@ -555,6 +557,71 @@ test('loadEnv: loads .env next to the manifest into process.env', () => {
     else process.env.AMXB_TEST_VAR = prev;
     delete process.env.AMXB_TEST_NUM;
   }
+});
+
+// ─── collectDepIncludeDirs ────────────────────────────────────────────────────
+
+// Seed a fetch cache dir for a pinned-SHA git dep so fetchRepo resolves it
+// offline: <cache>/repos/<owner>__<repo>__<ref> with a scripting/include dir
+// and the .extracted sentinel (non-git cache validity marker).
+function seedRepoCache(cache, repo, ref) {
+  const key = `${repo.toLowerCase().replace('/', '__')}__${ref}`;
+  const dir = path.join(cache, 'repos', key);
+  fs.mkdirSync(path.join(dir, 'scripting', 'include'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'scripting', 'include', 'api.inc'), '');
+  fs.writeFileSync(path.join(dir, '.extracted'), ref);
+  return path.join(dir, 'scripting', 'include');
+}
+
+function useTempCache(t, prefix) {
+  const dir = makeTmpDir(prefix);
+  const prev = process.env.AMXX_BUILDER_CACHE;
+  process.env.AMXX_BUILDER_CACHE = dir;
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (prev === undefined) delete process.env.AMXX_BUILDER_CACHE;
+    else process.env.AMXX_BUILDER_CACHE = prev;
+  });
+  return dir;
+}
+
+function gitDep(repo, ref) {
+  return { repo, ref, include_path: null, source: 'git', asset: null };
+}
+
+test('collectDepIncludeDirs: null / dep-less manifest → empty dirs and errors', async (t) => {
+  useTempCache(t, 'amxb-cdi-0-');
+  assert.deepEqual(await collectDepIncludeDirs(null, { noFetch: true }), { dirs: [], errors: [] });
+  assert.deepEqual(await collectDepIncludeDirs({ globalDeps: [] }, { noFetch: true }), { dirs: [], errors: [] });
+});
+
+test('collectDepIncludeDirs: dirs returned in manifest.globalDeps order', async (t) => {
+  const cache = useTempCache(t, 'amxb-cdi-a-');
+  const incOne = seedRepoCache(cache, 'Org/One', 'abc1111');
+  const incTwo = seedRepoCache(cache, 'Org/Two', 'abc2222');
+  const manifest = {
+    globalDeps: [gitDep('Org/One', 'abc1111'), gitDep('Org/Two', 'abc2222')],
+    github: { ssh: false },
+  };
+  const { dirs, errors } = await collectDepIncludeDirs(manifest, { noFetch: true });
+  assert.equal(dirs[0], incOne);
+  assert.equal(dirs[1], incTwo);
+  assert.deepEqual(errors, [null, null]);
+});
+
+test('collectDepIncludeDirs: a failing dep is recorded, not thrown, and later deps still resolve', async (t) => {
+  const cache = useTempCache(t, 'amxb-cdi-b-');
+  const incTwo = seedRepoCache(cache, 'Org/Two', 'abc2222');
+  const manifest = {
+    globalDeps: [gitDep('nowhere/missing', 'abc9999'), gitDep('Org/Two', 'abc2222')],
+    github: { ssh: false },
+  };
+  const { dirs, errors } = await collectDepIncludeDirs(manifest, { noFetch: true });
+  assert.equal(dirs[0], null);
+  assert.ok(errors[0], 'failing dep must produce an error entry');
+  assert.match(errors[0], /nowhere\/missing/);
+  assert.equal(dirs[1], incTwo);
+  assert.equal(errors[1], null);
 });
 
 // ─── single-source-of-truth locks ────────────────────────────────────────────

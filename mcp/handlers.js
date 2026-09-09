@@ -6,9 +6,9 @@ const path = require('path');
 const glob = require('fast-glob');
 
 const { resolveRefIfLatest }   = require('../src/repo-fetcher');
-const { fetchDepRoot }          = require('../src/deps-resolver');
+const { fetchDepRoot, collectDepIncludeDirs } = require('../src/deps-resolver');
 const { collectDepDocs, DOCS_CONVENTIONS } = require('../src/dep-docs');
-const { fetchCompiler, resolveAmxmodxVersion: resolveAmxmodxVersionCore } = require('../src/compiler-fetcher');
+const { getCompilerInfo, resolveStdlibVersion } = require('../src/compiler-fetcher');
 const { resolveManifest, resolveGithubToken, parseDepString, parseDepObject } = require('../src/manifest');
 const { parseManifest }         = require('../src/manifest');
 const { validateManifestFile }  = require('../src/validate');
@@ -331,75 +331,96 @@ async function handleBuildIncludeTree(args, token, noFetch) {
 // ─── AMXX standard include helpers ────────────────────────────────────────────
 
 /**
- * Resolve the AMX Mod X version to use.
- * Priority: explicit `version` arg → manifest `amxmodx.version` → latest.
- * The priority logic lives in core (compiler-fetcher.resolveAmxmodxVersion);
- * this wrapper only does arg extraction + manifest discovery/parse, keeping
- * the current error-fallback behavior (unparseable manifest → latest).
+ * Resolve the AMX Mod X stdlib state for the informational stdlib tools.
+ * Version priority (explicit `version` arg → manifest `amxmodx.version` →
+ * latest) AND the graceful offline degradation live in core
+ * (compiler-fetcher.resolveStdlibVersion); this wrapper only does arg/manifest
+ * discovery and shapes the compiler info. Offline no_fetch stdlib calls get the
+ * same graceful empty/degraded behavior as the serve interface: nothing cached
+ * → { version: null } (no throw), a cached compiler → newest cached +
+ * degraded: true.
  */
-async function resolveAmxmodxVersion(args, noFetch) {
-  if (args?.version) return resolveAmxmodxVersionCore(null, { version: args.version, noFetch });
-
-  const manifestPathStr = args?.manifest;
-  const manifestPath = resolveManifestPath(manifestPathStr || undefined).path;
+async function resolveStdlibState(args, noFetch) {
   let manifest = null;
-  if (fs.existsSync(manifestPath)) {
-    try {
-      manifest = parseManifest(manifestPath);
-    } catch (err) {
-      logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
+  if (!args?.version) {
+    const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
+    if (fs.existsSync(manifestPath)) {
+      try {
+        manifest = parseManifest(manifestPath);
+      } catch (err) {
+        logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
+      }
     }
   }
-
-  return resolveAmxmodxVersionCore(manifest, { noFetch });
+  const { version, degraded, error } = await resolveStdlibVersion({
+    version: args?.version,
+    manifest,
+    noFetch,
+  });
+  if (error) throw error;
+  if (version === null) {
+    return { version: null, degraded: false, compilerPath: null, includeDir: null, cached: false };
+  }
+  const info = await getCompilerInfo(version, { noFetch });
+  return { version: info.version, degraded, compilerPath: info.compilerPath, includeDir: info.includeDir, cached: info.cached };
 }
 
 async function handleListAmxmodxIncs(args, token, noFetch) {
-  const version = await resolveAmxmodxVersion(args, noFetch);
+  const state = await resolveStdlibState(args, noFetch);
   const pattern = args?.pattern || '*.inc';
 
-  const { includeDir } = await fetchCompiler(version);
-  if (!includeDir) {
+  if (!state.includeDir) {
+    if (state.version === null) {
+      return textResult(
+        'No AMX Mod X compiler is cached and no-fetch is set.\n' +
+        '  → Run once without no_fetch (or pass an explicit version) to populate the cache.'
+      );
+    }
     return textResult(
-      `No standard include directory found for AMX Mod X ${version}.`
+      `No standard include directory found for AMX Mod X ${state.version}.`
     );
   }
 
-  const files = await glob(pattern, { cwd: includeDir, dot: false });
+  const files = await glob(pattern, { cwd: state.includeDir, dot: false });
   files.sort();
 
   if (files.length === 0) {
     return textResult(
-      `No .inc files matching "${pattern}" in AMX Mod X ${version} includes.`
+      `No .inc files matching "${pattern}" in AMX Mod X ${state.version} includes.`
     );
   }
 
   const listing = files.map((f) => `  ${f}`).join('\n');
   return textResult(
-    applyOutputLimit(`AMX Mod X ${version} — ${files.length} standard include file(s):\n\n${listing}`, args)
+    applyOutputLimit(`AMX Mod X ${state.version} — ${files.length} standard include file(s):\n\n${listing}`, args)
   );
 }
 
 async function handleGetAmxmodxInclude(args, token, noFetch) {
-  const version = await resolveAmxmodxVersion(args, noFetch);
+  const state = await resolveStdlibState(args, noFetch);
   const pattern = args?.file || args?.pattern || '*.inc';
   const grep    = args?.grep;
   const before  = args?.before || 0;
   const after   = args?.after || 0;
 
-  const { includeDir } = await fetchCompiler(version);
-  if (!includeDir) {
+  if (!state.includeDir) {
+    if (state.version === null) {
+      return textResult(
+        'No AMX Mod X compiler is cached and no-fetch is set.\n' +
+        '  → Run once without no_fetch (or pass an explicit version) to populate the cache.'
+      );
+    }
     return textResult(
-      `No standard include directory found for AMX Mod X ${version}.`
+      `No standard include directory found for AMX Mod X ${state.version}.`
     );
   }
 
-  const files = await glob(pattern, { cwd: includeDir, dot: false });
+  const files = await glob(pattern, { cwd: state.includeDir, dot: false });
   files.sort();
 
   if (files.length === 0) {
     return textResult(
-      `No .inc files matching "${pattern}" in AMX Mod X ${version} includes.`
+      `No .inc files matching "${pattern}" in AMX Mod X ${state.version} includes.`
     );
   }
 
@@ -407,7 +428,7 @@ async function handleGetAmxmodxInclude(args, token, noFetch) {
   const skipped  = files.length - shown.length;
   const contents = shown
     .map((rel) => {
-      const raw = readFileSafe(path.join(includeDir, rel));
+      const raw = readFileSafe(path.join(state.includeDir, rel));
       const processed = grep ? grepContent(raw, grep, before, after) : raw;
       return `──── ${rel} ────\n${processed}${processed.endsWith('\n') ? '' : '\n'}`;
     })
@@ -415,7 +436,7 @@ async function handleGetAmxmodxInclude(args, token, noFetch) {
     + (skipped > 0 ? `\n… [${skipped} more file(s); pass full_output=true to list them]` : '');
 
   return textResult(
-    applyOutputLimit(`AMX Mod X ${version} — ${files.length} standard include file(s):\n\n${contents}`, args)
+    applyOutputLimit(`AMX Mod X ${state.version} — ${files.length} standard include file(s):\n\n${contents}`, args)
   );
 }
 
@@ -447,25 +468,27 @@ async function handleResolveInclude(args, token, noFetch) {
   const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
   const depErrors = [];
   if (fs.existsSync(manifestPath)) {
+    let manifest = null;
     try {
-      const manifest = parseManifest(manifestPath);
-      for (const dep of manifest.globalDeps) {
-        try {
-          const depDir = await fetchDepIncludeDir(dep, resolveGithubToken(manifest, dep.repo), noFetch);
-          searchPaths.push({ path: depDir, label: `${dep.repo}@${dep.ref}` });
-        } catch (err) {
-          depErrors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
-        }
-      }
+      manifest = parseManifest(manifestPath);
     } catch (err) {
       depErrors.push(`manifest ${manifestPath}: ${err.message}`);
     }
+    if (manifest) {
+      const { dirs, errors: depErrs } = await collectDepIncludeDirs(manifest, {
+        noFetch,
+        ssh: manifest.github.ssh,
+      });
+      manifest.globalDeps.forEach((dep, i) => {
+        if (dirs[i]) searchPaths.push({ path: dirs[i], label: `${dep.repo}@${dep.ref}` });
+        else if (depErrs[i]) depErrors.push(`${dep.repo}@${dep.ref}: ${depErrs[i]}`);
+      });
+    }
   }
 
-  const version = await resolveAmxmodxVersion(args, noFetch);
-  const { includeDir } = await fetchCompiler(version);
-  if (includeDir) {
-    searchPaths.push({ path: includeDir, label: `AMXX stdlib ${version}` });
+  const state = await resolveStdlibState(args, noFetch);
+  if (state.includeDir) {
+    searchPaths.push({ path: state.includeDir, label: `AMXX stdlib ${state.version}` });
   }
 
   const result = searchIncludeFile(searchPaths, filename);
@@ -753,24 +776,35 @@ async function handleCompileSma(args, token, noFetch) {
   const smaPath = path.resolve(args.sma_file);
   if (!fs.existsSync(smaPath)) return errorResult(`File not found: ${smaPath}`);
 
-  const version = await resolveAmxmodxVersion(args, noFetch);
-  const { compilerPath, includeDir } = await fetchCompiler(version);
+  const state = await resolveStdlibState(args, noFetch);
+  if (!state.compilerPath) {
+    return errorResult(
+      'No amxxpc compiler is available (nothing cached and no-fetch is set).\n' +
+      '  → Run once without no_fetch (or pass an explicit version) to populate the cache.'
+    );
+  }
+  const version = state.version;
+  const { compilerPath, includeDir } = state;
 
   const depDirs = [];
   const depErrors = [];
   const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
   if (fs.existsSync(manifestPath)) {
+    let manifest = null;
     try {
-      const manifest = parseManifest(manifestPath);
-      for (const dep of manifest.globalDeps) {
-        try {
-          depDirs.push(await fetchDepIncludeDir(dep, resolveGithubToken(manifest, dep.repo), noFetch));
-        } catch (err) {
-          depErrors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
-        }
-      }
+      manifest = parseManifest(manifestPath);
     } catch (err) {
       depErrors.push(`manifest ${manifestPath}: ${err.message}`);
+    }
+    if (manifest) {
+      const { dirs, errors: depErrs } = await collectDepIncludeDirs(manifest, {
+        noFetch,
+        ssh: manifest.github.ssh,
+      });
+      manifest.globalDeps.forEach((dep, i) => {
+        if (dirs[i]) depDirs.push(dirs[i]);
+        else if (depErrs[i]) depErrors.push(`${dep.repo}@${dep.ref}: ${depErrs[i]}`);
+      });
     }
   }
 
@@ -892,23 +926,36 @@ async function handleSearchSymbol(args, token, noFetch) {
   if (scope === 'all' || scope === 'stdlib') {
     jobs.push((async () => {
       try {
-        const version = await resolveAmxmodxVersion(args, noFetch);
-        const { includeDir } = await fetchCompiler(version);
-        if (includeDir) await addSource(`stdlib ${version}`, [includeDir], '**/*.inc');
+        const state = await resolveStdlibState(args, noFetch);
+        if (state.includeDir) await addSource(`stdlib ${state.version}`, [state.includeDir], '**/*.inc');
       } catch (err) {
         errors.push(`stdlib: ${err.message}`);
       }
     })());
   }
 
-  const deps = manifest?.globalDeps?.length
-    ? manifest.globalDeps
-    : (args?.deps || []).map(parseDep);
-  if ((scope === 'all' || scope === 'deps') && deps.length) {
-    for (const dep of deps) {
+  // Manifest deps win over args.deps (parsed eagerly, exactly when a manifest
+  // is not supplying them, as before). Manifest deps are collected via the
+  // canonical core helper (sequential, ssh-aware); user deps stay individual
+  // parallel jobs.
+  const manifestDeps = manifest?.globalDeps?.length ? manifest.globalDeps : [];
+  const userDeps = manifest?.globalDeps?.length ? [] : (args?.deps || []).map(parseDep);
+  if (scope === 'all' || scope === 'deps') {
+    const ssh = manifest?.github?.ssh === true;
+    if (manifestDeps.length) {
+      jobs.push((async () => {
+        const { dirs, errors: depErrs } = await collectDepIncludeDirs(manifest, { noFetch, ssh });
+        for (let i = 0; i < manifestDeps.length; i++) {
+          const dep = manifestDeps[i];
+          if (dirs[i]) await addSource(`${dep.repo}@${dep.ref}`, [dirs[i]], '**/*.inc');
+          else errors.push(`${dep.repo}@${dep.ref}: ${depErrs[i]}`);
+        }
+      })());
+    }
+    for (const dep of userDeps) {
       jobs.push((async () => {
         try {
-          const dir = await fetchDepIncludeDir(dep, tokenFor(dep.repo), noFetch);
+          const dir = await fetchDepIncludeDir(dep, tokenFor(dep.repo), noFetch, ssh);
           await addSource(`${dep.repo}@${dep.ref}`, [dir], '**/*.inc');
         } catch (err) {
           errors.push(`${dep.repo}@${dep.ref}: ${err.message}`);

@@ -97,17 +97,40 @@ function readDepsListFile(repoDir, repoName) {
   return deps;
 }
 
-function resolveIncludePath(repoDir, explicitPath, repoName) {
+// git-dep include-dir candidates — release archives keep their own list in
+// release-fetcher (archive layout first); do not merge them.
+const DEP_INCLUDE_CANDIDATES = ['scripting/include', 'amxmodx/scripting/include', 'include', '.'];
+
+/**
+ * Locate the include directory of a fetched git dep.
+ * Canonical single source shared by deps-resolver.resolveIncludePath (build
+ * pipeline: throws on a missing explicit include_path) and
+ * include-tree.fetchDepIncludeDir (interfaces: silently falls back to the repo
+ * root). `throwOnMissing` flips between those two policies.
+ *
+ * @param {string} repoDir - local cache dir of the dep repo
+ * @param {string|null} explicitPath - dep.include_path or null (auto-search)
+ * @param {object} [opts]
+ * @param {boolean} [opts.throwOnMissing=false]
+ * @param {string} [opts.repoName] - repo name for the throw message
+ * @returns {string} include dir (repo root when nothing matches)
+ */
+function findDepIncludeDir(repoDir, explicitPath, { throwOnMissing = false, repoName } = {}) {
   if (explicitPath) {
     const full = path.join(repoDir, explicitPath);
-    if (!fs.existsSync(full)) throw new Error(`Include path "${explicitPath}" not found in ${repoName}`);
-    return full;
+    if (fs.existsSync(full)) return full;
+    if (throwOnMissing) throw new Error(`Include path "${explicitPath}" not found in ${repoName}`);
+    return repoDir;
   }
-  for (const candidate of ['scripting/include', 'amxmodx/scripting/include', 'include', '.']) {
+  for (const candidate of DEP_INCLUDE_CANDIDATES) {
     const full = path.join(repoDir, candidate);
     if (fs.existsSync(full)) return full;
   }
   return repoDir;
+}
+
+function resolveIncludePath(repoDir, explicitPath, repoName) {
+  return findDepIncludeDir(repoDir, explicitPath, { throwOnMissing: true, repoName });
 }
 
 /**
@@ -149,6 +172,75 @@ async function fetchDepRoot(dep, { token, noFetch, ssh = false } = {}) {
   return { rootDir: repoDir, label: `${dep.repo}@${dep.ref || 'default branch'}` };
 }
 
+/**
+ * Fetch a dependency's include directory (release/fungun/git), using the
+ * fetch cache where possible.
+ * Canonical single-source-of-truth shared by the build pipeline (include-tree),
+ * the CLI, the serve interface and the MCP layer.
+ *
+ * Explicit-include_path semantics: silently falls back to the repo root when
+ * the given path does not exist (the interface callers rely on this).
+ *
+ * @param {object} dep - { repo, ref, include_path, source, asset }
+ * @param {string|null} token - GitHub PAT (per-owner resolved by the caller)
+ * @param {boolean} [noFetch=false] - only use cache, skip network
+ * @param {boolean} [ssh=false] - clone via SSH
+ * @returns {Promise<string>} directory to use as the include dir
+ */
+async function fetchDepIncludeDir(dep, token, noFetch, ssh = false) {
+  if (dep.source === 'release') {
+    return fetchReleaseDep(
+      { repo: dep.repo, ref: dep.ref, include_path: dep.include_path, asset: dep.asset },
+      token,
+      noFetch
+    );
+  }
+
+  if (dep.source === 'fungun') {
+    return fetchFungunDep(dep, noFetch);
+  }
+
+  const resolvedRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
+  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, ssh);
+  return findDepIncludeDir(repoDir, dep.include_path);
+}
+
+/**
+ * Sequentially fetch the include dir of every manifest.globalDeps entry.
+ * Canonical helper for the "collect dep include dirs" loops that the serve and
+ * MCP interfaces previously copy-pasted. A failing dep never throws — it is
+ * recorded in `errors` and iteration continues.
+ *
+ * Both returned arrays are index-parallel with manifest.globalDeps:
+ * `dirs[i]` is dep i's include dir (or null on failure) and `errors[i]` is the
+ * dep's error message (or null on success). Interface layers prefix their own
+ * dep label (depLabel / repo@ref) onto the raw messages, preserving each
+ * interface's existing formatting.
+ *
+ * GitHub tokens are resolved per-owner via resolveGithubToken(manifest, repo);
+ * ssh must be passed explicitly by the caller (manifest.github.ssh).
+ *
+ * @param {object|null} manifest - parsed manifest (null → no deps)
+ * @param {object} [opts]
+ * @param {boolean} [opts.noFetch=false] - only use cache, skip network
+ * @param {boolean} [opts.ssh=false] - clone via SSH
+ * @returns {Promise<{ dirs: (string|null)[], errors: (string|null)[] }>}
+ */
+async function collectDepIncludeDirs(manifest, { noFetch = false, ssh = false } = {}) {
+  const deps = (manifest && manifest.globalDeps) || [];
+  const dirs = new Array(deps.length).fill(null);
+  const errors = new Array(deps.length).fill(null);
+  for (let i = 0; i < deps.length; i++) {
+    const dep = deps[i];
+    try {
+      dirs[i] = await fetchDepIncludeDir(dep, resolveGithubToken(manifest, dep.repo), noFetch, ssh);
+    } catch (err) {
+      errors[i] = err && err.message ? err.message : String(err);
+    }
+  }
+  return { dirs, errors };
+}
+
 // Single source of truth for repo-name normalization (used for cache keys
 // and dedup by core modules that previously inlined repo.toLowerCase()).
 function normalize(repo) { return repo.toLowerCase(); }
@@ -164,6 +256,13 @@ function depLabel(dep) {
 function repoKey(repoConfig) {
   return `${repoConfig.repo}@${repoConfig._resolvedRef || repoConfig.ref || 'HEAD'}`;
 }
+
+// Case-insensitive identity of a manifest repo entry — two spellings of the
+// same repo (Org/Plugin vs org/plugin) are the same source.
+function normalizeRepo(repoConfig) {
+  return `${normalize(repoConfig.repo)}@${repoConfig._resolvedRef || repoConfig.ref || 'HEAD'}`;
+}
+
 function shortName(repo)  { return repo.split('/').pop(); }
 
 function countIncFiles(dir) {
@@ -175,4 +274,7 @@ function countIncFiles(dir) {
   return n;
 }
 
-module.exports = { resolveDeps, readDepsListFile, normalize, repoKey, fetchDepRoot, depLabel };
+module.exports = {
+  resolveDeps, readDepsListFile, resolveIncludePath, normalize, normalizeRepo, repoKey, fetchDepRoot, depLabel,
+  DEP_INCLUDE_CANDIDATES, findDepIncludeDir, fetchDepIncludeDir, collectDepIncludeDirs,
+};

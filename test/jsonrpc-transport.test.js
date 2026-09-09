@@ -126,13 +126,20 @@ test('JsonRpcServer: notification without a registered handler is ignored silent
   assert.equal(errors.length, 0);
 });
 
-test('JsonRpcServer: message without a method is ignored', async () => {
+test('JsonRpcServer: structurally invalid messages get -32600 Invalid Request', async () => {
   const { server, results, errors } = makeHarness();
   await server._handleMessage({ jsonrpc: '2.0', id: 9 });
   await server._handleMessage(null);
   await server._handleMessage('not an object');
   assert.equal(results.length, 0);
-  assert.equal(errors.length, 0);
+  assert.equal(errors.length, 3);
+  for (const e of errors) {
+    assert.equal(e.code, -32600);
+    assert.match(e.message, /Invalid Request/);
+  }
+  assert.equal(errors[0].id, 9, 'id preserved when detectable');
+  assert.equal(errors[1].id, null, 'null id when undetectable');
+  assert.equal(errors[2].id, null);
 });
 
 test('JsonRpcServer: notification handler errors are swallowed (no reply, no crash)', async () => {
@@ -147,4 +154,47 @@ test('JsonRpcServer: handler registration is chainable', () => {
   const server = new JsonRpcServer();
   const ret = server.onRequest('a', () => {}).onNotification('b', () => {});
   assert.equal(ret, server);
+});
+
+test('JsonRpcServer: batch request returns one response array', async () => {
+  const { server, results, errors } = makeHarness();
+  const written = [];
+  const origWrite = process.stdout.write;
+  process.stdout.write = (chunk) => { written.push(chunk); return true; };
+  try {
+    server.onRequest('echo', (p) => p?.v);
+    await server._handleMessage([
+      { jsonrpc: '2.0', id: 1, method: 'echo', params: { v: 'a' } },
+      { jsonrpc: '2.0', id: 2, method: 'echo', params: { v: 'b' } },
+      { jsonrpc: '2.0', method: 'ping-note' }, // notification → no response
+      { jsonrpc: '2.0', id: 'x' },             // invalid element → -32600 inside batch
+    ]);
+    assert.equal(results.length, 0, 'batch responses go to stdout, not sendResult');
+    assert.equal(errors.length, 0);
+    const parsed = JSON.parse(written[0]);
+    assert.ok(Array.isArray(parsed), 'batch → single response array line');
+    assert.equal(parsed.length, 3);
+    assert.equal(parsed[0].result, 'a');
+    assert.equal(parsed[1].result, 'b');
+    assert.equal(parsed[2].error.code, -32600);
+  } finally {
+    process.stdout.write = origWrite;
+  }
+});
+
+test('JsonRpcServer: all-notification batch writes nothing', async () => {
+  const { server } = makeHarness();
+  const written = [];
+  const origWrite = process.stdout.write;
+  process.stdout.write = (chunk) => { written.push(chunk); return true; };
+  try {
+    server.onNotification('n', () => {});
+    await server._handleMessage([
+      { jsonrpc: '2.0', method: 'n' },
+      { jsonrpc: '2.0', method: 'n' },
+    ]);
+    assert.equal(written.length, 0);
+  } finally {
+    process.stdout.write = origWrite;
+  }
 });

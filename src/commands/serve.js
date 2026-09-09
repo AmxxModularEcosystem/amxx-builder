@@ -17,7 +17,7 @@
  *   manifest.validate       → validate.manifestFile
  *   manifest.resolve        → env.loadEnv + manifest.resolveManifest
  *   include.resolve         → include-tree parseIncludeDirective + searchIncludeFile
- *   include.list            → include-tree fetchDepIncludeDir + collectIncFiles
+ *   include.list            → deps-resolver collectDepIncludeDirs + include-tree collectIncFiles
  *   amxmodx.includes.list   → compiler-fetcher fetchCompiler + glob
  *   amxmodx.include.get     → compiler-fetcher fetchCompiler + glob + read
  *   deps.tree               → deps-tree buildDepTree + assembleRootDeps
@@ -53,9 +53,9 @@ const { loadEnv } = require('../env');
 const { resolveManifestPath } = require('../manifest-path');
 const { resolveManifest, parseManifest, resolveGithubToken, parseDepString } = require('../manifest');
 const { validateManifestFile } = require('../validate');
-const { fetchDepIncludeDir, collectIncFiles, parseIncludeDirective, searchIncludeFile } = require('../include-tree');
-const { depLabel } = require('../deps-resolver');
-const { fetchCompiler, resolveAmxmodxVersion, getCompilerInfo, findNewestCachedCompiler, getHostPlatform } = require('../compiler-fetcher');
+const { collectIncFiles, parseIncludeDirective, searchIncludeFile } = require('../include-tree');
+const { depLabel, collectDepIncludeDirs } = require('../deps-resolver');
+const { fetchCompiler, resolveAmxmodxVersion, getCompilerInfo, getHostPlatform, resolveStdlibVersion } = require('../compiler-fetcher');
 const { buildDepTree, assembleRootDeps } = require('../deps-tree');
 const { listReleases, listTags } = require('../release-lister');
 const {
@@ -89,10 +89,13 @@ function noFetchParam(params) {
   return params?.noFetch === true || params?.no_fetch === true;
 }
 
-// Resolve the AMX Mod X version for a request: explicit `version` arg wins,
-// then the project manifest's amxmodx.version, then latest. Priority logic
-// lives in core (compiler-fetcher.resolveAmxmodxVersion). An invalid explicit
-// version is a JSON-RPC param error (-32602); everything else propagates.
+// Resolve a concrete compiler version string for handlers that go on to call
+// fetchCompiler() (dep-graph.get, compile.single). Explicit `version` arg wins,
+// then the project manifest's amxmodx.version, then latest — priority lives in
+// core (compiler-fetcher.resolveAmxmodxVersion). An invalid explicit version is
+// a JSON-RPC param error (-32602); everything else (incl. LATEST_NOT_CACHED)
+// propagates — these handlers fetch a real compiler, so a graceful empty state
+// is meaningless here.
 async function resolveVersionFromParams(params) {
   try {
     if (params?.version) {
@@ -122,23 +125,29 @@ async function resolveVersionFromParams(params) {
 // downloads when noFetch; if latest cannot be resolved offline, degrades to
 // the newest cached compiler instead of failing (degraded: true). Nothing
 // cached at all → graceful empty state (version: null), not an error.
+// Version-priority + offline degradation live in core
+// (compiler-fetcher.resolveStdlibVersion); this wrapper only does arg/manifest
+// discovery, the INVALID→-32602 remap and getCompilerInfo state shaping.
 async function resolveStdlibState(params) {
   const noFetch = noFetchParam(params);
-  let version;
-  let degraded = false;
-  try {
-    version = await resolveVersionFromParams(params);
-  } catch (err) {
-    if (noFetch && err.code === 'LATEST_NOT_CACHED') {
-      const fallback = findNewestCachedCompiler();
-      if (!fallback) {
-        return { version: null, degraded: false, platform: getHostPlatform(), compilerPath: null, includeDir: null, cached: false };
-      }
-      version = fallback.version;
-      degraded = true;
-    } else {
-      throw err;
+  let manifest = null;
+  if (!params?.version) {
+    const manifestPath = manifestPathFor(params);
+    if (fs.existsSync(manifestPath)) {
+      try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
     }
+  }
+  const { version, degraded, error } = await resolveStdlibVersion({
+    version: params?.version,
+    manifest,
+    noFetch,
+  });
+  if (error) {
+    if (error.code === 'INVALID_AMXMODX_VERSION') error.code = -32602;
+    throw error;
+  }
+  if (version === null) {
+    return { version: null, degraded: false, platform: getHostPlatform(), compilerPath: null, includeDir: null, cached: false };
   }
   const info = await getCompilerInfo(version, { noFetch });
   return { version: info.version, degraded, platform: info.platform, compilerPath: info.compilerPath, includeDir: info.includeDir, cached: info.cached };
@@ -275,20 +284,19 @@ function createServeServer() {
       loadEnvQuiet(manifestPath);
       try {
         manifest = parseManifest(manifestPath);
-        for (const dep of manifest.globalDeps) {
-          try {
-            const depDir = await fetchDepIncludeDir(
-              dep, resolveGithubToken(manifest, dep.repo),
-              noFetchParam(params), manifest.github.ssh
-            );
-            searchPaths.push({ path: depDir, label: depLabel(dep) });
-          } catch (err) {
-            errors.push(`${depLabel(dep)}: ${err.message}`);
-          }
-        }
       } catch (err) {
         errors.push(`manifest ${manifestPath}: ${err.message}`);
       }
+    }
+    if (manifest) {
+      const { dirs, errors: depErrors } = await collectDepIncludeDirs(manifest, {
+        noFetch: noFetchParam(params),
+        ssh: manifest.github.ssh,
+      });
+      manifest.globalDeps.forEach((dep, i) => {
+        if (dirs[i]) searchPaths.push({ path: dirs[i], label: depLabel(dep) });
+        else if (depErrors[i]) errors.push(`${depLabel(dep)}: ${depErrors[i]}`);
+      });
     }
 
     const stdlib = await resolveStdlibState(params);
@@ -323,21 +331,27 @@ function createServeServer() {
     loadEnvQuiet(manifestPath);
     const manifest = parseManifest(manifestPath);
 
+    const { dirs, errors } = await collectDepIncludeDirs(manifest, {
+      noFetch: noFetchParam(params),
+      ssh: manifest.github.ssh,
+    });
+
     const deps = [];
-    for (const dep of manifest.globalDeps) {
+    for (let i = 0; i < manifest.globalDeps.length; i++) {
+      const dep = manifest.globalDeps[i];
       const base = dep.source === 'fungun'
         ? { source: 'fungun', id: dep.id, url: dep.url }
         : { source: dep.source || 'git', repo: dep.repo, ref: dep.ref };
+      if (errors[i]) {
+        deps.push({ ...base, error: errors[i], files: [], count: 0 });
+        continue;
+      }
       try {
-        const includeDir = await fetchDepIncludeDir(
-          dep, resolveGithubToken(manifest, dep.repo),
-          noFetchParam(params), manifest.github.ssh
-        );
-        const files = await collectIncFiles(includeDir);
+        const files = await collectIncFiles(dirs[i]);
         deps.push({
           ...base,
           include_path: dep.include_path || null,
-          include_dir: includeDir,
+          include_dir: dirs[i],
           count: files.length,
           files: files.map((f) => ({ rel: f.rel, abs: f.abs })),
         });
@@ -456,13 +470,8 @@ function createServeServer() {
     // Dep includes come BEFORE the stdlib — matching the real build's search order.
     const includeDirs = [];
     if (manifest) {
-      for (const dep of manifest.globalDeps) {
-        try {
-          includeDirs.push(await fetchDepIncludeDir(
-            dep, resolveGithubToken(manifest, dep.repo), noFetch, manifest.github.ssh
-          ));
-        } catch (err) { /* keep the rest of the dirs on partial failure */ }
-      }
+      const { dirs } = await collectDepIncludeDirs(manifest, { noFetch, ssh: manifest.github.ssh });
+      for (const dir of dirs) if (dir) includeDirs.push(dir);
     }
     if (includeDir) includeDirs.push(includeDir);
     for (const d of (params?.include_dirs || [])) includeDirs.push(path.resolve(d));
@@ -597,37 +606,43 @@ function createServeServer() {
     const controller = new AbortController();
     activeBuild = controller;
 
-    const manifestPath = manifestPathFor(params);
-    loadEnvQuiet(manifestPath);
-    const manifest = resolveManifest(manifestPath, { set: params?.set, define: params?.define });
-
-    // Forward core lifecycle events as server→client notifications while the
-    // build runs. COMPILED/PROGRESS are emitted by compiler.js/progress.js on
-    // the bus; STAGE/DONE/ERROR by build-service.
-    const listeners = [
-      [EVENTS.STAGE,    (p) => server.notify('build.stage', p)],
-      [EVENTS.COMPILED, (p) => server.notify('build.compiled', p)],
-      [EVENTS.PROGRESS, (p) => server.notify('build.progress', p)],
-      [EVENTS.DONE,     (p) => server.notify('build.done', p)],
-      [EVENTS.ERROR,    (p) => server.notify('build.error', p)],
-    ];
-    for (const [ev, fn] of listeners) on(ev, fn);
-
     try {
-      const result = await runBuild(manifest, {
-        buildDir: params?.buildDir,
-        fetch:    params?.fetch,
-        archive:  params?.archive,
-        signal:   controller.signal,
-      });
-      return result;
-    } catch (err) {
-      if (err.code === 'CANCELLED') {
-        return { ok: false, cancelled: true, message: err.message };
+      const manifestPath = manifestPathFor(params);
+      loadEnvQuiet(manifestPath);
+      const manifest = resolveManifest(manifestPath, { set: params?.set, define: params?.define });
+
+      // Forward core lifecycle events as server→client notifications while the
+      // build runs. COMPILED/PROGRESS are emitted by compiler.js/progress.js on
+      // the bus; STAGE/DONE/ERROR by build-service.
+      const listeners = [
+        [EVENTS.STAGE,    (p) => server.notify('build.stage', p)],
+        [EVENTS.COMPILED, (p) => server.notify('build.compiled', p)],
+        [EVENTS.PROGRESS, (p) => server.notify('build.progress', p)],
+        [EVENTS.DONE,     (p) => server.notify('build.done', p)],
+        [EVENTS.ERROR,    (p) => server.notify('build.error', p)],
+      ];
+      for (const [ev, fn] of listeners) on(ev, fn);
+
+      try {
+        const result = await runBuild(manifest, {
+          buildDir: params?.buildDir,
+          fetch:    params?.fetch,
+          archive:  params?.archive,
+          signal:   controller.signal,
+        });
+        return result;
+      } catch (err) {
+        if (err.code === 'CANCELLED') {
+          return { ok: false, cancelled: true, message: err.message };
+        }
+        return { ok: false, message: err.message };
+      } finally {
+        for (const [ev, fn] of listeners) off(ev, fn);
       }
-      return { ok: false, message: err.message };
     } finally {
-      for (const [ev, fn] of listeners) off(ev, fn);
+      // Even a pre-build failure (manifest missing, bad --set) must release the
+      // single-build lock, or every later build.start dies with "Build already
+      // running" until the process is restarted.
       activeBuild = null;
     }
   });
@@ -748,28 +763,26 @@ function createServeServer() {
     const depDirs = [];
     const depErrors = [];
     if (manifest) {
-      for (const dep of manifest.globalDeps) {
-        try {
-          depDirs.push(await fetchDepIncludeDir(
-            dep, resolveGithubToken(manifest, dep.repo), noFetch, manifest.github.ssh
-          ));
-        } catch (err) {
-          depErrors.push(`${depLabel(dep)}: ${err.message}`);
-        }
-      }
+      const { dirs, errors } = await collectDepIncludeDirs(manifest, { noFetch, ssh: manifest.github.ssh });
+      manifest.globalDeps.forEach((dep, i) => {
+        if (dirs[i]) depDirs.push(dirs[i]);
+        else if (errors[i]) depErrors.push(`${depLabel(dep)}: ${errors[i]}`);
+      });
     }
 
     const includeDirs = [...depDirs];
     if (includeDir) includeDirs.push(includeDir);
     for (const d of (params?.include_dirs || [])) includeDirs.push(path.resolve(d));
 
-    const buildDir = path.join(os.tmpdir(), 'amxb-serve-compile');
+    // Unique per-call build dir + event tag: the transport dispatches requests
+    // concurrently, so two compile.single calls for same-named plugins must not
+    // share an output path nor mis-attribute COMPILED events (cf. MCP).
+    const runId     = `${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const buildDir  = path.join(os.tmpdir(), 'amxb-serve-compile', runId);
     const compileManifest = manifest || { amxmodx: { defines: [] } };
 
-    // Capture the compiler output emitted as an event by compileSingle.
-    const baseName = path.basename(smaPath);
     let compiled = null;
-    const onCompiled = (p) => { if (p.baseName === baseName) compiled = p; };
+    const onCompiled = (p) => { if (p.tag === runId) compiled = p; };
     on(EVENTS.COMPILED, onCompiled);
     let amxxName;
     try {
@@ -779,17 +792,19 @@ function createServeServer() {
         compilerPath,
         includeDirs,
         buildDir,
-        params?.scripting_root ? path.resolve(params.scripting_root) : undefined
+        params?.scripting_root ? path.resolve(params.scripting_root) : undefined,
+        runId
       );
     } finally {
       off(EVENTS.COMPILED, onCompiled);
     }
 
+    const outputPath = amxxName ? path.join(buildDir, 'amxmodx', 'plugins', amxxName) : null;
     return {
       ok: amxxName != null,
       amxxName,
       output: compiled ? compiled.output : undefined,
-      output_path: amxxName ? path.join(buildDir, 'amxmodx', 'plugins', amxxName) : null,
+      output_path: outputPath,
       dep_errors: depErrors.length ? depErrors : undefined,
     };
   });
@@ -804,6 +819,7 @@ function createServeServer() {
     }
 
     const manifestPath = manifestPathFor(params);
+    loadEnvQuiet(manifestPath);
     const manifest = parseManifest(manifestPath);
 
     const notify = (kind, extra = {}) => server.notify('watch.changed', { kind, ...extra });
@@ -829,13 +845,13 @@ function createServeServer() {
   return server;
 }
 
-// Load project .env from the workspace root like the CLI does; keep stdout free
-// for JSON-RPC (logs → stderr, progress bars disabled).
-function prepareEnvironment() {
-  dotenv.config({ path: path.join(process.cwd(), '.env'), quiet: true });
-  logger.setStderr(true);
-  progress.setEnabled(false);
-}
+  // Load project .env from the workspace root like the CLI does; keep stdout free
+  // for JSON-RPC (logs → stderr, progress bars disabled).
+  function prepareEnvironment() {
+    dotenv.config({ path: path.join(process.cwd(), '.env'), quiet: true });
+    logger.setStderr(true);
+    progress.setEnabled(false);
+  }
 
 /**
  * Start the serve server — listens on stdin/stdout forever.
