@@ -134,10 +134,12 @@ async function fetchLatestVersion(options = {}) {
   } catch (_) {} // no/invalid cache file — resolve from web
 
   if (noFetch) {
-    throw new Error(
+    const err = new Error(
       'Latest amxmodx version is not cached and no-fetch is set.\n' +
       'Run once without --no-fetch (or set amxmodx.version explicitly) to populate the cache.'
     );
+    err.code = 'LATEST_NOT_CACHED';
+    throw err;
   }
 
   if (_latestFetch) return _latestFetch;
@@ -220,7 +222,18 @@ async function resolveLatestVersionFromWeb() {
  */
 async function resolveAmxmodxVersion(manifest, options = {}) {
   const { version, noFetch } = options;
-  if (version) return version;
+  if (version) {
+    if (version === 'latest') {
+      return fetchLatestVersion({ noFetch });
+    }
+    try {
+      parseVersion(version); // validate major.minor.build shape
+    } catch (err) {
+      err.code = 'INVALID_AMXMODX_VERSION';
+      throw err;
+    }
+    return version;
+  }
   if (manifest && manifest.amxmodx && manifest.amxmodx.version) return manifest.amxmodx.version;
   return fetchLatestVersion({ noFetch });
 }
@@ -233,6 +246,59 @@ function getHostPlatform() {
   if (process.platform === 'win32')  return 'windows';
   if (process.platform === 'darwin') return 'mac';
   return 'linux';
+}
+
+/**
+ * Find the newest usable cached compiler for a platform, without downloading.
+ *
+ * Cache layout: <cache>/amxxpc/<version>/<platform>/amxxpc[.exe] (+ include/).
+ * Files directly inside amxxpc/ (e.g. .latest-version-<platform>) and any
+ * non-dotted-numeric dirs are ignored. Candidates with an include/ dir are
+ * preferred; otherwise the numerically newest version wins (longer tuple is
+ * newer when the common prefix is equal, e.g. 1.9.0.5299 > 1.9.0).
+ *
+ * @param {string} [platform=getHostPlatform()]
+ * @returns {{version: string, compilerPath: string, includeDir: string}|null}
+ */
+function findNewestCachedCompiler(platform = getHostPlatform()) {
+  const amxxpcDir = path.join(getCacheDir(), 'amxxpc');
+  if (!fs.existsSync(amxxpcDir)) return null;
+
+  const binaryName = platform === 'windows' ? 'amxxpc.exe' : 'amxxpc';
+  const candidates = [];
+
+  for (const entry of fs.readdirSync(amxxpcDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^\d+(\.\d+)+$/.test(entry.name)) continue;
+    const verDir      = path.join(amxxpcDir, entry.name);
+    const platformDir = path.join(verDir, platform);
+    const compilerPath = path.join(platformDir, binaryName);
+    if (!fs.existsSync(compilerPath)) continue;
+    const includeDir = path.join(platformDir, 'include');
+    candidates.push({
+      version: entry.name,
+      compilerPath,
+      includeDir,
+      hasInclude: fs.existsSync(includeDir),
+      parts: entry.name.split('.').map(Number),
+    });
+  }
+
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => {
+    if (a.hasInclude !== b.hasInclude) return a.hasInclude ? -1 : 1;
+    const common = Math.min(a.parts.length, b.parts.length);
+    for (let i = 0; i < common; i++) {
+      if (a.parts[i] !== b.parts[i]) return b.parts[i] - a.parts[i];
+    }
+    return b.parts.length - a.parts.length; // longer tuple is newer on equal prefix
+  });
+
+  return {
+    version: candidates[0].version,
+    compilerPath: candidates[0].compilerPath,
+    includeDir: candidates[0].includeDir,
+  };
 }
 
 /**
@@ -357,4 +423,4 @@ function findDir(root, name) {
   return null;
 }
 
-module.exports = { fetchCompiler, getCompilerInfo, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion, resolveAmxmodxVersion };
+module.exports = { fetchCompiler, getCompilerInfo, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion, findNewestCachedCompiler, resolveAmxmodxVersion };

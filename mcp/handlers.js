@@ -338,7 +338,7 @@ async function handleBuildIncludeTree(args, token, noFetch) {
  * the current error-fallback behavior (unparseable manifest → latest).
  */
 async function resolveAmxmodxVersion(args, noFetch) {
-  if (args?.version) return resolveAmxmodxVersionCore(null, { version: args.version });
+  if (args?.version) return resolveAmxmodxVersionCore(null, { version: args.version, noFetch });
 
   const manifestPathStr = args?.manifest;
   const manifestPath = resolveManifestPath(manifestPathStr || undefined).path;

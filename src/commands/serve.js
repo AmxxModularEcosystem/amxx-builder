@@ -55,7 +55,7 @@ const { resolveManifest, parseManifest, resolveGithubToken, parseDepString } = r
 const { validateManifestFile } = require('../validate');
 const { fetchDepIncludeDir, collectIncFiles, parseIncludeDirective, searchIncludeFile } = require('../include-tree');
 const { depLabel } = require('../deps-resolver');
-const { fetchCompiler, resolveAmxmodxVersion, getCompilerInfo } = require('../compiler-fetcher');
+const { fetchCompiler, resolveAmxmodxVersion, getCompilerInfo, findNewestCachedCompiler, getHostPlatform } = require('../compiler-fetcher');
 const { buildDepTree, assembleRootDeps } = require('../deps-tree');
 const { listReleases, listTags } = require('../release-lister');
 const {
@@ -83,20 +83,65 @@ function readFileSafe(absPath) {
   }
 }
 
+// JSON-RPC params spell no-fetch either `noFetch` (serve convention) or
+// `no_fetch` (snake_case convention) — normalize once here.
+function noFetchParam(params) {
+  return params?.noFetch === true || params?.no_fetch === true;
+}
+
 // Resolve the AMX Mod X version for a request: explicit `version` arg wins,
 // then the project manifest's amxmodx.version, then latest. Priority logic
-// lives in core (compiler-fetcher.resolveAmxmodxVersion).
+// lives in core (compiler-fetcher.resolveAmxmodxVersion). An invalid explicit
+// version is a JSON-RPC param error (-32602); everything else propagates.
 async function resolveVersionFromParams(params) {
-  if (params?.version) return resolveAmxmodxVersion(null, { version: params.version });
+  try {
+    if (params?.version) {
+      // await is required: a returned non-awaited promise bypasses this
+      // try/catch, so INVALID_AMXMODX_VERSION would never map to -32602.
+      return await resolveAmxmodxVersion(null, { version: params.version, noFetch: noFetchParam(params) });
+    }
 
-  const manifestPath = params?.manifest
-    ? path.resolve(params.manifest)
-    : resolveManifestPath().path;
-  let manifest = null;
-  if (fs.existsSync(manifestPath)) {
-    try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
+    const manifestPath = params?.manifest
+      ? path.resolve(params.manifest)
+      : resolveManifestPath().path;
+    let manifest = null;
+    if (fs.existsSync(manifestPath)) {
+      try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
+    }
+    return await resolveAmxmodxVersion(manifest, { noFetch: noFetchParam(params) });
+  } catch (err) {
+    if (err && err.code === 'INVALID_AMXMODX_VERSION') {
+      err.code = -32602;
+      throw err;
+    }
+    throw err;
   }
-  return resolveAmxmodxVersion(manifest, { noFetch: params?.noFetch === true });
+}
+
+// Informational stdlib lookup for manifest-less / offline clients. Never
+// downloads when noFetch; if latest cannot be resolved offline, degrades to
+// the newest cached compiler instead of failing (degraded: true). Nothing
+// cached at all → graceful empty state (version: null), not an error.
+async function resolveStdlibState(params) {
+  const noFetch = noFetchParam(params);
+  let version;
+  let degraded = false;
+  try {
+    version = await resolveVersionFromParams(params);
+  } catch (err) {
+    if (noFetch && err.code === 'LATEST_NOT_CACHED') {
+      const fallback = findNewestCachedCompiler();
+      if (!fallback) {
+        return { version: null, degraded: false, platform: getHostPlatform(), compilerPath: null, includeDir: null, cached: false };
+      }
+      version = fallback.version;
+      degraded = true;
+    } else {
+      throw err;
+    }
+  }
+  const info = await getCompilerInfo(version, { noFetch });
+  return { version: info.version, degraded, platform: info.platform, compilerPath: info.compilerPath, includeDir: info.includeDir, cached: info.cached };
 }
 
 function manifestPathFor(params) {
@@ -234,7 +279,7 @@ function createServeServer() {
           try {
             const depDir = await fetchDepIncludeDir(
               dep, resolveGithubToken(manifest, dep.repo),
-              params?.noFetch === true, manifest.github.ssh
+              noFetchParam(params), manifest.github.ssh
             );
             searchPaths.push({ path: depDir, label: depLabel(dep) });
           } catch (err) {
@@ -246,9 +291,8 @@ function createServeServer() {
       }
     }
 
-    const version = await resolveVersionFromParams(params);
-    const { includeDir } = await fetchCompiler(version);
-    if (includeDir) searchPaths.push({ path: includeDir, label: `AMXX stdlib ${version}` });
+    const stdlib = await resolveStdlibState(params);
+    if (stdlib.includeDir) searchPaths.push({ path: stdlib.includeDir, label: `AMXX stdlib ${stdlib.version}` });
 
     const result = searchIncludeFile(searchPaths, filename);
     if (!result) {
@@ -287,7 +331,7 @@ function createServeServer() {
       try {
         const includeDir = await fetchDepIncludeDir(
           dep, resolveGithubToken(manifest, dep.repo),
-          params?.noFetch === true, manifest.github.ssh
+          noFetchParam(params), manifest.github.ssh
         );
         const files = await collectIncFiles(includeDir);
         deps.push({
@@ -307,39 +351,49 @@ function createServeServer() {
   // ─── AMXX standard includes ──────────────────────────────────────────────
 
   server.onRequest('amxmodx.includes.list', async (params) => {
-    const version = await resolveVersionFromParams(params);
+    const state = await resolveStdlibState(params);
     const pattern = params?.pattern || '*.inc';
 
-    const { includeDir } = await fetchCompiler(version);
-    if (!includeDir) return { version, includeDir: null, pattern, count: 0, files: [] };
+    if (!state.includeDir) {
+      const result = { version: state.version, includeDir: null, pattern, count: 0, files: [] };
+      if (state.degraded) result.degraded = true;
+      return result;
+    }
 
-    const files = await glob(pattern, { cwd: includeDir, dot: false });
+    const files = await glob(pattern, { cwd: state.includeDir, dot: false });
     files.sort();
-    return { version, includeDir, pattern, count: files.length, files };
+    const result = { version: state.version, includeDir: state.includeDir, pattern, count: files.length, files };
+    if (state.degraded) result.degraded = true;
+    return result;
   });
 
   server.onRequest('amxmodx.include.get', async (params) => {
-    const version = await resolveVersionFromParams(params);
+    const state = await resolveStdlibState(params);
     const pattern = params?.file || params?.pattern || '*.inc';
 
-    const { includeDir } = await fetchCompiler(version);
-    if (!includeDir) return { version, includeDir: null, count: 0, files: [] };
+    if (!state.includeDir) {
+      const result = { version: state.version, includeDir: null, count: 0, files: [] };
+      if (state.degraded) result.degraded = true;
+      return result;
+    }
 
-    const files = await glob(pattern, { cwd: includeDir, dot: false });
+    const files = await glob(pattern, { cwd: state.includeDir, dot: false });
     files.sort();
-    return {
-      version,
-      includeDir,
+    const result = {
+      version: state.version,
+      includeDir: state.includeDir,
       count: files.length,
-      files: files.map((rel) => ({ rel, content: readFileSafe(path.join(includeDir, rel)) })),
+      files: files.map((rel) => ({ rel, content: readFileSafe(path.join(state.includeDir, rel)) })),
     };
+    if (state.degraded) result.degraded = true;
+    return result;
   });
 
   // ─── Deps tree ───────────────────────────────────────────────────────────
 
   server.onRequest('deps.tree', async (params) => {
     const depth = params?.depth || 0;
-    const noFetch = params?.noFetch === true;
+    const noFetch = noFetchParam(params);
 
     if (params?.deps) {
       const rootDeps = params.deps.map((entry) => {
@@ -387,7 +441,7 @@ function createServeServer() {
       throw err;
     }
 
-    const noFetch = params?.noFetch === true;
+    const noFetch = noFetchParam(params);
 
     const manifestPath = manifestPathFor(params);
     let manifest = null;
@@ -515,8 +569,10 @@ function createServeServer() {
   });
 
   server.onRequest('compiler.info', async (params) => {
-    const version = await resolveVersionFromParams(params);
-    return getCompilerInfo(version, { noFetch: params?.noFetch === true });
+    const state = await resolveStdlibState(params);
+    const result = { version: state.version, platform: state.platform, compilerPath: state.compilerPath, includeDir: state.includeDir, cached: state.cached };
+    if (state.degraded) result.degraded = true;
+    return result;
   });
 
   server.onRequest('build.plan', (params) => {
@@ -676,7 +732,7 @@ function createServeServer() {
       throw err;
     }
 
-    const noFetch = params?.noFetch === true;
+    const noFetch = noFetchParam(params);
 
     const manifestPath = manifestPathFor(params);
     let manifest = null;
