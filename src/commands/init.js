@@ -8,6 +8,33 @@ const logger = require('../logger');
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
 
+// Auto-discovered by opencode (.opencode/plugin/*.js). Registers amxb's bundled
+// skills in the config hook — no machine-specific paths end up in opencode.json.
+const OPENCODE_BRIDGE_FILE   = path.join('.opencode', 'plugin', 'amxb-skills.js');
+const OPENCODE_BRIDGE_PLUGIN = `// Bridge: exposes the skills bundled with amxb (amxx-builder) to opencode.
+// No machine-specific paths are stored in opencode.json — amxb resolves its own
+// install directory at every opencode start, exactly like the MCP entry does.
+import { execSync } from "node:child_process";
+
+export default async function amxbSkills() {
+  return {
+    config(cfg) {
+      let dir = "";
+      try {
+        const exe = process.platform === "win32" ? "amxb.cmd" : "amxb";
+        dir = execSync(exe + " skills-dir", { encoding: "utf8" }).trim();
+      } catch {
+        return;
+      }
+      if (!dir) return;
+      cfg.skills = cfg.skills || {};
+      cfg.skills.paths = cfg.skills.paths || [];
+      if (!cfg.skills.paths.includes(dir)) cfg.skills.paths.push(dir);
+    },
+  };
+}
+`;
+
 async function runInitInteractive(options) {
   const { Input, Confirm } = require('enquirer');
   const defaultName = options.name || path.basename(process.cwd());
@@ -55,7 +82,7 @@ async function runInitInteractive(options) {
 
   const doOpencode = await new Confirm({
     name: 'opencode',
-    message: 'Create .opencode/opencode.json with MCP config (amxb mcp)?',
+    message: 'Create .opencode/ (opencode.json MCP config + skills bridge plugin)?',
     initial: false,
   }).run();
 
@@ -106,6 +133,7 @@ async function runInitInteractive(options) {
 
   if (doOpencode) {
     writeOpencodeConfig();
+    writeOpencodeBridge(options.force);
   }
 
   if (doScript) {
@@ -144,6 +172,7 @@ function runInit(options) {
 
   if (options.opencode) {
     writeOpencodeConfig();
+    writeOpencodeBridge(options.force);
   }
 
   if (options.script) {
@@ -216,6 +245,11 @@ function writeOpencodeConfig() {
   cfg.$schema = cfg.$schema || 'https://opencode.ai/config.json';
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
   logger.success(`Updated ${file} with MCP config (amxb mcp)`);
+}
+
+function writeOpencodeBridge(force) {
+  fs.mkdirSync(path.dirname(OPENCODE_BRIDGE_FILE), { recursive: true });
+  writeIfAbsent(OPENCODE_BRIDGE_FILE, OPENCODE_BRIDGE_PLUGIN, force);
 }
 
 function renderTemplate(name, vars = {}) {

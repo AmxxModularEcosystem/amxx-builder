@@ -19,6 +19,7 @@ const { runReleases }         = require('./commands/releases');
 const { runInit, runInitInteractive } = require('./commands/init');
 const { runMcp }                     = require('./commands/mcp');
 const { runServe }                   = require('./commands/serve');
+const { runSkillsDir }               = require('./commands/skills-dir');
 
 program
   .name('amxx-builder')
@@ -28,9 +29,9 @@ program
 // ─── Update check ──────────────────────────────────────────────────────────────
 
 program.hook('preAction', async () => {
-  // The MCP server and the serve JSON-RPC server own stdout; an update notice
-  // would corrupt the protocol stream.
-  if (program.args[0] === 'mcp' || program.args[0] === 'serve') return;
+  // The MCP server, the serve JSON-RPC server and skills-dir own stdout; an
+  // update notice would corrupt the protocol/parseable stream.
+  if (program.args[0] === 'mcp' || program.args[0] === 'serve' || program.args[0] === 'skills-dir') return;
   try {
     const latest = await checkForUpdate();
     if (latest) {
@@ -245,7 +246,7 @@ program
   .option('--ci',           'Alias for --workflow')
   .option('--plugin <name>', 'Create amxmodx/scripting/<name>.sma')
   .option('--gitignore',     'Create .gitignore')
-  .option('--opencode',      'Create .opencode/opencode.json with MCP config (amxb mcp)')
+  .option('--opencode',      'Create .opencode/opencode.json (MCP config) + skills bridge plugin (amxb mcp)')
   .option('--deploy',        'Create .env with deploy stubs (AMXB_DEPLOY_*)')
   .option('--script',        'Create build.bat and build.sh quick-build scripts')
   .option('-f, --force',     'Overwrite existing files instead of skipping them')
@@ -289,6 +290,15 @@ program
       logger.error(err.message);
       process.exit(1);
     }
+  });
+
+// ─── skills-dir ────────────────────────────────────────────────────────────────
+
+program
+  .command('skills-dir')
+  .description('Print the absolute path to the bundled skills directory (used by the opencode skills bridge plugin)')
+  .action(() => {
+    runSkillsDir();
   });
 
 // ─── version ───────────────────────────────────────────────────────────────────

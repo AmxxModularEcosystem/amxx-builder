@@ -40,6 +40,7 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 | `amxb clean` | Clean build/ and clone cache |
 | `amxb clean --all` | Also clean compiler cache |
 | `amxb cache info` | Show cache contents |
+| `amxb skills-dir` | Print absolute path to the bundled `skills/` dir (used by the opencode bridge plugin) |
 | `amxb serve` | Start JSON-RPC server for editor integration (stdio transport) |
 | `npm start` | Alias for `node index.js` |
 
