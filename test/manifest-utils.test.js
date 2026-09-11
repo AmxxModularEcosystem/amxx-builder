@@ -118,6 +118,8 @@ test('loadDefaultsRaw: known default values', () => {
   assert.equal(defaults.version, '1.0.0');
   assert.equal(defaults.amxmodx.dir, 'amxmodx');
   assert.deepEqual(defaults.amxmodx.defines, []);
+  assert.deepEqual(defaults.docs, []);
+  assert.deepEqual(defaults.skills, []);
   assert.equal(defaults.github.token_env, 'GITHUB_TOKEN');
   assert.equal(defaults.output.pack, true);
   assert.equal(defaults.output.generate_ini, false);
@@ -274,29 +276,39 @@ test('parseManifest: throws when version is a number (not quoted)', () => {
   assert.throws(() => parseManifest(file), /must be string/);
 });
 
-test('parseManifest: long-form dep docs field normalizes to array', () => {
+test('parseManifest: top-level docs normalized with default name', () => {
   const { file } = writeTmpYaml([
     'name: DocsServer',
     'version: "1.0.0"',
-    'deps:',
-    '  - repo: org/util',
-    '    ref: v1.0',
-    '    docs: docs/API.md',
+    'docs:',
+    '  - file: docs/API.md',
+    '    description: "  Public API  "',
   ].join('\n'));
   const m = parseManifest(file);
-  assert.deepEqual(m.globalDeps[0].docs, ['docs/API.md']);
+  assert.deepEqual(m.docs, [{ file: 'docs/API.md', name: 'API', description: 'Public API' }]);
 });
 
-test('parseManifest: long-form dep without docs → docs null', () => {
+test('parseManifest: top-level skills normalized (file and dir)', () => {
   const { file } = writeTmpYaml([
-    'name: NoDocsServer',
+    'name: SkillsServer',
     'version: "1.0.0"',
-    'deps:',
-    '  - repo: org/util',
-    '    ref: v1.0',
+    'skills:',
+    '  - file: skills/config.md',
+    '    name: config-skill',
+    '  - dir: skills/deep-config',
   ].join('\n'));
   const m = parseManifest(file);
-  assert.equal(m.globalDeps[0].docs, null);
+  assert.deepEqual(m.skills, [
+    { file: 'skills/config.md', dir: null, name: 'config-skill', description: null },
+    { file: null, dir: 'skills/deep-config', name: 'deep-config', description: null },
+  ]);
+});
+
+test('parseManifest: absent docs/skills → empty arrays', () => {
+  const { file } = writeTmpYaml('name: PlainServer\nversion: "1.0.0"\n');
+  const m = parseManifest(file);
+  assert.deepEqual(m.docs, []);
+  assert.deepEqual(m.skills, []);
 });
 
 // ─── resolveManifest ─────────────────────────────────────────────────────────

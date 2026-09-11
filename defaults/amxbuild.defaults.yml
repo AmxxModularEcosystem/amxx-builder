@@ -27,6 +27,9 @@ output:
 
 plugins: []
 
+docs: []
+skills: []
+
 assets:
   on_conflict: last_wins
   sources:

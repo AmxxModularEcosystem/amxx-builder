@@ -16,6 +16,9 @@
  * Method table:
  *   manifest.validate       → validate.manifestFile
  *   manifest.resolve        → env.loadEnv + manifest.resolveManifest
+ *   manifest.dep            → agent-assets readDepManifest + parseDocEntries/parseSkillEntries
+ *   docs.list / docs.get    → agent-assets collectDepAssets / collectLocalAssets
+ *   skills.list / skills.get → agent-assets collectDepAssets / collectLocalAssets
  *   include.resolve         → include-tree parseIncludeDirective + searchIncludeFile
  *   include.list            → deps-resolver collectDepIncludeDirs + include-tree collectIncFiles
  *   amxmodx.includes.list   → compiler-fetcher fetchCompiler + glob
@@ -51,7 +54,8 @@ const { on, off, EVENTS } = require('../events');
 
 const { loadEnv } = require('../env');
 const { resolveManifestPath } = require('../manifest-path');
-const { resolveManifest, parseManifest, resolveGithubToken, parseDepString } = require('../manifest');
+const { resolveManifest, parseManifest, resolveGithubToken, parseDepString, parseDocEntries, parseSkillEntries } = require('../manifest');
+const { readDepManifest, collectDepAssets, collectLocalAssets } = require('../agent-assets');
 const { validateManifestFile } = require('../validate');
 const { collectIncFiles, parseIncludeDirective, searchIncludeFile } = require('../include-tree');
 const { depLabel, collectDepIncludeDirs } = require('../deps-resolver');
@@ -175,6 +179,38 @@ function resolveGithubTokenFor(params, repo) {
   return params?.token || process.env.GITHUB_TOKEN || null;
 }
 
+// Build a parsed dep object from params: either a full `dep` string/object or
+// explicit { repo, ref?, source?, include_path?, asset? } fields.
+function depFromParams(params) {
+  let dep;
+  if (params?.dep) {
+    dep = typeof params.dep === 'string' ? parseDepString(params.dep) : { ...params.dep };
+  } else {
+    if (!params?.repo) throw new Error('Provide either "dep" or "repo"');
+    const source = params.source || 'git';
+    const ref = params.ref || (source === 'release' ? 'latest' : null);
+    dep = { repo: params.repo, ref, source, include_path: params.include_path || null, asset: params.asset ?? null };
+  }
+  if (params?.source) dep.source = params.source;
+  if (params?.include_path) dep.include_path = params.include_path;
+  if (params?.asset != null) dep.asset = params.asset;
+  return dep;
+}
+
+// Agent docs/skills: dep mode when dep/repo is present, otherwise the local
+// project's own manifest.
+async function collectAgentAssets(params) {
+  const noFetch = noFetchParam(params);
+  if (params?.dep || params?.repo) {
+    const dep = depFromParams(params);
+    const token = resolveGithubTokenFor(params, dep.repo);
+    return collectDepAssets(dep, { token, noFetch });
+  }
+  const manifestPath = manifestPathFor(params);
+  loadEnvQuiet(manifestPath);
+  return collectLocalAssets(parseManifest(manifestPath));
+}
+
 /**
  * Shape a GitHub API error into the JSON-RPC error contract: -32603 with
  * error.data = { status, repo, message }. Returns null for non-GitHub errors
@@ -250,6 +286,89 @@ function createServeServer() {
     const manifestPath = manifestPathFor(params);
     loadEnvQuiet(manifestPath);
     return resolveManifest(manifestPath, { set: params?.set, define: params?.define });
+  });
+
+  // ─── Dependency manifest + agent assets ──────────────────────────────────
+
+  server.onRequest('manifest.dep', async (params) => {
+    let dep;
+    try {
+      dep = depFromParams(params);
+    } catch (err) {
+      err.code = -32602;
+      throw err;
+    }
+    const token = resolveGithubTokenFor(params, dep.repo);
+    const m = await readDepManifest(dep, { token, noFetch: noFetchParam(params) });
+
+    let docs = [];
+    let skills = [];
+    try { docs = parseDocEntries(m.raw?.docs || []); } catch { docs = []; }
+    try { skills = parseSkillEntries(m.raw?.skills || []); } catch { skills = []; }
+
+    return {
+      label: m.label,
+      manifestPath: m.manifestPath,
+      manifestName: m.raw?.name || null,
+      raw: m.raw,
+      docs: docs.map((d) => ({ name: d.name, description: d.description, file: d.file })),
+      skills: skills.map((s) => ({ name: s.name, description: s.description, file: s.file, dir: s.dir })),
+    };
+  });
+
+  server.onRequest('docs.list', async (params) => {
+    const assets = await collectAgentAssets(params);
+    return {
+      label: assets.label || null,
+      docs: assets.docs.map((d) => ({ name: d.name, description: d.description, file: d.file })),
+      missing: assets.missing,
+    };
+  });
+
+  server.onRequest('docs.get', async (params) => {
+    const assets = await collectAgentAssets(params);
+    let docs = assets.docs;
+    if (params?.name || params?.file) {
+      docs = docs.filter(
+        (d) => (params.name && d.name === params.name) || (params.file && d.file === params.file)
+      );
+    }
+    return {
+      label: assets.label || null,
+      docs: docs.map((d) => ({ name: d.name, description: d.description, file: d.file, content: d.content })),
+      missing: assets.missing,
+    };
+  });
+
+  server.onRequest('skills.list', async (params) => {
+    const assets = await collectAgentAssets(params);
+    return {
+      label: assets.label || null,
+      skills: assets.skills.map((s) => ({
+        name: s.name,
+        description: s.description,
+        kind: s.kind,
+        file: s.file,
+        dir: s.dir,
+        files: s.kind === 'dir' ? s.files.map((f) => f.rel) : undefined,
+      })),
+      missing: assets.missing,
+    };
+  });
+
+  server.onRequest('skills.get', async (params) => {
+    const assets = await collectAgentAssets(params);
+    let skills = assets.skills;
+    if (params?.name) skills = skills.filter((s) => s.name === params.name);
+    return {
+      label: assets.label || null,
+      skills: skills.map((s) => (
+        s.kind === 'dir'
+          ? { name: s.name, description: s.description, kind: 'dir', dir: s.dir, files: s.files.map((f) => ({ rel: f.rel, content: f.content })) }
+          : { name: s.name, description: s.description, kind: 'file', file: s.file, content: s.content }
+      )),
+      missing: assets.missing,
+    };
   });
 
   // ─── Include resolution ──────────────────────────────────────────────────

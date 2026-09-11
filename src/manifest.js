@@ -78,6 +78,8 @@ function parseManifest(manifestPath) {
     repos,
     assets:      parseAssets(raw.assets || {}),
     pluginRules: parsePluginRules(raw.plugins || []),
+    docs:        parseDocEntries(raw.docs || []),
+    skills:      parseSkillEntries(raw.skills || []),
     deploy:      parseDeploy(raw),
     output: {
       dir:          String(output.dir),
@@ -173,28 +175,14 @@ function makeRepo(r, globalPostfix, globalAmxDir) {
 const DEP_STRING_RE = /^([^@\s]+)@([^:\s]+)(?::(.+))?$/;
 
 /**
- * Normalize a `docs` value (long-form dep entries only) to an array of
- * trimmed, non-empty doc paths, or null when nothing is specified.
- *
- * @param {*} val
- * @returns {string[]|null}
- */
-function normalizeDocs(val) {
-  if (val == null) return null;
-  const list = Array.isArray(val) ? val.map(String) : [String(val)];
-  const trimmed = list.map((s) => s.trim()).filter(Boolean);
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-/**
  * Parse a long-form dep object (manifest `deps` entries).
  *
- * git / release entries: `{ repo, ref, source?, include_path?, asset?, docs? }`
+ * git / release entries: `{ repo, ref, source?, include_path?, asset? }`
  * fungun entries:        `{ source: 'fungun', id: <index> }` or
  *                        `{ source: 'fungun', url: <page link> }`
  *
  * @param {object} line
- * @returns {{ repo: string, ref: string|null, include_path: string|null, source: string, asset: *, docs: string[]|null }}
+ * @returns {{ repo: string, ref: string|null, include_path: string|null, source: string, asset: * }}
  */
 function parseDepObject(line) {
   const source = line.source || 'git';
@@ -215,7 +203,6 @@ function parseDepObject(line) {
     include_path: line.include_path ? String(line.include_path).trim() : null,
     source,
     asset:        line.asset != null ? line.asset : null,
-    docs:         normalizeDocs(line.docs),
   };
 }
 
@@ -270,8 +257,79 @@ function parseFungunDepObject(line) {
     url:          ref.url,
     include_path: null,
     asset:        null,
-    docs:         normalizeDocs(line.docs),
   };
+}
+
+function defaultName(p) {
+  return path.basename(p, path.extname(p));
+}
+
+function parseEntryDescription(val) {
+  if (val == null) return null;
+  const s = String(val).trim();
+  return s === '' ? null : s;
+}
+
+/**
+ * Normalize top-level `docs` entries.
+ *
+ * Each entry: `{ file, name?, description? }` — `file` is required; `name`
+ * defaults to the file basename without extension; `description` → trimmed
+ * string or null.
+ *
+ * @param {*} arr
+ * @returns {{ file: string, name: string, description: string|null }[]}
+ */
+function parseDocEntries(arr) {
+  if (!Array.isArray(arr)) throw new Error('manifest: "docs" must be an array');
+  return arr.map((entry, i) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`docs[${i}]: must be an object`);
+    }
+    if (entry.file == null || String(entry.file).trim() === '') {
+      throw new Error(`docs[${i}]: missing "file"`);
+    }
+    const file = String(entry.file).trim();
+    const name = entry.name != null && String(entry.name).trim() !== ''
+      ? String(entry.name).trim()
+      : defaultName(file);
+    return { file, name, description: parseEntryDescription(entry.description) };
+  });
+}
+
+/**
+ * Normalize top-level `skills` entries.
+ *
+ * Each entry: `{ file, dir, name?, description? }` — exactly one of `file` /
+ * `dir` is required; `name` defaults to the file basename without extension
+ * (`file`) or the directory basename (`dir`).
+ *
+ * @param {*} arr
+ * @returns {{ file: string|null, dir: string|null, name: string, description: string|null }[]}
+ */
+function parseSkillEntries(arr) {
+  if (!Array.isArray(arr)) throw new Error('manifest: "skills" must be an array');
+  return arr.map((entry, i) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`skills[${i}]: must be an object`);
+    }
+    const file   = entry.file != null ? String(entry.file).trim() : '';
+    const dir    = entry.dir  != null ? String(entry.dir).trim()  : '';
+    const hasFile = file !== '';
+    const hasDir  = dir  !== '';
+    if (hasFile === hasDir) {
+      throw new Error(`skills[${i}]: exactly one of "file" or "dir" is required`);
+    }
+    const name = entry.name != null && String(entry.name).trim() !== ''
+      ? String(entry.name).trim()
+      : (hasFile ? defaultName(file) : path.basename(dir));
+    return {
+      file: hasFile ? file : null,
+      dir:  hasDir  ? dir  : null,
+      name,
+      description: parseEntryDescription(entry.description),
+    };
+  });
 }
 
 /**
@@ -451,4 +509,4 @@ function resolveManifest(manifestPath, options = {}) {
   return manifest;
 }
 
-module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, normalizeDocs, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge };
+module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge };

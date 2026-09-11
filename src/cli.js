@@ -20,6 +20,7 @@ const { runInit, runInitInteractive } = require('./commands/init');
 const { runMcp }                     = require('./commands/mcp');
 const { runServe }                   = require('./commands/serve');
 const { runSkillsDir }               = require('./commands/skills-dir');
+const { runOpencodeSkills }          = require('./commands/opencode-skills');
 
 program
   .name('amxx-builder')
@@ -29,10 +30,12 @@ program
 // ─── Update check ──────────────────────────────────────────────────────────────
 
 program.hook('preAction', async () => {
-  // The MCP server, the serve JSON-RPC server and skills-dir own stdout; an
-  // update notice would corrupt the protocol/parseable stream. The GitHub
-  // Action already pins a version and shouldn't make an extra network call.
-  if (program.args[0] === 'mcp' || program.args[0] === 'serve' || program.args[0] === 'skills-dir') return;
+  // The MCP server, the serve JSON-RPC server, skills-dir and opencode-skills
+  // own stdout; an update notice would corrupt the protocol/parseable stream.
+  // The GitHub Action already pins a version and shouldn't make an extra
+  // network call.
+  if (program.args[0] === 'mcp' || program.args[0] === 'serve'
+    || program.args[0] === 'skills-dir' || program.args[0] === 'opencode-skills') return;
   if (process.env.GITHUB_ACTIONS === 'true') return;
   try {
     const latest = await checkForUpdate();
@@ -252,6 +255,7 @@ program
   .option('--deploy',        'Create .env with deploy stubs (AMXB_DEPLOY_*)')
   .option('--script',        'Create build.bat and build.sh quick-build scripts')
   .option('-f, --force',     'Overwrite existing files instead of skipping them')
+  .option('--with-manifest', 'With --force, also overwrite an existing amxbuild.yml')
   .option('-i, --interactive', 'Interactive mode with prompts')
   .action(async (options) => {
     try {
@@ -301,6 +305,22 @@ program
   .description('Print the absolute path to the bundled skills directory (used by the opencode skills bridge plugin)')
   .action(() => {
     runSkillsDir();
+  });
+
+// ─── opencode-skills ─────────────────────────────────────────────────────────
+
+program
+  .command('opencode-skills')
+  .description('Materialize project + dependency skills for the opencode bridge (stdout: container paths)')
+  .option('--manifest <path>', 'Path to manifest file')
+  .option('--no-fetch',        'Use cached repos without re-cloning')
+  .action(async (options) => {
+    try {
+      await runOpencodeSkills(options);
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
   });
 
 // ─── version ───────────────────────────────────────────────────────────────────

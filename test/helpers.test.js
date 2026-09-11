@@ -19,7 +19,7 @@ const os   = require('os');
 const path = require('path');
 
 const manifest = require('../src/manifest');
-const { parseDepsLines, parseDepString, parseDepObject } = manifest;
+const { parseDepsLines, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries } = manifest;
 const { resolveManifestPath } = require('../src/manifest-path');
 const { formatBytes } = require('../src/format');
 const { normalize, repoKey, collectDepIncludeDirs } = require('../src/deps-resolver');
@@ -89,7 +89,6 @@ test('parseDepObject: valid long-form object', () => {
     include_path: 'inc',
     source: 'release',
     asset: 'plug.zip',
-    docs: null,
   });
 });
 
@@ -112,26 +111,6 @@ test('parseDepObject: defaults source to git', () => {
   assert.equal(parseDepObject({ repo: 'a/b', ref: 'v1' }).source, 'git');
 });
 
-test('parseDepObject: docs string normalizes to single-entry array', () => {
-  assert.deepEqual(parseDepObject({ repo: 'a/b', ref: 'v1', docs: 'docs/API.md' }).docs, ['docs/API.md']);
-});
-
-test('parseDepObject: docs array trims and drops empty entries', () => {
-  assert.deepEqual(parseDepObject({ repo: 'a/b', ref: 'v1', docs: [' a.md ', '', ' b.md '] }).docs, ['a.md', 'b.md']);
-});
-
-test('parseDepObject: docs empty string → null', () => {
-  assert.equal(parseDepObject({ repo: 'a/b', ref: 'v1', docs: '' }).docs, null);
-});
-
-test('parseDepObject: docs absent → null', () => {
-  assert.equal(parseDepObject({ repo: 'a/b', ref: 'v1' }).docs, null);
-});
-
-test('parseDepObject: docs number coerced to string', () => {
-  assert.deepEqual(parseDepObject({ repo: 'a/b', ref: 'v1', docs: 123 }).docs, ['123']);
-});
-
 // ─── parseDepObject: fungun ────────────────────────────────────────────────────
 
 test('parseDepObject: fungun by numeric id', () => {
@@ -143,7 +122,6 @@ test('parseDepObject: fungun by numeric id', () => {
     url: 'https://fungun.net/shop/?p=show&id=106',
     include_path: null,
     asset: null,
-    docs: null,
   });
 });
 
@@ -238,10 +216,72 @@ test('parseDepsLines: object missing repo propagates parseDepObject error', () =
   assert.throws(() => parseDepsLines([{ ref: 'v1' }]), /Dep entry missing "repo"/);
 });
 
-test('parseDepsLines: long-form object docs passes through', () => {
-  const parsed = parseDepsLines([{ repo: 'org/b', ref: 'v2', docs: 'docs/API.md' }]);
-  assert.equal(parsed.length, 1);
-  assert.deepEqual(parsed[0].docs, ['docs/API.md']);
+// ─── parseDocEntries / parseSkillEntries ───────────────────────────────────────
+
+test('parseDocEntries: name defaults to basename without extension', () => {
+  assert.deepEqual(parseDocEntries([{ file: 'docs/API.md' }]), [
+    { file: 'docs/API.md', name: 'API', description: null },
+  ]);
+});
+
+test('parseDocEntries: explicit name wins, description trimmed; empty description → null', () => {
+  assert.deepEqual(parseDocEntries([
+    { file: 'docs/API.md', name: ' Custom ', description: '  Public API  ' },
+    { file: 'docs/GUIDE.md', description: '   ' },
+  ]), [
+    { file: 'docs/API.md', name: 'Custom', description: 'Public API' },
+    { file: 'docs/GUIDE.md', name: 'GUIDE', description: null },
+  ]);
+});
+
+test('parseDocEntries: missing/blank "file" throws', () => {
+  assert.throws(() => parseDocEntries([{ name: 'API' }]), /docs\[0\]: missing "file"/);
+  assert.throws(() => parseDocEntries([{ file: '   ' }]), /docs\[0\]: missing "file"/);
+});
+
+test('parseDocEntries: non-object entry throws', () => {
+  assert.throws(() => parseDocEntries(['docs/API.md']), /docs\[0\]: must be an object/);
+});
+
+test('parseDocEntries: non-array input throws', () => {
+  assert.throws(() => parseDocEntries('docs/API.md'), /manifest: "docs" must be an array/);
+});
+
+test('parseSkillEntries: file entry defaults name from basename without extension', () => {
+  assert.deepEqual(parseSkillEntries([{ file: 'skills/config.md' }]), [
+    { file: 'skills/config.md', dir: null, name: 'config', description: null },
+  ]);
+});
+
+test('parseSkillEntries: dir entry defaults name from the directory basename', () => {
+  assert.deepEqual(parseSkillEntries([{ dir: 'skills/deep-config' }]), [
+    { file: null, dir: 'skills/deep-config', name: 'deep-config', description: null },
+  ]);
+  assert.equal(parseSkillEntries([{ dir: 'skills/deep-config/' }])[0].name, 'deep-config');
+});
+
+test('parseSkillEntries: both file and dir throws', () => {
+  assert.throws(
+    () => parseSkillEntries([{ file: 'a.md', dir: 'skills/a' }]),
+    /skills\[0\]: exactly one of "file" or "dir" is required/
+  );
+});
+
+test('parseSkillEntries: neither file nor dir throws', () => {
+  assert.throws(
+    () => parseSkillEntries([{ name: 'a' }]),
+    /skills\[0\]: exactly one of "file" or "dir" is required/
+  );
+});
+
+test('parseSkillEntries: explicit name wins and description is normalized', () => {
+  assert.deepEqual(parseSkillEntries([{ dir: 'skills/a', name: ' Deep ', description: '  x  ' }]), [
+    { file: null, dir: 'skills/a', name: 'Deep', description: 'x' },
+  ]);
+});
+
+test('parseSkillEntries: non-array input throws', () => {
+  assert.throws(() => parseSkillEntries({}), /manifest: "skills" must be an array/);
 });
 
 // ─── resolveManifestPath ─────────────────────────────────────────────────────

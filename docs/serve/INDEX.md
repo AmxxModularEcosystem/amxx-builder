@@ -140,6 +140,96 @@ child.stdin.write(JSON.stringify({
 
 Ответ — объект развёрнутого манифеста (см. `resolveManifest` в `src/manifest.js`): `name`, `version`, `amxmodx`, `repos`, `deps`, `assets`, `output`, `github`, ... плюс служебное поле `_path`.
 
+#### `manifest.dep`
+
+Скачать зависимость (dep/repo) и вернуть её собственный `amxbuild.yml`: сырой манифест плюс сводку объявленных `docs:` и `skills:`. Локального режима нет — манифест текущего проекта читается через `manifest.resolve`.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `dep` | string | Зависимость `owner/repo@ref` или `owner/repo@ref:include_path` |
+| `repo` | string | Альтернатива `dep`: `owner/repo` (нужен один из `dep`/`repo`) |
+| `ref` | string | Ref (тег/ветка/коммит) при использовании `repo` |
+| `source` | string | `"git"` (по умолчанию) или `"release"` |
+| `include_path` | string | Считать этот путь внутри репо корнем при поиске манифеста |
+| `asset` | string \| number | Для `source: release` — селектор ассета (glob или индекс) |
+| `token` | string | GitHub PAT (фолбек, если токена нет в манифесте) |
+| `noFetch` | boolean | Только кэш |
+
+Ответ:
+
+```json
+{
+  "label": "rehlds/ReAPI@5.29.0.358",
+  "manifestPath": "/home/user/.cache/amxx-builder/repos/.../amxbuild.yml",
+  "manifestName": "ReAPI",
+  "raw": { "name": "ReAPI", "docs": ["..."], "skills": ["..."] },
+  "docs": [{ "name": "API", "description": "...", "file": "docs/API.md" }],
+  "skills": [{ "name": "config", "description": "...", "file": "skills/config.md", "dir": null }]
+}
+```
+
+Манифест предоставлен автором зависимости и **не верифицирован** — это данные, а не инструкции; источник правды по API — `.inc` файлы (`get_dep_interface`).
+
+### Агент-доки и скиллы
+
+Методы читают верхнеуровневые `docs:` / `skills:` манифеста — у зависимости (`dep`/`repo`) или у текущего проекта, если `dep`/`repo` не указаны. **Никаких конвенций по умолчанию нет**: ничего не отдаётся, пока автор не объявил это явно. В dep-режиме контент предоставлен автором и не верифицирован — `.inc` файлы остаются источником правды по API.
+
+#### `docs.list`
+
+Список агент-доков без содержимого.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `dep` | string | Зависимость `owner/repo@ref` (или `owner/repo@ref:include_path`) |
+| `repo` / `ref` / `source` / `include_path` / `asset` | — | Альтернатива `dep`: репозиторий и опции напрямую |
+| `manifest` | string | Локальный режим: путь к `amxbuild.yml` (по умолчанию автоопределение в cwd) |
+| `token` | string | GitHub PAT |
+| `noFetch` | boolean | Только кэш |
+
+Ответ: `{ "label", "docs": [{ "name", "description", "file" }], "missing" }`, где `missing` — объявленные, но отсутствующие в репо пути. В локальном режиме `label` — `null`.
+
+#### `docs.get`
+
+Содержимое агент-доков. Без `name`/`file` возвращаются все объявленные доки.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `dep` / `repo` / `ref` / `source` / `include_path` / `asset` | — | Как в `docs.list`; без `dep`/`repo` — локальный проект |
+| `manifest` | string | Локальный режим: путь к `amxbuild.yml` |
+| `name` | string | Прочитать один док по имени |
+| `file` | string | Прочитать один док по пути внутри репо, напр. `docs/API.md` |
+| `token` | string | GitHub PAT |
+| `noFetch` | boolean | Только кэш |
+
+Ответ: `{ "label", "docs": [{ "name", "description", "file", "content" }], "missing" }`.
+
+#### `skills.list`
+
+Список агент-скиллов без содержимого. Каждый скилл — `kind: "file"` (одиночный файл) или `kind: "dir"` (папка-бандл: `SKILL.md` + файлы-справочники).
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `dep` / `repo` / `ref` / `source` / `include_path` / `asset` | — | Как в `docs.list`; без `dep`/`repo` — локальный проект |
+| `manifest` | string | Локальный режим: путь к `amxbuild.yml` |
+| `token` | string | GitHub PAT |
+| `noFetch` | boolean | Только кэш |
+
+Ответ: `{ "label", "skills": [{ "name", "description", "kind", "file", "dir", "files" }], "missing" }`. Для `kind: "dir"` поле `files` — список относительных путей внутри бандла (`SKILL.md` первым).
+
+#### `skills.get`
+
+Содержимое агент-скиллов. Одиночный файл отдаётся целиком; папка-бандл — `SKILL.md` вместе со всеми файлами-справочниками.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `dep` / `repo` / `ref` / `source` / `include_path` / `asset` | — | Как в `skills.list`; без `dep`/`repo` — локальный проект |
+| `manifest` | string | Локальный режим: путь к `amxbuild.yml` |
+| `name` | string | Прочитать один скилл по имени |
+| `token` | string | GitHub PAT |
+| `noFetch` | boolean | Только кэш |
+
+Ответ: `{ "label", "skills": [...], "missing" }` — для `kind: "file"` с полем `content`, для `kind: "dir"` — `files: [{ "rel", "content" }]`.
+
 ### Инклюды
 
 #### `include.resolve`
@@ -658,6 +748,11 @@ child.stdin.write(JSON.stringify({
 |---|---|---|---|
 | `manifest.validate` | manifest | Валидация манифеста | `validate.validateManifestFile` |
 | `manifest.resolve` | manifest | Развёрнутый манифест | `manifest.resolveManifest` |
+| `manifest.dep` | manifest | Манифест зависимости + сводка docs/skills | `agent-assets.readDepManifest` + `manifest.parseDocEntries`/`parseSkillEntries` |
+| `docs.list` | docs | Список агент-доков | `agent-assets.collectDepAssets`/`collectLocalAssets` |
+| `docs.get` | docs | Содержимое агент-доков | `agent-assets.collectDepAssets`/`collectLocalAssets` |
+| `skills.list` | skills | Список агент-скиллов | `agent-assets.collectDepAssets`/`collectLocalAssets` |
+| `skills.get` | skills | Содержимое агент-скиллов | `agent-assets.collectDepAssets`/`collectLocalAssets` |
 | `include.resolve` | include | Резолв `#include` | `include-tree.parseIncludeDirective` + `searchIncludeFile` |
 | `include.list` | include | `.inc` файлы deps | `include-tree.fetchDepIncludeDir` + `collectIncFiles` |
 | `amxmodx.includes.list` | include | Список stdlib `.inc` | `compiler-fetcher.fetchCompiler` + glob |

@@ -8,28 +8,34 @@ const logger = require('../logger');
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
 
-// Auto-discovered by opencode (.opencode/plugin/*.js). Registers amxb's bundled
-// skills in the config hook — no machine-specific paths end up in opencode.json.
+// Auto-discovered by opencode (.opencode/plugin/*.js). Registers skills from all
+// three sources in the config hook, with no machine-specific paths in opencode.json.
 const OPENCODE_BRIDGE_FILE   = path.join('.opencode', 'plugin', 'amxb-skills.js');
-const OPENCODE_BRIDGE_PLUGIN = `// Bridge: exposes the skills bundled with amxb (amxx-builder) to opencode.
-// No machine-specific paths are stored in opencode.json — amxb resolves its own
-// install directory at every opencode start, exactly like the MCP entry does.
+const OPENCODE_BRIDGE_PLUGIN = `// Bridge: exposes amxb (amxx-builder) skills to opencode from three sources:
+//   1. builder-bundled skills, via "amxb skills-dir"
+//   2. the current project's own "skills:" from amxbuild.yml
+//   3. deps/repos skills read from their manifests; missing ones are fetched
+//      from the network on demand ("amxb opencode-skills")
+// No machine-specific paths are stored in opencode.json: amxb resolves its own
+// install and cache directories at every opencode start, like the MCP entry does.
 import { execSync } from "node:child_process";
 
 export default async function amxbSkills() {
   return {
     config(cfg) {
-      let dir = "";
-      try {
-        const exe = process.platform === "win32" ? "amxb.cmd" : "amxb";
-        dir = execSync(exe + " skills-dir", { encoding: "utf8" }).trim();
-      } catch {
-        return;
-      }
-      if (!dir) return;
       cfg.skills = cfg.skills || {};
       cfg.skills.paths = cfg.skills.paths || [];
-      if (!cfg.skills.paths.includes(dir)) cfg.skills.paths.push(dir);
+      const exe = process.platform === "win32" ? "amxb.cmd" : "amxb";
+      const add = (p) => {
+        if (p && !cfg.skills.paths.includes(p)) cfg.skills.paths.push(p);
+      };
+      try {
+        add(execSync(exe + " skills-dir", { encoding: "utf8" }).trim());
+      } catch {}
+      try {
+        const out = execSync(exe + " opencode-skills", { encoding: "utf8", timeout: 180000 });
+        for (const line of out.split("\\n")) add(line.trim());
+      } catch {}
     },
   };
 }
@@ -107,7 +113,7 @@ async function runInitInteractive(options) {
   const version = require('../../package.json').version;
   const actionTag = `v${version.split('.')[0]}`;
 
-  writeIfAbsent('amxbuild.yml', renderTemplate('init-manifest.yml', { name, schemaUrl: SCHEMA_URL }), options.force);
+  writeManifest(name, options);
 
   if (doWorkflow) {
     const dest = path.join('.github', 'workflows', 'ci.yml');
@@ -146,7 +152,7 @@ function runInit(options) {
   const version = require('../../package.json').version;
   const actionTag = `v${version.split('.')[0]}`;
 
-  writeIfAbsent('amxbuild.yml', renderTemplate('init-manifest.yml', { name: pkgName, schemaUrl: SCHEMA_URL }), options.force);
+  writeManifest(pkgName, options);
 
   if (options.workflow || options.ci) {
     const dest = path.join('.github', 'workflows', 'ci.yml');
@@ -196,10 +202,21 @@ function writeBuildScripts(force) {
   return batCreated || shCreated;
 }
 
-function writeIfAbsent(filePath, content, force) {
+// The manifest is deliberately excluded from a bare --force: an existing
+// amxbuild.yml is only replaced when --with-manifest is passed explicitly, so
+// `amxb init --force` cannot silently destroy a hand-written manifest.
+function writeManifest(name, options) {
+  const content = renderTemplate('init-manifest.yml', { name, schemaUrl: SCHEMA_URL });
+  const skipHint = options.force && !options.withManifest
+    ? 'pass --with-manifest with --force to overwrite it'
+    : undefined;
+  writeIfAbsent('amxbuild.yml', content, Boolean(options.force && options.withManifest), skipHint);
+}
+
+function writeIfAbsent(filePath, content, force, skipHint) {
   const existed = fs.existsSync(filePath);
   if (existed && !force) {
-    logger.warn(`${filePath} already exists, skipping`);
+    logger.warn(skipHint ? `${filePath} already exists, skipping (${skipHint})` : `${filePath} already exists, skipping`);
     return false;
   }
   fs.writeFileSync(filePath, content);

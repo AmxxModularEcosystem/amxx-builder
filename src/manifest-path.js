@@ -31,4 +31,21 @@ function resolveManifestPath(explicit) {
   return { path: path.join(cwd, 'amxbuild.yml'), usedDefault: true };
 }
 
-module.exports = { resolveManifestPath };
+/**
+ * Find the first existing manifest candidate inside a directory.
+ *
+ * Reuses MANIFEST_CANDIDATES so discovery order stays identical to
+ * resolveManifestPath. Returns an ABSOLUTE path, or null when none exists.
+ *
+ * @param {string} dir - directory to search
+ * @returns {string|null} absolute manifest path, or null
+ */
+function findManifestInDir(dir) {
+  for (const name of MANIFEST_CANDIDATES) {
+    const p = path.join(dir, name);
+    if (fs.existsSync(p)) return path.resolve(p);
+  }
+  return null;
+}
+
+module.exports = { resolveManifestPath, findManifestInDir };

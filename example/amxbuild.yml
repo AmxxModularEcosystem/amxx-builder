@@ -19,6 +19,22 @@ amxmodx:
 #   AmxxModularEcosystem: GITHUB_TOKEN_ORGA
 #   Next21Team:            GITHUB_TOKEN_ORGB
 
+# ── Агент-доки и скиллы ────────────────────────────────────────────────────────
+# Верхнеуровневые docs:/skills: проекта. Читаются агентом через MCP/serve,
+# в build/ и архив НЕ попадают. Ничего не отдаётся по умолчанию — только
+# явно объявленные записи. docs — файлы; skill — ровно одно из file/dir.
+# docs:
+#   - file: docs/API.md            # путь внутри репо (обязателен)
+#     name: API                     # по умолчанию — имя файла без расширения
+#     description: Публичный API плагина
+# skills:
+#   - file: skills/config.md        # одиночный скилл-файл
+#     name: config
+#     description: Как устроена система конфигурации
+#   - dir: skills/deep-config       # скилл-папка (SKILL.md + references)
+#     name: deep-config
+#     description: Расширенная настройка
+
 # ── Глобальные зависимости ────────────────────────────────────────────────────
 # Выигрывают над DEPS_LIST из любого репо
 deps:
@@ -31,7 +47,6 @@ deps:
     ref: latest               # 'latest' или конкретный тег
     source: release           # скачать release-asset вместо git clone
     include_path: addons/amxmodx/scripting/include
-    # docs: docs/API.md   # необязательно: агент-доки зависимости (путь внутри репо, markdown); без него ищутся docs/API.md / API.md
     # asset: "*.zip"          # необязательно: glob-паттерн имени файла (дефолт: первый .zip)
 
   # Полная форма — .inc закрытого плагина с fungun.net (ни репо, ни архива нет;

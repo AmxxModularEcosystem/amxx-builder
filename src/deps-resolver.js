@@ -136,7 +136,7 @@ function resolveIncludePath(repoDir, explicitPath, repoName) {
 /**
  * Fetch a dependency's root directory and return a human-readable label for it.
  * Single source of truth shared by the build pipeline, the MCP server and
- * dep-docs resolution.
+ * agent-assets resolution.
  *
  * `dep` is a parsed dep OBJECT ({ repo, ref, source, include_path, asset }).
  * GitHub token resolution (per-owner fallbacks) is an interface-layer concern —

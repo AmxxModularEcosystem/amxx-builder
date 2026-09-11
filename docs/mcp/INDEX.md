@@ -30,8 +30,11 @@ amxb mcp
 |---|---|---|
 | `get_dep_interface` | Посмотреть содержимое `.inc` файлов зависимости (API, функции, константы) | [→](tools/get_dep_interface.md) |
 | `list_dep_incs` | Узнать, какие `.inc` файлы есть в зависимости | [→](tools/list_dep_incs.md) |
-| `get_dep_docs` | Прочитать агент-доки зависимости (best practices, паттерны использования API) | [→](tools/get_dep_docs.md) |
-| `list_dep_docs` | Узнать, какие доки есть у зависимости | [→](tools/list_dep_docs.md) |
+| `get_dep_manifest` | Прочитать манифест зависимости и объявленные в нём `docs:`/`skills:` | [→](tools/get_dep_manifest.md) |
+| `list_agent_docs` | Список агент-доков текущего проекта или зависимости | [→](tools/list_agent_docs.md) |
+| `get_agent_docs` | Прочитать агент-доки текущего проекта или зависимости | [→](tools/get_agent_docs.md) |
+| `list_agent_skills` | Список агент-скиллов текущего проекта или зависимости | [→](tools/list_agent_skills.md) |
+| `get_agent_skills` | Прочитать агент-скиллы текущего проекта или зависимости | [→](tools/get_agent_skills.md) |
 | `get_dep_tree` | Построить дерево зависимостей (кто от кого зависит) | [→](tools/get_dep_tree.md) |
 | `resolve_manifest` | Прочитать и развернуть `amxbuild.yml` со всеми переопределениями | [→](tools/resolve_manifest.md) |
 | `validate_manifest` | Проверить `amxbuild.yml` на ошибки | [→](tools/validate_manifest.md) |

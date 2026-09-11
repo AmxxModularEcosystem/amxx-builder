@@ -80,6 +80,16 @@
       "description": "Global include dependencies (.inc files) applied to all plugin compilations.",
       "items": { "$ref": "#/definitions/depEntry" }
     },
+    "docs": {
+      "type": "array",
+      "description": "Agent-facing reference documentation declared by the project author. Exposed to agents via MCP/serve; never shipped in build/ or the archive.",
+      "items": { "$ref": "#/definitions/docEntry" }
+    },
+    "skills": {
+      "type": "array",
+      "description": "Agent-facing skills declared by the project author. Exposed to agents via MCP/serve; never shipped in build/ or the archive.",
+      "items": { "$ref": "#/definitions/skillEntry" }
+    },
     "repos": {
       "type": "array",
       "description": "GitHub repositories to pull AMX Mod X content from.",
@@ -242,6 +252,56 @@
         }
       }
     },
+    "docEntry": {
+      "type": "object",
+      "description": "An agent-facing reference documentation entry declared by the project author. Never shipped in build/ or the archive.",
+      "additionalProperties": false,
+      "required": ["file"],
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Path to the markdown document, relative to the repo root (e.g. \"docs/API.md\").",
+          "examples": ["docs/API.md", "API.md"]
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name. Defaults to the file basename without extension."
+        },
+        "description": {
+          "type": "string",
+          "description": "Short summary shown to agents when listing the available docs."
+        }
+      }
+    },
+    "skillEntry": {
+      "type": "object",
+      "description": "An agent-facing skill entry: exactly one of a single markdown file or a directory bundle (SKILL.md + references). Never shipped in build/ or the archive.",
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["file"] },
+        { "required": ["dir"] }
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Path to a single-file skill, relative to the repo root (e.g. \"skills/config.md\"). Mutually exclusive with \"dir\".",
+          "examples": ["skills/config.md"]
+        },
+        "dir": {
+          "type": "string",
+          "description": "Path to a directory-bundle skill (SKILL.md plus references), relative to the repo root. Mutually exclusive with \"file\".",
+          "examples": ["skills/deep-config"]
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name. Defaults to the file basename without extension, or the directory basename."
+        },
+        "description": {
+          "type": "string",
+          "description": "Short summary shown to agents when listing the available skills."
+        }
+      }
+    },
     "depEntry": {
       "description": "An include dependency. Either a shorthand string or an object.",
       "oneOf": [
@@ -300,13 +360,6 @@
                   "description": "Zero-based index of the release asset.",
                   "minimum": 0
                 }
-              ]
-            },
-            "docs": {
-              "description": "Path(s) inside the repo/asset to agent-facing documentation (markdown), relative to the repo root. Optional — falls back to docs/API.md / API.md in the repo root.",
-              "oneOf": [
-                { "type": "string" },
-                { "type": "array", "items": { "type": "string" } }
               ]
             }
           },
