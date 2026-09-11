@@ -11,7 +11,7 @@
 // index.js runs the build, so the output file is written regardless of how the
 // build itself ends (e.g. it may fail on the compiler fetch with --no-fetch).
 //
-// Usage: node scripts/smoke-test.js   (run after `npm run bundle`)
+// Usage: node scripts/smoke.js   (run after `npm run bundle`)
 
 const path    = require('path');
 const os      = require('os');

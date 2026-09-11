@@ -65,7 +65,7 @@ jobs:
         run: npm run bundle
 
       - name: Smoke-test dist/index.js
-        run: node scripts/smoke-test.js
+        run: node scripts/smoke.js
 
   build-dist:
     name: Rebuild & commit dist
