@@ -976,7 +976,17 @@ const TOOLS = [
             'Run amxxpc on a local .sma file without a full build and return the compiler output ' +
             '(status, errors, warnings). Resolves the compiler version and include dirs ' +
             '(stdlib + manifest deps) the same way a real build would. ' +
-            'Use it to iterate on code until it compiles clean.',
+            'Use it to iterate on code until it compiles clean.\n\n' +
+            'WSL / Windows-mounted paths: amxxpc is a 32-bit Linux binary and cannot READ ' +
+            'files on WSL DrvFs/9p mounts (e.g. /mnt/c, /mnt/d, /mnt/j). If sma_file — or any ' +
+            'include dir — lives under /mnt/*, compilation fails with "fatal error 100: ' +
+            'cannot read from file" (a directory used as an include path can abort it with ' +
+            'std::bad_alloc / SIGABRT), even though the file exists and Node can read it. ' +
+            'Writing output to /mnt/* is fine; only reads fail. This is an environment ' +
+            'limitation, not a code error. Alternative: compile from the Linux-native ' +
+            'filesystem — copy the .sma and its local include/ dir to e.g. ~/proj/ (the ' +
+            '~/.cache/amxx-builder cache is shared, nothing re-downloads) and pass that path, ' +
+            'or run the build on Windows.',
           inputSchema: {
             type: 'object',
             properties: {

@@ -651,3 +651,30 @@ sudo dpkg --add-architecture i386
 sudo apt update
 sudo apt install libc6:i386 libstdc++6:i386
 ```
+
+### Сборка падает на `/mnt/...` в WSL
+
+`amxxpc` — 32-битный Linux-бинарник, но под WSL он **не читает** файлы на
+Windows-дисках, смонтированных в `/mnt/*` (DrvFs/9p: `/mnt/c`, `/mnt/d`, `/mnt/j`, …).
+Node/bash эти файлы видят, поэтому ошибка выглядит «мистической»:
+
+- локальный `.sma` на `/mnt/*` → `fatal error 100: cannot read from file: ".../plugin.sma"`;
+- локальная папка `include/` на `/mnt/*` (идёт как `-i`) → `std::bad_alloc` / `Aborted` (SIGABRT).
+
+Плагины из `repos:` при этом собираются нормально — их исходники amxb кладёт в
+нативный кэш `~/.cache/amxx-builder`. Запись `.amxx` на `/mnt/*`, наоборот, работает.
+
+**Решение:** собирать из нативной Linux-файловой системы. Скопируйте проект в `~` —
+кэш компилятора и зависимостей общий, заново ничего не скачивается:
+
+```bash
+mkdir -p ~/amxb-build && cp -r amxmodx assets amxbuild.yml ~/amxb-build/
+cd ~/amxb-build && amxb build
+```
+
+Альтернативы: выполнять сборку на Windows (`build.bat` или `amxb build` в PowerShell)
+либо в CI. Команды без запуска компилятора (`amxb validate`, `amxb deps-tree`,
+`amxb build --dry-run`) под `/mnt/*` работают.
+
+> `amxb build --build-dir <нативный путь>` **не** решает проблему: локальные `.sma`
+> компилируются по месту, из папки проекта, а не из `build/`.
