@@ -1,18 +1,20 @@
 ---
 name: amxx-pawn-style
 description: >-
-  Coding conventions for AMXX Pawn (AMX Mod X / GoldSrc plugins: .sma and .inc
-  files) that eliminate Hungarian notation. Use when writing, editing,
-  refactoring, or reviewing Pawn plugin code, naming variables, constants, or
-  enums, or cleaning up legacy-style code. Enforces CamelCase globals,
-  camelCase locals and parameters, no type prefixes (g_, i, sz, b, Float:),
-  enum role prefixes (S_ struct, E_ enumeration, T_ tag), `new const NAME[]`
-  string constants, `playerIndex` instead of `id`, `const` on
-  effectively-constant parameters, per-player arrays sized `MAX_PLAYERS + 1`,
-  and explicit `bool:` tags. Triggers: AMXX, AMX Mod X, Pawn, Small, .sma,
-  .inc, plugin code style, naming convention, Hungarian notation, венгерская
-  нотация, стиль кода. Do NOT use for building, packaging, or deploying
-  servers (use amxb-migration / the amxb CLI), or for non-Pawn languages.
+  Coding conventions for AMXX Pawn (AMX Mod X / GoldSrc .sma and .inc plugins)
+  that eliminate Hungarian notation. Use when writing, editing, refactoring,
+  or reviewing Pawn code — variables, constants, enums, type tags, natives, or
+  plugin metadata. Enforces CamelCase globals, camelCase locals/parameters, no
+  type prefixes (g_, i, sz, b, Float:), enum role prefixes (S_, E_, T_),
+  namespaced tags with a named Invalid_* zero value, `new const NAME[]`
+  strings, `playerIndex` over `id`, `const` on non-mutated parameters,
+  `MAX_PLAYERS + 1` arrays, explicit `bool:`, `@NativeName` handlers
+  registered with style 0 (never style 1), and `PluginName`/`PluginVersion`
+  metadata. Triggers: AMXX, AMX Mod X, Pawn, Small, .sma, .inc, naming
+  convention, native, register_native, plugin metadata, PluginName, type tag,
+  Hungarian notation, венгерская нотация, стиль кода. Do NOT use for
+  building/packaging/deploying servers (use amxb-migration / the amxb CLI),
+  or for non-Pawn languages.
 ---
 
 # AMXX Pawn code style
@@ -21,7 +23,8 @@ Canonical naming and typing conventions for AMXX Pawn (AMX Mod X) code. The
 governing goal is to **remove Hungarian notation**: never encode a value's type
 or scope in its identifier. Pawn already has real type tags (`Float:`,
 `bool:`, custom enum tags), so the type belongs in the declaration, not in the
-name.
+name. It also fixes the plugin's public surface: how natives are named and
+registered, and how metadata is declared.
 
 Legacy plugins in the ecosystem are saturated with Hungarian prefixes
 (`g_iCount`, `szName`, `bEnabled`, `id`); agents trained on that code default
@@ -91,7 +94,8 @@ stock const API_VERSION[] = "1.2.0";
 ```
 
 Prefer `new const` over `#define` for typed constants; reserve `#define` for
-conditional compilation and macros.
+conditional compilation and macros. The plugin version string is a deliberate
+exception (see Metadata).
 
 ### 4. The player index is `playerIndex`
 
@@ -197,18 +201,27 @@ new playerTeam = TeamTerrorist;
 ```
 
 **Type / tag → `T_`.** The enum name is used as a tag to give its values a
-distinct type. Keep the tag and type the variables:
+distinct type. Keep the tag and type the variables. Namespace the tag by
+module/system — `T_<System>_<Name>` — so tags from different modules cannot
+collide, and declare a named zero value instead of writing an implicit
+`Tag:0`:
 
 ```pawn
-enum T_WeaponState
+enum T_Weapon_State
 {
+    Invalid_Weapon_State = 0,
     WeaponIdle,
     WeaponFiring,
     WeaponReloading
 }
 
-new T_WeaponState:weaponState = WeaponIdle;
+new T_Weapon_State:weaponState = Invalid_Weapon_State;
 ```
+
+`Invalid_<System>_<Name>` is the first `enum` member: it is a tagged constant
+equal to `0`, so it also works as a default parameter value. An implicit
+`Tag:0` literal is untagged and bypasses compile-time checking — use the named
+value instead.
 
 ## Hungarian → modern conversion
 
@@ -265,6 +278,60 @@ public client_command(playerIndex)
 - Renaming, `const`, and `bool:` additions must not change runtime behavior;
   compile and confirm zero new warnings/errors.
 
+## Plugin surface: natives and metadata
+
+The conventions extend to the two things a plugin exposes to the rest of the
+server: its natives and its metadata.
+
+### Natives
+
+Name the native handler `@` + the native's full name, and register it through
+`plugin_natives()`. Preferring a handler name identical to the registered name
+means one grep finds both ends; treat this as a preference, not a hard rule.
+
+```pawn
+public plugin_natives()
+{
+    register_native("Inventory_GiveItem", "@Inventory_GiveItem");
+}
+
+@Inventory_GiveItem(pluginId, argc)
+{
+    // ...
+}
+```
+
+- `@` already marks the function public, so do not also write `public` on an
+  `@` handler.
+- `pluginId` is the implicit first parameter of a native handler. AMXX has no
+  `GetPluginId()` native, so read the calling plugin's id from this parameter.
+- Register with the default style (omit the third argument). Never pass the
+  legacy style 1: AMXX keeps it only for compatibility with very old plugins
+  and it has known technical problems.
+
+### Metadata
+
+AMXX reads plugin metadata from `public const` string variables whose names
+are reserved and exact. Declare them at file scope; `register_plugin` in
+`plugin_init` is then optional and kept only for backward compatibility.
+
+```pawn
+public stock const PluginName[]        = "My Plugin";
+public stock const PluginVersion[]     = MyPlugin_VERSION;
+public stock const PluginAuthor[]      = "Author";
+public stock const PluginDescription[] = "Short summary";
+public stock const PluginURL[]         = "https://example.com/my-plugin";
+```
+
+- `PluginName`, `PluginVersion`, and `PluginAuthor` are the baseline.
+  `PluginDescription` and `PluginURL` are optional — declare them only when
+  they carry real information.
+- `PluginVersion` may reuse a `#define`d version from the plugin's public
+  include: `#define MyPlugin_VERSION "x.y.z"` there, consumed here. This is
+  optional and mostly useful for plugins that ship a public API (the include
+  then carries its own version); a self-contained plugin can use a `new const`
+  string instead.
+
 ## Gotchas
 
 - **`enum Name` creates a tag.** Assigning a member to a plain variable warns
@@ -284,6 +351,15 @@ public client_command(playerIndex)
   own declarations to `playerIndex`; keep passing natives unchanged.
 - **Tags are not prefixes.** Removing `Float:`/`bool:` to "de-Hungarianize" is
   wrong: keep the tag, drop the `f`/`b` name prefix.
+- **`@` is already public.** Writing `public` on an `@` native handler is a
+  syntax error — the `@` prefix *is* the public declaration form.
+- **Native registration style 1 is legacy.** It survives only for very old
+  plugins and has known technical problems; register with the default style.
+- **`pluginId` has no getter.** There is no `GetPluginId()` native; the calling
+  plugin id arrives as the handler's implicit first parameter.
+- **Metadata names are reserved and exact.** `PLUGIN_NAME` / `PLUGIN_VERSION`
+  are ordinary constants — AMXX reads only `PluginName` / `PluginVersion` /
+  `PluginAuthor` / `PluginDescription` / `PluginURL`.
 
 ## Must do
 
@@ -295,6 +371,13 @@ public client_command(playerIndex)
 - Size player-indexed arrays `MAX_PLAYERS + 1`.
 - Tag booleans `bool:` and use `true`/`false`.
 - Name enums by role: `S_` struct, `E_` enumeration (`enum _:`), `T_` tag.
+- Namespace type tags `T_<System>_<Name>` and give each a named
+  `Invalid_<System>_<Name> = 0` member.
+- Register natives with the default style (style 0); prefer `@` + the native's
+  full name for the handler.
+- Declare metadata with the reserved `PluginName` / `PluginVersion` /
+  `PluginAuthor` symbols, adding `PluginDescription` / `PluginURL` only when
+  they carry real information.
 - Compile after any refactor and confirm no new warnings or errors.
 
 ## Must not do
@@ -306,6 +389,11 @@ public client_command(playerIndex)
 - Do not encode type in the name — put it in the tag.
 - Do not blindly text-replace identifiers when refactoring.
 - Do not propagate a legacy file's style into newly added code.
+- Do not use an implicit `Tag:0`; use the named `Invalid_*` value.
+- Do not use legacy native registration style 1, or write `public` on an `@`
+  handler.
+- Do not name metadata `PLUGIN_NAME` / `PLUGIN_VERSION`; AMXX reads the exact
+  reserved symbols.
 
 ## Verification checklist
 
@@ -317,9 +405,18 @@ public client_command(playerIndex)
 - [ ] Player-indexed arrays use `MAX_PLAYERS + 1`.
 - [ ] Booleans use `bool:` and `true`/`false`.
 - [ ] Enums prefixed by role; `E_` uses `enum _:` when consumed as integers.
+- [ ] Type tags namespaced; each has a named `Invalid_*` zero value, no
+  `Tag:0`.
+- [ ] Native handlers use `@` + native name (preferred); register with style 0
+  (required).
+- [ ] Metadata uses the reserved `PluginName` / `PluginVersion` /
+  `PluginAuthor` symbols.
 - [ ] Compiles with no new warnings or errors.
 
 ## Not yet covered (extend here)
 
 Function/method naming, indentation and brace style, `#include` ordering,
-statement formatting, and module layout are not specified yet.
+statement formatting, and module layout are not specified yet. Plugin
+lifecycle (`plugin_precache` as the boot hook, custom-forward orchestration)
+is intentionally out of scope: it is architecture, not style, and belongs in a
+separate skill.
