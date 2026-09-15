@@ -11,7 +11,8 @@ const { deployBuild, deployPlugin, deployFile, removeDeployedFile } = require('.
 const { sendRconForPlugins } = require('../rcon');
 const { DepGraph }           = require('../dep-graph');
 const { startWatch }         = require('../watcher');
-const { fetchRepo, resolveRepoRefs } = require('../repo-fetcher');
+const { resolveRepoRefs } = require('../repo-fetcher');
+const { ensureRepoDir }   = require('../local-sources');
 const { resolveDeps, repoKey } = require('../deps-resolver');
 const { resolveManifestPath, loadEnv } = require('./shared');
 const { runBuild } = require('./build');
@@ -52,8 +53,14 @@ async function runWatch(options) {
       for (const repoConfig of manifest.repos) {
         const key = repoKey(repoConfig);
         if (!cloneJobs.has(key)) {
+          // Cache-only, like before; ensureRepoDir returns `_localDir` for
+          // local entries (no network, no noFetch check).
           cloneJobs.set(key,
-            fetchRepo(repoConfig.repo, repoConfig._resolvedRef, resolveGithubToken(manifest, repoConfig.repo), true, manifest.github.ssh)
+            ensureRepoDir(repoConfig, {
+              token: resolveGithubToken(manifest, repoConfig.repo),
+              noFetch: true,
+              ssh: manifest.github.ssh,
+            })
           );
         }
       }

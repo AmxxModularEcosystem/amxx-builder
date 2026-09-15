@@ -19,6 +19,7 @@ const path = require('path');
 const { fetchRepo, resolveRef } = require('./repo-fetcher');
 const { parseDepsLines }        = require('./manifest');
 const { normalize }             = require('./deps-resolver');
+const { isLocal }               = require('./local-sources');
 
 // ─── Public API ────────────────────────────────────────────────────────────────
 
@@ -128,11 +129,17 @@ async function walkDep(dep, ctx) {
   // ── Resolve ref (e.g. "latest" → concrete tag) ──────────────────────────
   let resolvedRef;
   let refError = null;
-  try {
-    resolvedRef = await resolveRef(repo, dep.ref, token);
-  } catch (err) {
-    resolvedRef = null;
-    refError = err.message;
+  if (isLocal(dep)) {
+    // Local sources have no remote ref to resolve — never touch the network.
+    // The 'local' sentinel is truthy, so a local repo's DEPS_LIST still expands.
+    resolvedRef = 'local';
+  } else {
+    try {
+      resolvedRef = await resolveRef(repo, dep.ref, token);
+    } catch (err) {
+      resolvedRef = null;
+      refError = err.message;
+    }
   }
 
   // ── Cycle vs shared detection ───────────────────────────────────────────
@@ -181,7 +188,8 @@ async function walkDep(dep, ctx) {
     repo,
     ref:         dep.ref || null,
     resolvedRef,
-    source:      dep.source || 'git',
+    source:      isLocal(dep) ? 'local' : (dep.source || 'git'),
+    localDir:    dep._localDir || null,
     include_path: dep.include_path || null,
     asset:       dep.asset != null ? dep.asset : null,
     from:        ctx.from,
@@ -204,7 +212,9 @@ async function getSubDeps(dep, resolvedRef, token, noFetch, getDepsOverride) {
   }
 
   // 2. Clone repo (or use cache) and read DEPS_LIST
-  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, false);
+  const repoDir = isLocal(dep)
+    ? dep._localDir
+    : await fetchRepo(dep.repo, resolvedRef, token, noFetch, false);
   const depsPath = path.join(repoDir, 'DEPS_LIST');
 
   if (!fs.existsSync(depsPath)) {

@@ -37,7 +37,8 @@ const logger = require('./logger');
 const { emit, EVENTS } = require('./events');
 const { resolveGithubToken } = require('./manifest');
 const { fetchCompiler }  = require('./compiler-fetcher');
-const { fetchRepo, resolveRepoRefs } = require('./repo-fetcher');
+const { resolveRepoRefs } = require('./repo-fetcher');
+const { ensureRepoDir }   = require('./local-sources');
 const { resolveDeps, repoKey, normalizeRepo } = require('./deps-resolver');
 const { compilePlugins } = require('./compiler');
 const { collectAll }     = require('./collector');
@@ -122,8 +123,13 @@ async function runBuild(manifest, options = {}) {
       for (const repoConfig of manifest.repos) {
         const identity = normalizeRepo(repoConfig);
         if (!cloneJobs.has(identity)) {
+          // ensureRepoDir returns `_localDir` for local entries (never fetches).
           cloneJobs.set(identity,
-            fetchRepo(repoConfig.repo, repoConfig._resolvedRef, resolveGithubToken(manifest, repoConfig.repo), noFetch, manifest.github.ssh)
+            ensureRepoDir(repoConfig, {
+              token: resolveGithubToken(manifest, repoConfig.repo),
+              noFetch,
+              ssh: manifest.github.ssh,
+            })
           );
         }
       }

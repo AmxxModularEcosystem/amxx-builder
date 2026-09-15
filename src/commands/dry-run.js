@@ -3,6 +3,7 @@
 const path = require('path');
 const logger = require('../logger');
 const { buildPlanData } = require('../build-plan');
+const { isLocal } = require('../local-sources');
 
 function printDryRun(manifest) {
   const out = manifest.output;
@@ -20,6 +21,10 @@ function printDryRun(manifest) {
   if (manifest.repos.length) {
     logger.info(`\nRepos (${manifest.repos.length}):`);
     for (const r of manifest.repos) {
+      if (isLocal(r)) {
+        logger.dim(`  [local] ${r.repo} -> ${r._localDir}  [dir: ${r.amxmodx_dir}]`);
+        continue;
+      }
       const ref = r.ref || 'default branch';
       logger.dim(`  ${r.repo} @ ${ref}  [dir: ${r.amxmodx_dir}]`);
     }
@@ -28,6 +33,10 @@ function printDryRun(manifest) {
   if (manifest.globalDeps.length) {
     logger.info(`\nGlobal deps (${manifest.globalDeps.length}):`);
     for (const d of manifest.globalDeps) {
+      if (isLocal(d)) {
+        logger.dim(`  [local] ${d.repo} -> ${d._localDir}${d.include_path ? ':' + d.include_path : ''}`);
+        continue;
+      }
       if (d.source === 'fungun') {
         logger.dim(`  [fungun] plugin #${d.id}  (${d.url})`);
         continue;

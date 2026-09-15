@@ -54,7 +54,8 @@ const { on, off, EVENTS } = require('../events');
 
 const { loadEnv } = require('../env');
 const { resolveManifestPath } = require('../manifest-path');
-const { resolveManifest, parseManifest, resolveGithubToken, parseDepString, parseDocEntries, parseSkillEntries } = require('../manifest');
+const { resolveManifest, parseManifest, resolveGithubToken, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries } = require('../manifest');
+const { resolveLocalEntry } = require('../local-sources');
 const { readDepManifest, collectDepAssets, collectLocalAssets } = require('../agent-assets');
 const { validateManifestFile } = require('../validate');
 const { collectIncFiles, parseIncludeDirective, searchIncludeFile } = require('../include-tree');
@@ -184,7 +185,9 @@ function resolveGithubTokenFor(params, repo) {
 function depFromParams(params) {
   let dep;
   if (params?.dep) {
-    dep = typeof params.dep === 'string' ? parseDepString(params.dep) : { ...params.dep };
+    if (typeof params.dep === 'string') dep = parseDepString(params.dep);
+    else if (params.dep.source === 'local') dep = parseDepObject(params.dep);
+    else dep = { ...params.dep };
   } else {
     if (!params?.repo) throw new Error('Provide either "dep" or "repo"');
     const source = params.source || 'git';
@@ -194,7 +197,10 @@ function depFromParams(params) {
   if (params?.source) dep.source = params.source;
   if (params?.include_path) dep.include_path = params.include_path;
   if (params?.asset != null) dep.asset = params.asset;
-  return dep;
+  return resolveLocalEntry(
+    dep,
+    params?.manifest ? path.dirname(path.resolve(params.manifest)) : process.cwd()
+  );
 }
 
 // Agent docs/skills: dep mode when dep/repo is present, otherwise the local

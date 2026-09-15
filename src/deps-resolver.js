@@ -3,6 +3,7 @@ const path = require('path');
 const glob = require('fast-glob');
 const logger = require('./logger');
 const { parseDepsLines, resolveGithubToken } = require('./manifest');
+const { isLocal } = require('./local-sources');
 const { fetchRepo, resolveRefIfLatest } = require('./repo-fetcher');
 const { fetchReleaseDep } = require('./release-fetcher');
 const { fetchFungunDep } = require('./fungun-fetcher');
@@ -10,6 +11,9 @@ const { fetchFungunDep } = require('./fungun-fetcher');
 /**
  * Resolves all deps, clones them, copies .inc files to build/_includes/,
  * and returns an array of include-dir paths to pass to the compiler (-i flags).
+ *
+ * Local deps (from ./local-sources) short-circuit first: their include dir is
+ * resolved from disk — no ref resolution, fetch or token lookup.
  *
  * Priority: manifest.globalDeps > repo.deps_override > DEPS_LIST file in repo root
  */
@@ -54,7 +58,9 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
 
   for (const [k, dep] of merged) {
     let srcDir;
-    if (dep.source === 'release') {
+    if (isLocal(dep)) {
+      srcDir = resolveIncludePath(dep._localDir, dep.include_path, dep.repo);
+    } else if (dep.source === 'release') {
       const token = resolveGithubToken(manifest, dep.repo);
       srcDir = await fetchReleaseDep(dep, token, noFetch);
     } else if (dep.source === 'fungun') {
@@ -138,6 +144,9 @@ function resolveIncludePath(repoDir, explicitPath, repoName) {
  * Single source of truth shared by the build pipeline, the MCP server and
  * agent-assets resolution.
  *
+ * Local deps short-circuit on disk before any release/fungun/git branch — they
+ * need no token, ref, fetch or `--no-fetch` handling.
+ *
  * `dep` is a parsed dep OBJECT ({ repo, ref, source, include_path, asset }).
  * GitHub token resolution (per-owner fallbacks) is an interface-layer concern —
  * callers pass the already-resolved token, this function never calls fallbackToken.
@@ -150,6 +159,17 @@ function resolveIncludePath(repoDir, explicitPath, repoName) {
  * @returns {Promise<{ rootDir: string, label: string }>}
  */
 async function fetchDepRoot(dep, { token, noFetch, ssh = false } = {}) {
+  if (isLocal(dep)) {
+    if (dep.include_path) {
+      const sub = path.join(dep._localDir, dep.include_path);
+      if (!fs.existsSync(sub)) {
+        throw new Error(`include_path "${dep.include_path}" not found in ${dep.repo}`);
+      }
+      return { rootDir: sub, label: `${dep.repo} (local)` };
+    }
+    return { rootDir: dep._localDir, label: `${dep.repo} (local)` };
+  }
+
   if (dep.source === 'release') {
     const dir = await fetchReleaseDep(dep, token, noFetch);
     return { rootDir: dir, label: `${dep.repo}@${dep.ref} (release)` };
@@ -173,10 +193,13 @@ async function fetchDepRoot(dep, { token, noFetch, ssh = false } = {}) {
 }
 
 /**
- * Fetch a dependency's include directory (release/fungun/git), using the
+ * Fetch a dependency's include directory (local/release/fungun/git), using the
  * fetch cache where possible.
  * Canonical single-source-of-truth shared by the build pipeline (include-tree),
  * the CLI, the serve interface and the MCP layer.
+ *
+ * Local deps are always on disk — short-circuit to their `_localDir` before any
+ * token/ref/fetch logic (`--no-fetch` is irrelevant for them).
  *
  * Explicit-include_path semantics: silently falls back to the repo root when
  * the given path does not exist (the interface callers rely on this).
@@ -188,6 +211,8 @@ async function fetchDepRoot(dep, { token, noFetch, ssh = false } = {}) {
  * @returns {Promise<string>} directory to use as the include dir
  */
 async function fetchDepIncludeDir(dep, token, noFetch, ssh = false) {
+  if (isLocal(dep)) return findDepIncludeDir(dep._localDir, dep.include_path);
+
   if (dep.source === 'release') {
     return fetchReleaseDep(
       { repo: dep.repo, ref: dep.ref, include_path: dep.include_path, asset: dep.asset },
@@ -218,6 +243,7 @@ async function fetchDepIncludeDir(dep, token, noFetch, ssh = false) {
  * interface's existing formatting.
  *
  * GitHub tokens are resolved per-owner via resolveGithubToken(manifest, repo);
+ * local deps skip the lookup entirely (null token — they never leave disk).
  * ssh must be passed explicitly by the caller (manifest.github.ssh).
  *
  * @param {object|null} manifest - parsed manifest (null → no deps)
@@ -233,7 +259,8 @@ async function collectDepIncludeDirs(manifest, { noFetch = false, ssh = false } 
   for (let i = 0; i < deps.length; i++) {
     const dep = deps[i];
     try {
-      dirs[i] = await fetchDepIncludeDir(dep, resolveGithubToken(manifest, dep.repo), noFetch, ssh);
+      const token = isLocal(dep) ? null : resolveGithubToken(manifest, dep.repo);
+      dirs[i] = await fetchDepIncludeDir(dep, token, noFetch, ssh);
     } catch (err) {
       errors[i] = err && err.message ? err.message : String(err);
     }
@@ -245,10 +272,14 @@ async function collectDepIncludeDirs(manifest, { noFetch = false, ssh = false } 
 // and dedup by core modules that previously inlined repo.toLowerCase()).
 function normalize(repo) { return repo.toLowerCase(); }
 
-// Human-readable dep label (fungun deps: no repo@ref — addressed by shop page id).
+// Human-readable dep label (fungun deps: no repo@ref — addressed by shop page
+// id; local deps: synthetic local/<name> id, versioned by the working tree).
 function depLabel(dep) {
   if (dep && dep.source === 'fungun') {
     return `fungun.net plugin #${dep.id}`;
+  }
+  if (isLocal(dep)) {
+    return `${dep.repo} (local)`;
   }
   return `${dep.repo}@${dep.ref || 'default branch'}`;
 }

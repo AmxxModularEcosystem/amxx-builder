@@ -25,6 +25,8 @@ axios.defaults.timeout = 30000;
 const simpleGit = require('simple-git');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
+// Top-level is safe: local-sources lazy-requires this module (no cycle).
+const { isLocal } = require('./local-sources');
 
 function getRepoCacheDir(repo, ref) {
   // Lowercased key: GitHub repo names are case-insensitive, but filesystems
@@ -138,14 +140,22 @@ async function resolveRefIfLatest(ref, repo, token) {
  * Single source of the "for each repo: ref === 'latest' → resolve tag" loop
  * shared by the build pipeline, deps-tree and include-tree. Repos with a
  * concrete ref get `_resolvedRef = repoConfig.ref`; `latest` refs are resolved
- * via the GitHub API (cached 1h). Rejects if any resolution fails.
+ * via the GitHub API (cached 1h). Local entries (`_localDir`, see
+ * ./local-sources) have no remote ref — they short-circuit to the `'local'`
+ * sentinel with no network call. Rejects if any resolution fails.
  *
- * @param {Object[]} repos - manifest.repos entries ({ repo, ref, ... })
+ * @param {Object[]} repos - manifest.repos entries ({ repo, ref, _localDir, ... })
  * @param {(repo: string) => string|null} tokenFor - per-repo token resolver,
  *   e.g. (repo) => resolveGithubToken(manifest, repo)
  */
 async function resolveRepoRefs(repos, tokenFor) {
   await Promise.all(repos.map(async (repoConfig) => {
+    // Local sources are never fetched, but downstream dedup/cache-key logic
+    // reads `_resolvedRef` — keep the sentinel stable.
+    if (isLocal(repoConfig)) {
+      repoConfig._resolvedRef = 'local';
+      return;
+    }
     repoConfig._resolvedRef = await resolveRefIfLatest(
       repoConfig.ref,
       repoConfig.repo,

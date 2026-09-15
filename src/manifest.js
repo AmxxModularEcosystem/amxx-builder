@@ -4,6 +4,7 @@ const path = require('path');
 
 const { validateManifest: validateSchema } = require('./schema');
 const { parsePluginRef } = require('./fungun-fetcher');
+const { synthesizeLocalId, applyLocalOverrides } = require('./local-sources');
 
 const DEFAULTS_PATH  = path.join(__dirname, '..', 'defaults', 'amxbuild.defaults.yml');
 
@@ -60,7 +61,7 @@ function parseManifest(manifestPath) {
   const repos  = (raw.repos || []).map((r) => parseRepoEntry(r, globalPostfix, globalAmxDir));
   const output = raw.output || {};
 
-  return {
+  const manifest = {
     _path:    absPath,
     name:     raw.name,
     version:  parseVersion(raw.version),
@@ -92,6 +93,9 @@ function parseManifest(manifestPath) {
       on_conflict:  validateOnConflict(output.on_conflict),
     },
   };
+
+  applyLocalOverrides(manifest, process.env);
+  return manifest;
 }
 
 function parseVersion(val) {
@@ -152,11 +156,30 @@ function parseRepoEntry(r, globalPostfix, globalAmxDir) {
     const ref   = atIdx === -1 ? null     : r.slice(atIdx + 1).trim() || null;
     return makeRepo({ repo, ref }, globalPostfix, globalAmxDir);
   }
+  if (r && r.source === 'local') return makeRepo(r, globalPostfix, globalAmxDir);
   if (!r.repo) throw new Error(`manifest: repo entry missing "repo" field: ${JSON.stringify(r)}`);
   return makeRepo(r, globalPostfix, globalAmxDir);
 }
 
 function makeRepo(r, globalPostfix, globalAmxDir) {
+  if (r.source === 'local') {
+    if (typeof r.path !== 'string' || r.path.trim() === '') {
+      throw new Error('manifest: repo entry source "local" requires "path"');
+    }
+    if (r.repo != null) throw new Error('manifest: repo entry source "local" does not support "repo"');
+    if (r.ref  != null) throw new Error('manifest: repo entry source "local" does not support "ref"');
+    return {
+      repo:                synthesizeLocalId(r.name, r.path),
+      ref:                 null,
+      source:              'local',
+      amxmodx_dir:         r.amxmodx_dir || globalAmxDir,
+      plugins_ini_postfix: r.plugins_ini_postfix != null ? String(r.plugins_ini_postfix) : globalPostfix,
+      exclude:             r.exclude       || [],
+      exclude_files:       r.exclude_files || [],
+      deps_override:       r.deps_override ? parseDepsLines(r.deps_override) : null,
+      _localPathRaw:       r.path,
+    };
+  }
   return {
     repo:                r.repo,
     ref:                 r.ref || null,
@@ -187,10 +210,11 @@ const DEP_STRING_RE = /^([^@\s]+)@([^:\s]+)(?::(.+))?$/;
 function parseDepObject(line) {
   const source = line.source || 'git';
 
+  if (source === 'local')  return parseLocalDepObject(line);
   if (source === 'fungun') return parseFungunDepObject(line);
 
   if (!['git', 'release'].includes(source)) {
-    throw new Error(`Dep entry "source" must be "git", "release" or "fungun": ${JSON.stringify(line)}`);
+    throw new Error(`Dep entry "source" must be "git", "release", "fungun" or "local": ${JSON.stringify(line)}`);
   }
   if (line.id != null || line.url != null) {
     throw new Error(`Dep entry "id"/"url" are only valid with "source: fungun": ${JSON.stringify(line)}`);
@@ -203,6 +227,34 @@ function parseDepObject(line) {
     include_path: line.include_path ? String(line.include_path).trim() : null,
     source,
     asset:        line.asset != null ? line.asset : null,
+  };
+}
+
+/**
+ * Parse a long-form local dep. The `.inc` files come from a directory next to
+ * the manifest (or an absolute path) instead of GitHub. The parsed object
+ * carries a synthetic stable `repo` (`local/<name>`) so shared dep-dedup /
+ * dest-dir / cache-key logic in deps-resolver and include-tree keeps working
+ * unchanged.
+ */
+function parseLocalDepObject(line) {
+  if (typeof line.path !== 'string' || line.path.trim() === '') {
+    throw new Error(`Dep entry source "local" requires "path": ${JSON.stringify(line)}`);
+  }
+  for (const field of ['repo', 'ref', 'id', 'url', 'asset']) {
+    if (line[field] != null) {
+      throw new Error(
+        `Dep entry source "local" does not support "${field}": ${JSON.stringify(line)}`
+      );
+    }
+  }
+  return {
+    repo:         synthesizeLocalId(line.name, line.path),
+    ref:          null,
+    source:       'local',
+    include_path: line.include_path ? String(line.include_path).trim() : null,
+    asset:        null,
+    _localPathRaw: line.path,
   };
 }
 

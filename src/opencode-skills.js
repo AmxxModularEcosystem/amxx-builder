@@ -159,7 +159,7 @@ async function collectDepRepoSkills(manifest, { noFetch, ssh, tokenFor, fetchRoo
   const entries = [
     ...((manifest && manifest.globalDeps) || []).map((dep) => ({ dep, source: 'dep' })),
     ...((manifest && manifest.repos) || []).map((r) => ({
-      dep: { repo: r.repo, ref: r.ref, source: 'git', include_path: null, asset: null },
+      dep: { repo: r.repo, ref: r.ref, source: r.source || 'git', include_path: null, asset: null, _localDir: r._localDir || null },
       source: 'repo',
     })),
   ];

@@ -15,6 +15,7 @@ const { validateManifestFile }  = require('../src/validate');
 const { getManifestSchema }     = require('../src/schema');
 const { getCacheInfo }          = require('../src/cache-info');
 const { buildDepTree, assembleRootDeps } = require('../src/deps-tree');
+const { isLocal, resolveLocalEntry } = require('../src/local-sources');
 const { buildIncludeTree, fetchDepIncludeDir, parseIncludeDirective, searchIncludeFile, collectIncFiles } = require('../src/include-tree');
 const { listReleases, listTags } = require('../src/release-lister');
 const { buildPlanData }         = require('../src/build-plan');
@@ -80,7 +81,21 @@ function parseDep(raw) {
   throw new Error('Dep must be a string or an object');
 }
 
+// A local dep's declared `path` is relative to the manifest dir when one is in
+// scope, else the process cwd.
+function depBaseDir(args) {
+  return args?.manifest ? path.dirname(path.resolve(args.manifest)) : process.cwd();
+}
+
+// Materialize a user-supplied `source: local` dep (parsed to `_localPathRaw`)
+// into an absolute `_localDir` via the core helper — no path logic in adapters.
+function resolveUserDep(dep, args) {
+  return resolveLocalEntry(dep, depBaseDir(args));
+}
+
 function resolveDepRef(dep, token) {
+  // Local sources have no remote ref to resolve — never touch the network.
+  if (isLocal(dep)) return 'local';
   return resolveRefIfLatest(dep.ref, dep.repo, token);
 }
 
@@ -161,7 +176,7 @@ async function handleGetDepInterface(args, token, noFetch) {
   token = fallbackToken(token);
   let dep;
   try {
-    dep = parseDep(args?.dep || args);
+    dep = resolveUserDep(parseDep(args?.dep || args), args);
   } catch (parseErr) {
     return errorResult(parseErr.message);
   }
@@ -206,7 +221,7 @@ async function handleListDepIncs(args, token, noFetch) {
   token = fallbackToken(token);
   let dep;
   try {
-    dep = parseDep(args?.dep || args);
+    dep = resolveUserDep(parseDep(args?.dep || args), args);
   } catch (parseErr) {
     return errorResult(parseErr.message);
   }
@@ -238,7 +253,9 @@ async function handleGetDepTree(args, token, noFetch) {
   let tokenFor = null;
 
   if (args?.manifest) {
-    const manifest = parseManifest(path.resolve(args.manifest));
+    const manifestPath = path.resolve(args.manifest);
+    loadEnv(manifestPath, { quiet: true });
+    const manifest = parseManifest(manifestPath);
     tokenFor = (repo) => resolveGithubToken(manifest, repo);
     const assembled = assembleRootDeps(manifest);
     rootDeps = assembled.rootDeps;
@@ -249,7 +266,7 @@ async function handleGetDepTree(args, token, noFetch) {
         const parsed = parseDep(entry);
         return { repo: parsed.repo, ref: parsed.ref, source: parsed.source, include_path: parsed.include_path, asset: parsed.asset };
       }
-      return { repo: entry.repo, ref: entry.ref, source: entry.source || 'git', include_path: entry.include_path || null, asset: entry.asset != null ? entry.asset : null };
+      return { repo: entry.repo, ref: entry.ref, source: entry.source || 'git', include_path: entry.include_path || null, asset: entry.asset != null ? entry.asset : null, _localDir: entry._localDir || null };
     });
   } else {
     return errorResult('Provide either "manifest" or "deps"', -32602);
@@ -345,6 +362,7 @@ async function resolveStdlibState(args, noFetch) {
   if (!args?.version) {
     const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
     if (fs.existsSync(manifestPath)) {
+      loadEnv(manifestPath, { quiet: true });
       try {
         manifest = parseManifest(manifestPath);
       } catch (err) {
@@ -468,6 +486,7 @@ async function handleResolveInclude(args, token, noFetch) {
   const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
   const depErrors = [];
   if (fs.existsSync(manifestPath)) {
+    loadEnv(manifestPath, { quiet: true });
     let manifest = null;
     try {
       manifest = parseManifest(manifestPath);
@@ -560,7 +579,7 @@ function depFromArgs(args) {
   if (args?.source)        dep.source = args.source;
   if (args?.include_path)  dep.include_path = args.include_path;
   if (args?.asset != null) dep.asset = args.asset;
-  return dep;
+  return resolveUserDep(dep, args);
 }
 
 async function handleListRepoFiles(args, token, noFetch) {
@@ -654,7 +673,9 @@ function isDepMode(args) {
 
 // Local-mode assets come from the current project's own manifest `docs:`/`skills:`.
 function resolveLocalAssets(args) {
-  return collectLocalAssets(parseManifest(resolveManifestPath(args?.manifest).path));
+  const manifestPath = resolveManifestPath(args?.manifest).path;
+  loadEnv(manifestPath, { quiet: true });
+  return collectLocalAssets(parseManifest(manifestPath));
 }
 
 // Shared empty-state text for the list/get handlers (never an error).
@@ -889,6 +910,7 @@ async function handleCompileSma(args, token, noFetch) {
   const depErrors = [];
   const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
   if (fs.existsSync(manifestPath)) {
+    loadEnv(manifestPath, { quiet: true });
     let manifest = null;
     try {
       manifest = parseManifest(manifestPath);
@@ -952,6 +974,7 @@ async function handleCompileSma(args, token, noFetch) {
 async function handleResolveAssets(args) {
   const manifestPath = resolveManifestPath(args?.manifest).path;
   const fullPath = path.resolve(manifestPath);
+  loadEnv(fullPath, { quiet: true });
 
   let manifest;
   try {
@@ -1008,6 +1031,7 @@ async function handleSearchSymbol(args, token, noFetch) {
   const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
   let manifest = null;
   if (fs.existsSync(manifestPath)) {
+    loadEnv(manifestPath, { quiet: true });
     try {
       manifest = parseManifest(manifestPath);
     } catch (err) {
@@ -1038,7 +1062,9 @@ async function handleSearchSymbol(args, token, noFetch) {
   // canonical core helper (sequential, ssh-aware); user deps stay individual
   // parallel jobs.
   const manifestDeps = manifest?.globalDeps?.length ? manifest.globalDeps : [];
-  const userDeps = manifest?.globalDeps?.length ? [] : (args?.deps || []).map(parseDep);
+  const userDeps = manifest?.globalDeps?.length
+    ? []
+    : (args?.deps || []).map((entry) => resolveUserDep(parseDep(entry), args));
   if (scope === 'all' || scope === 'deps') {
     const ssh = manifest?.github?.ssh === true;
     if (manifestDeps.length) {

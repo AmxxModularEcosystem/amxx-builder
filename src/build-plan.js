@@ -3,6 +3,7 @@
 const fs   = require('fs');
 const path = require('path');
 const glob = require('fast-glob');
+const { isLocal } = require('./local-sources');
 
 /**
  * Structured build plan — mirrors what printDryRun shows, but as data.
@@ -35,18 +36,21 @@ function buildPlanData(manifest, options = {}) {
     },
     repos: manifest.repos.map((r) => ({
       repo: r.repo,
-      ref: r.ref || 'default branch',
+      source: isLocal(r) ? 'local' : (r.source || 'git'),
+      ref: isLocal(r) ? null : (r.ref || 'default branch'),
       amxmodx_dir: r.amxmodx_dir,
       deps_override: r.deps_override || null,
+      local_dir: r._localDir || null,
     })),
     globalDeps: manifest.globalDeps.map((d) => ({
-      source: d.source,
-      repo: d.source === 'fungun' ? null : d.repo,
-      ref: d.ref,
+      source: isLocal(d) ? 'local' : d.source,
+      repo: isLocal(d) ? d.repo : (d.source === 'fungun' ? null : d.repo),
+      ref: isLocal(d) ? null : d.ref,
       id: d.id ?? null,
       url: d.url ?? null,
       include_path: d.include_path || null,
       asset: d.asset ?? null,
+      local_dir: d._localDir || null,
     })),
     assets: manifest.assets.sources.map((s) => {
       if (detailed) {

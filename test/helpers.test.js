@@ -103,7 +103,7 @@ test('parseDepObject: missing ref throws', () => {
 test('parseDepObject: bad source throws', () => {
   assert.throws(
     () => parseDepObject({ repo: 'a/b', ref: 'v1', source: 'npm' }),
-    /"source" must be "git", "release" or "fungun"/
+    /"source" must be "git", "release", "fungun" or "local"/
   );
 });
 

@@ -342,7 +342,7 @@ child.stdin.write(JSON.stringify({
 | `token` | string | GitHub PAT |
 | `noFetch` | boolean | Только кэш |
 
-Ответ — дерево из `buildDepTree` (см. `src/deps-tree.js`): `{ "dependencies": [...] }` с полями `repo`, `ref`, `resolvedRef`, `source`, `from`, `error`, `cycle`, `shared`, `dependencies`.
+Ответ — дерево из `buildDepTree` (см. `src/deps-tree.js`): `{ "dependencies": [...] }` с полями `repo`, `ref`, `resolvedRef`, `source`, `localDir`, `from`, `error`, `cycle`, `shared`, `dependencies`. Для локальных источников `source` = `"local"`, `localDir` — абсолютный путь.
 
 ### Граф `#include`-зависимостей
 
@@ -561,7 +561,7 @@ child.stdin.write(JSON.stringify({
 | `detailedAssets` | boolean | Развёрнутая информация об ассетах (`map`, `source`, `cache`, файлы локальных) |
 | `listLocal` | boolean | Листинг файлов локальных ассетов (по умолчанию true) |
 
-Ответ — объект `buildPlanData` (см. `src/build-plan.js`): `name`, `version`, `compiler`, `repos`, `deps`, `assets`, `output`, ...
+Ответ — объект `buildPlanData` (см. `src/build-plan.js`): `name`, `version`, `compiler`, `repos`, `deps`, `assets`, `output`, ... Элементы `repos[]` и `globalDeps[]` несут `source` (`"local"` для локального источника) и `local_dir` (абсолютный путь или `null`); для локальных записей `ref` равен `null`.
 
 ### Сборка
 

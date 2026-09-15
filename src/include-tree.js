@@ -29,6 +29,7 @@ const glob = require('fast-glob');
 const { parseManifest, resolveGithubToken } = require('./manifest');
 const { fetchCompiler, fetchLatestVersion } = require('./compiler-fetcher');
 const repoFetcher = require('./repo-fetcher');
+const { ensureRepoDir } = require('./local-sources');
 const { normalize, normalizeRepo, depLabel, fetchDepIncludeDir, readDepsListFile } = require('./deps-resolver');
 const { loadEnv }           = require('./env');
 const { resolveManifestPath } = require('./manifest-path');
@@ -593,7 +594,8 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
     if (repoDirs.has(key)) return repoDirs.get(key);
     let dir = null;
     try {
-      dir = await repoFetcher.fetchRepo(repoConfig.repo, repoConfig._resolvedRef, tokenFor(repoConfig.repo), noFetch, manifest.github.ssh);
+      // ensureRepoDir short-circuits to `_localDir` for local entries.
+      dir = await ensureRepoDir(repoConfig, { token: tokenFor(repoConfig.repo), noFetch, ssh: manifest.github.ssh });
     } catch (_) { /* unresolvable — cached as null below */ }
     repoDirs.set(key, dir);
     return dir;

@@ -45,6 +45,26 @@ amxb mcp
 | `build_include_tree` | Построить дерево `#include` для плагина | [→](tools/build_include_tree.md) |
 | `list_releases` | Узнать доступные версии (релизы/тэги) GitHub репозитория | [→](tools/list_releases.md) |
 
+## Локальные источники
+
+`repos:`/`deps:` могут указывать на локальную папку (`source: local` + `path`), а `AMXB_LOCAL_SOURCES` перенаправляет уже объявленные записи на локальные каталоги. Инструменты отражают это так:
+
+- `build_plan` (данные `buildPlanData`): у элементов `repos[]` и `globalDeps[]` есть `source` (`"local"` для локального источника) и `local_dir` (абсолютный путь или `null`); для локальных записей `ref` равен `null`.
+- `get_dep_tree`: узлы локальных записей несут `source: "local"` и `localDir` (абсолютный путь).
+- `validate_manifest`: локальная запись проходит схему как `{ source: local, path, name? }` (для dep ещё `include_path?`); у локального репо также допустимы `amxmodx_dir`, `plugins_ini_postfix`, `exclude`, `exclude_files`, `deps_override`.
+
+```yaml
+repos:
+  - source: local
+    path: ../ProjectA
+    name: projecta
+deps:
+  - source: local
+    path: ../Shared
+    name: shared
+    include_path: scripting/include
+```
+
 ## Кэш
 
 Все инструменты используют общий кэш (`~/.cache/amxx-builder`). Параметр `no_fetch: true` заставляет работать только с уже закэшированными данными без хождения в сеть.
