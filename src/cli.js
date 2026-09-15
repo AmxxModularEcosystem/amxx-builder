@@ -254,6 +254,8 @@ program
   .option('--opencode',      'Create .opencode/opencode.json (MCP config) + skills bridge plugin (amxb mcp)')
   .option('--deploy',        'Create .env with deploy stubs (AMXB_DEPLOY_*)')
   .option('--script',        'Create build.bat and build.sh quick-build scripts')
+  .option('--vscode',        'Create .vscode/extensions.json with recommended extensions')
+  .option('--vsc',           'Alias for --vscode')
   .option('-f, --force',     'Overwrite existing files instead of skipping them')
   .option('--with-manifest', 'With --force, also overwrite an existing amxbuild.yml')
   .option('-i, --interactive', 'Interactive mode with prompts')

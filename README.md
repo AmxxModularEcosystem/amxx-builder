@@ -60,6 +60,11 @@ $env:AMXB_VERSION="v1.2.3"; irm https://raw.githubusercontent.com/AmxxModularEco
 
 Расширение для VSCode - [AMXB — AMX Mod X Builder](https://marketplace.visualstudio.com/items?itemName=amxx-modular-ecosystem.amxb-vscode).
 
+Команда `amxb init --vscode` создаёт `.vscode/extensions.json` с рекомендациями расширений
+для AMXX-проекта (`Faktor.amxx-pawn-all-in` + `amxx-modular-ecosystem.amxb-vscode`).
+Существующий файл не перезаписывается: рекомендации проекта сохраняются, недостающие
+добавляются.
+
 ## Использование
 
 ```bash
@@ -81,6 +86,7 @@ amxb init --plugin <name>           # + создать amxmodx/scripting/<name>.
 amxb init --workflow                # + создать .github/workflows/ci.yml
 amxb init --script                  # + создать build.bat / build.sh для быстрого запуска amxb build
 amxb init --opencode                # + создать .opencode/ (opencode.json с MCP-конфигом + мост скиллов)
+amxb init --vscode                  # + создать .vscode/extensions.json с рекомендациями расширений (алиас: --vsc)
 amxb init --force                   # перезаписать существующие файлы (по умолчанию пропускаются)
 amxb init --force --with-manifest   # + перезаписать и существующий amxbuild.yml (без --with-manifest манифест не трогается)
 

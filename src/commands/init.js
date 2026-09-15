@@ -8,6 +8,12 @@ const logger = require('../logger');
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 const SCHEMA_URL    = 'https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/master/schema/amxbuild.schema.json';
 
+// Written to .vscode/extensions.json by `amxb init --vscode`.
+const VSCODE_EXTENSIONS = [
+  'Faktor.amxx-pawn-all-in',
+  'amxx-modular-ecosystem.amxb-vscode',
+];
+
 // Auto-discovered by opencode (.opencode/plugin/*.js). Registers skills from all
 // three sources in the config hook, with no machine-specific paths in opencode.json.
 const OPENCODE_BRIDGE_FILE   = path.join('.opencode', 'plugin', 'amxb-skills.js');
@@ -98,6 +104,12 @@ async function runInitInteractive(options) {
     initial: true,
   }).run();
 
+  const doVscode = await new Confirm({
+    name: 'vscode',
+    message: 'Create .vscode/extensions.json with recommended extensions?',
+    initial: true,
+  }).run();
+
   const actions = [];
   actions.push('amxbuild.yml');
   if (doWorkflow) actions.push('.github/workflows/ci.yml');
@@ -106,6 +118,7 @@ async function runInitInteractive(options) {
   if (doDeploy) actions.push('.env');
   if (doOpencode) actions.push('.opencode/opencode.json');
   if (doScript) actions.push('build.bat', 'build.sh');
+  if (doVscode) actions.push('.vscode/extensions.json');
 
   logger.info('Creating:');
   for (const a of actions) logger.dim(`  ${a}`);
@@ -145,6 +158,10 @@ async function runInitInteractive(options) {
   if (doScript) {
     writeBuildScripts(options.force);
   }
+
+  if (doVscode) {
+    writeVscodeExtensions();
+  }
 }
 
 function runInit(options) {
@@ -183,6 +200,10 @@ function runInit(options) {
 
   if (options.script) {
     writeBuildScripts(options.force);
+  }
+
+  if (options.vscode || options.vsc) {
+    writeVscodeExtensions();
   }
 }
 
@@ -267,6 +288,46 @@ function writeOpencodeConfig() {
 function writeOpencodeBridge(force) {
   fs.mkdirSync(path.dirname(OPENCODE_BRIDGE_FILE), { recursive: true });
   writeIfAbsent(OPENCODE_BRIDGE_FILE, OPENCODE_BRIDGE_PLUGIN, force);
+}
+
+// The extensions file is shared with the user's own editor setup, so it is
+// merged rather than overwritten: existing recommendations are preserved and
+// only the missing amxb entries are appended.
+function writeVscodeExtensions() {
+  const dir  = '.vscode';
+  const file = path.join(dir, 'extensions.json');
+
+  if (!fs.existsSync(file)) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ recommendations: VSCODE_EXTENSIONS }, null, 2) + '\n');
+    logger.success(`Created ${file}`);
+    return;
+  }
+
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    logger.warn(`${file} exists but is invalid JSON, skipping`);
+    return;
+  }
+
+  if (cfg === null || typeof cfg !== 'object' || Array.isArray(cfg)) {
+    logger.warn(`${file} is not a JSON object, skipping`);
+    return;
+  }
+
+  const current = Array.isArray(cfg.recommendations) ? cfg.recommendations : [];
+  const missing = VSCODE_EXTENSIONS.filter((id) => !current.includes(id));
+
+  if (missing.length === 0) {
+    logger.warn(`${file} already recommends the amxb extensions, skipping`);
+    return;
+  }
+
+  cfg.recommendations = current.concat(missing);
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  logger.success(`Updated ${file} with recommended extensions`);
 }
 
 function renderTemplate(name, vars = {}) {

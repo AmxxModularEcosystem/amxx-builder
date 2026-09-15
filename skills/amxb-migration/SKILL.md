@@ -468,7 +468,8 @@ plugins-*.ini
 # инструменты / редактор
 .omo/
 .codegraph/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 .claude/
 node_modules/
 ```
@@ -484,6 +485,13 @@ node_modules/
   `amxb build`) — только если файлов ещё нет. Если `build.bat`/`build.sh`
   уже существуют — **заменяем их вручную** тонкими (init их не тронет без
   `--force`).
+- `amxb init --vscode` (алиас `--vsc` — сокращение, не отдельный флаг)
+  создаёт `.vscode/extensions.json` с рекомендациями расширений
+  (`Faktor.amxx-pawn-all-in`, `amxx-modular-ecosystem.amxb-vscode`).
+  Существующий файл **не перезаписывается**: рекомендации проекта
+  сохраняются, недостающие amxb-расширения добавляются. Файл коммитим
+  (`extensions.json` — единственный отслеживаемый файл в `.vscode/`,
+  см. Шаг 6).
 - Старые скрипты сборки (`config.bat`, `build-debug.bat`,
   `build-release.bat`, `.build-config`, `deps.txt` после переноса данных в
   манифест, старые `*.zip`, `.build/`) — удаляем.

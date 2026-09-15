@@ -38,6 +38,7 @@ Entry: `index.js` (CLI via `commander`). Action: `action-entry.js` → synthesis
 | `amxb init` | Scaffold manifest and optional files |
 | `amxb init --force` | Scaffold, overwriting existing files (default: skip) |
 | `amxb init --script` | Also create `build.bat` / `build.sh` quick-build scripts |
+| `amxb init --vscode` | Also create `.vscode/extensions.json` with recommended extensions (alias `--vsc`; merges into an existing file) |
 | `amxb clean` | Clean build/ and clone cache |
 | `amxb clean --all` | Also clean compiler cache |
 | `amxb cache info` | Show cache contents |
