@@ -1,0 +1,22 @@
+# Build artifacts
+*.amxx
+*.zip
+build/
+dist/
+plugins-*.ini
+
+# Legacy bat build output (projects migrated onto amxb)
+.build
+
+# amxb: secrets and cache
+.env
+.env.local
+.amxb-cache/
+
+# Tooling / editor
+.omo/
+.codegraph/
+.vscode/*
+!.vscode/extensions.json
+.claude/
+node_modules/

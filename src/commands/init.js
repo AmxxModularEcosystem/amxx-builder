@@ -141,9 +141,7 @@ async function runInitInteractive(options) {
   }
 
   if (doGitignore) {
-    writeIfAbsent('.gitignore', [
-      '*.amxx', '*.zip', '.env', '.amxb-cache', '.claude', 'build', 'dist', '',
-    ].join('\n'), options.force);
+    writeGitignore(options.force);
   }
 
   if (doDeploy) {
@@ -184,9 +182,7 @@ function runInit(options) {
   }
 
   if (options.gitignore) {
-    writeIfAbsent('.gitignore', [
-      '*.amxx', '*.zip', '.env', '.amxb-cache', '.claude', 'build', 'dist', '',
-    ].join('\n'), options.force);
+    writeGitignore(options.force);
   }
 
   if (options.deploy) {
@@ -205,6 +201,12 @@ function runInit(options) {
   if (options.vscode || options.vsc) {
     writeVscodeExtensions();
   }
+}
+
+// Shared by both init paths; also the .gitignore basis the amxb-migration skill
+// reuses, so keep templates/init-gitignore in sync with its step 6.
+function writeGitignore(force) {
+  return writeIfAbsent('.gitignore', renderTemplate('init-gitignore'), force);
 }
 
 function writeBuildScripts(force) {
