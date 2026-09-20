@@ -107,6 +107,7 @@ function buildPlanData(manifest, options = {}) {
             enabled: manifest.pluginIni.enabled,
             default: manifest.pluginIni.defaultIni,
             debug: manifest.pluginIni.defaultDebug,
+            force_debug: manifest.pluginIni.forceDebug,
           }
         : null,
       on_conflict: out.on_conflict,
