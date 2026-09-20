@@ -56,18 +56,33 @@ deps:
     id: 106                   # https://fungun.net/shop/?p=show&id=106
     # url: https://fungun.net/shop/?p=show&id=106   # альтернатива id
 
-# ── Имя ini-файла: plugins-{postfix}.ini ─────────────────────────────────────
-plugins_ini_postfix: myserver
-
-# ── Управление локальными плагинами ──────────────────────────────────────────
-# Применяется только к amxmodx/scripting/. Первое совпадение побеждает.
-# plugins:
-#   - match: "VipM/*.sma"
-#     ini: vipm             # → plugins-vipm.ini (переопределяет plugins_ini_postfix)
-#   - match: "utils/*.sma"
-#     ini: false            # компилировать, но не добавлять ни в один INI
-#   - match: "legacy.sma"
-#     enabled: false        # пропустить полностью (не компилировать, не деплоить)
+# ── INI плагинов: plugins.defaults / plugins.rules / repos[].plugins ──────────
+# defaults — базовый слой для ВСЕХ плагинов (локальных и из репо).
+# rules   — glob-правила только для локальных amxmodx/scripting/*.sma,
+#           первое совпадение побеждает.
+#
+# ini:
+#   false       → скомпилировать, но не включать ни в один INI
+#   true / ""   → plugins.ini
+#   "<postfix>" → plugins-<postfix>.ini
+#   не задано   → наследуется у нижнего слоя
+# debug: true   → к строке плагина добавляется " debug"
+# enabled: false → пропустить плагин полностью (не компилировать, не деплоить)
+#
+# Приоритет: rules → repos[].plugins → plugins.defaults → выключено.
+# Генерация INI включается сама, как только любое эффективное ini не false.
+plugins:
+  defaults:
+    ini: myserver           # → plugins-myserver.ini
+    debug: false
+  rules:
+    - match: "VipM/*.sma"
+      ini: vipm             # → plugins-vipm.ini
+      debug: true           # vip_core.amxx debug
+    - match: "utils/*.sma"
+      ini: false            # компилировать, но не добавлять ни в один INI
+    - match: "legacy.sma"
+      enabled: false        # пропустить полностью (не компилировать, не деплоить)
 
 # ── Репозитории ───────────────────────────────────────────────────────────────
 repos:
@@ -78,7 +93,9 @@ repos:
   - repo: AmxxModularEcosystem/VipModular
     ref: 5.0.0-rc4f1      # ветка, тег или SHA; "latest" → последний GitHub release
     amxmodx_dir: amxmodx  # переопределяет amxmodx.dir для этого репо
-    plugins_ini_postfix: vip
+    plugins:              # INI-настройки плагинов этого репо
+      ini: vip            # → plugins-vip.ini
+      debug: false
     deps_override:        # если задан — DEPS_LIST из репо игнорируется
       - AmxxModularEcosystem/VipModular@5.0.0-rc4f1
 
@@ -163,5 +180,6 @@ output:
   dir: ./dist
   archive_name: "{name}-{version}.zip"   # default: "{name}.zip"
   amxmodx_path: addons/amxmodx           # default: "{name}/addons/amxmodx"
-  generate_ini: true                     # default: false
+  # Генерация INI теперь управляется секцией plugins (см. выше).
+  # Устаревшее поле output.generate_ini ещё принимается, но пишет предупреждение.
   # on_conflict: last_wins               # last_wins (default) / first_wins / error

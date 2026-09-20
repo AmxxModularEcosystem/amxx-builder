@@ -8,7 +8,8 @@
 #   amxmodx_path: "{name}/addons/amxmodx"
 #   assets_path:  "{name}"
 #   readme: true
-#   generate_ini: false
+#
+# INI плагинов не генерируется, пока нигде не задано значение ini.
 
 name: ExampleLocal
 
@@ -17,3 +18,19 @@ amxmodx:
 
 deps:
   - AmxxModularEcosystem/ParamsController@1.4.0
+
+# Единая настройка INI: defaults — базовый слой для всех плагинов,
+# rules — glob-правила только для локальных amxmodx/scripting/*.sma.
+# ini: false — не включать в INI; true/"" — plugins.ini; "<postfix>" — plugins-<postfix>.ini
+plugins:
+  defaults:
+    ini: local           # → plugins-local.ini
+    debug: false
+  rules:
+    - match: "utils/*.sma"
+      ini: false         # компилировать, но не включать ни в один INI
+    - match: "*Test*.sma"
+      enabled: false     # полностью пропустить
+    - match: "VipM/*.sma"
+      ini: vipm          # → plugins-vipm.ini
+      debug: true        # vip_core.amxx debug

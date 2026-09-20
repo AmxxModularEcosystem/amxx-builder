@@ -346,7 +346,8 @@ AMXB_LOCAL_SOURCES='Org/Repo=../Repo' amxb build
    #   archive → /abs/path/./{name}.zip
    #   amxmodx path in archive: {name}/addons/amxmodx/
    #   assets path: {name}/
-   #   generate_ini: false  |  on_conflict: last_wins
+   #   plugins ini: enabled  |  default: plugins-core.ini  |  debug: false
+   #   on_conflict: last_wins
    ```
    Вопросы пользователю про структуру задаём **только если** фактическая
    раскладка отличается от дефолтной и это принципиально (серверная сборка,
@@ -381,23 +382,48 @@ AMXB_LOCAL_SOURCES='Org/Repo=../Repo' amxb build
    deps:
      - Owner/Repo@tag
 
-   # plugins-*.ini: по умолчанию НЕ генерируется (generate_ini: false).
-   # Если старой сборке ini не нужен — ничего добавлять не надо.
-   # Если нужен (как в старой сборке) — включить генерацию и постфикс:
-   # plugins_ini_postfix: core        # → plugins-core.ini
-   # output:
-   #   generate_ini: true
+   # INI плагинов (plugins-*.ini) по умолчанию НЕ генерируется: пока нигде
+   # не задано значение ini, файлов нет. Если старой сборке ini не нужен —
+   # ничего добавлять не надо. Если нужен (как в старой сборке) — одна секция:
+   # plugins:
+   #   defaults:
+   #     ini: core           # → plugins-core.ini для всех плагинов
    ```
-6. **Правила `plugins:`** — фильтрация локальных плагинов (к репо-плагинам
-   не применяются). Первое совпадение побеждает. Например, исключить из
-   сборки тестовые/легаси `.sma`:
+6. **Секция `plugins`** — единая настройка INI. `defaults` применяется ко
+   **всем** плагинам (локальным и из репо) как базовый слой; `rules` —
+   glob-правила **только для локальных** `.sma` (`amxmodx/scripting/`),
+   первое совпадение побеждает. Например, исключить тестовые/легаси исходники
+   и развести остальные по INI:
    ```yaml
    plugins:
-     - match: "*Test*.sma"
-       enabled: false
-     - match: "utils/*.sma"
-       ini: false          # компилировать, но не включать ни в один INI
+     defaults:
+       ini: core           # базовый INI → plugins-core.ini
+       debug: false        # true → к строке плагина добавляется " debug"
+     rules:
+       - match: "*Test*.sma"
+         enabled: false    # полностью пропустить (не компилировать, не деплоить)
+       - match: "utils/*.sma"
+         ini: false        # компилировать, но не включать ни в один INI
+       - match: "VipM/*.sma"
+         ini: vipm         # → plugins-vipm.ini
+         debug: true
    ```
+   Значения `ini`: `false` — не включать в INI; `true` или `""` — `plugins.ini`;
+   `"<postfix>"` — `plugins-<postfix>.ini`. Приоритет:
+   `rules` → `repos[].plugins` → `plugins.defaults` → выключено. У плагинов из
+   `repos:` INI настраивается на самом репо:
+   ```yaml
+   repos:
+     - repo: Owner/Repo
+       plugins:
+         ini: vip          # → plugins-vip.ini
+         debug: false
+   ```
+   Генерация INI включается автоматически, как только любое эффективное `ini`
+   не `false`. Старая форма `plugins:` — массив правил без `defaults` — ещё
+   принимается; поля `output.generate_ini`, `plugins_ini_postfix` и
+   `repos[].plugins_ini_postfix` устарели (продолжают работать, но пишут
+   предупреждение при сборке).
 7. Помнить особенности amxb:
    - локальная папка `amxmodx/` всегда выигрывает у файлов из репо
      (намеренный слой переопределения, предупреждений нет);
@@ -568,7 +594,7 @@ amxb build             # полная сборка
   2. файл **не пустой** — пустой `.sma` (0 байт) даёт ровно ту же ошибку.
      Пустые `.sma` не должны попадать в сборку: `amxb init --plugin` создаёт
      пустую заготовку, и если она осталась в `scripting/` — это ложный след.
-     Такие файлы удаляем или исключаем (`plugins:` → `enabled: false`).
+     Такие файлы удаляем или исключаем (`plugins.rules:` → `enabled: false`).
   3. Если файлы на месте и непустые, а ошибка **для всех** файлов при верных
      путях → проблема окружения, не манифеста (например, WSL: amxxpc
      32-битный и не читает `/mnt/*` — DrvFs/9p — хотя Node/bash файл видят;
@@ -602,7 +628,7 @@ amxb build             # полная сборка
 - [ ] Внешние include сопоставлены с источниками; не найденные после разбора CI/скриптов — согласованы с пользователем
 - [ ] При «репо не найден» (404): сначала проверены токены из `.env`, затем у пользователя запрошен токен/уточнение имени — вывод «репо не существует» без подтверждения не делался
 - [ ] Дефолтная раскладка проверена `amxb build --dry-run`; вопросы про структуру — только при отличии от дефолта
-- [ ] `amxbuild.yml`: name, deps, ini/постфикс при необходимости; `amxmodx.version` не указан (последний компилятор), кроме AMXX <= 1.8.3
+- [ ] `amxbuild.yml`: name, deps, INI (`plugins.defaults` / `plugins.rules`, при необходимости); `amxmodx.version` не указан (последний компилятор), кроме AMXX <= 1.8.3
 - [ ] Версии deps: последняя проверена сборкой → иначе версия из проекта/CI → иначе вопрос; в манифесте конкретные теги, не «latest»
 - [ ] Приватные deps: 404 обработан как «приватный/опечатка» → `github.tokens` + `.env` (в .gitignore)
 - [ ] `.gitignore`: шаблон amxb + сохранены специфичные строки проекта
