@@ -32,7 +32,7 @@ function buildIniFiles(compiledPlugins, buildDir) {
         lines.push('', `; Source: ${repoId}`);
         lastRepo = repoId;
       }
-      lines.push(p.amxxName);
+      lines.push(p.debug ? `${p.amxxName} debug` : p.amxxName);
     }
     lines.push('');
 
