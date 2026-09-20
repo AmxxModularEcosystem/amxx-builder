@@ -34,7 +34,7 @@ inputs:
       Override any manifest field. One entry per line:
         version=1.2.3
         output.archive_name={name}-{version}.zip
-        output.generate_ini=false
+        plugins.defaults.ini=myserver
         github.tokens.MyOrg=GITHUB_TOKEN_MYORG
     required: false
   github-token:

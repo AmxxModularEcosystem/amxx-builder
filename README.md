@@ -155,27 +155,65 @@ my-server/
       weapon.wav
 ```
 
-## Управление локальными плагинами
+## Управление плагинами и INI
 
-Поле `plugins:` позволяет фильтровать и распределять плагины из `amxmodx/scripting/` по INI-файлам. Применяется **только к локальным** плагинам; плагины из репо используют `plugins_ini_postfix` своего репо. Первое совпадение побеждает.
+Секция `plugins:` описывает, какие плагины попадают в INI-файлы, как эти файлы называются и добавлять ли к строке плагина ` debug`. Она состоит из двух частей:
+
+- `defaults:` — базовый слой, применяется ко **всем** плагинам (локальным и из репо);
+- `rules:` — glob-правила **только для локальных** `.sma` из `amxmodx/scripting/`; первое совпадение побеждает.
 
 ```yaml
-plugins_ini_postfix: myserver   # глобальный постфикс → plugins-myserver.ini
-
 plugins:
-  - match: "VipM/*.sma"
-    ini: vipm             # → plugins-vipm.ini
-  - match: "utils/*.sma"
-    ini: false            # компилировать, но не включать ни в один INI
-  - match: "wip/*.sma"
-    enabled: false        # полностью пропустить (не компилировать, не деплоить)
+  defaults:
+    ini: myserver        # базовый INI для всех плагинов → plugins-myserver.ini
+    debug: false         # true → к каждой строке добавляется " debug"
+  rules:
+    - match: "VipM/*.sma"
+      ini: vipm          # → plugins-vipm.ini (переопределяет defaults)
+      debug: true        # vip_core.amxx debug
+    - match: "utils/*.sma"
+      ini: false         # компилировать, но не включать ни в один INI
+    - match: "wip/*.sma"
+      enabled: false     # полностью пропустить (не компилировать, не деплоить)
 ```
 
-| Поле | По умолчанию | Описание |
-| --- | --- | --- |
-| `match` | — | Glob-паттерн относительно `scripting/` |
-| `enabled` | `true` | `false` — пропустить компиляцию и деплой |
-| `ini` | `plugins_ini_postfix` | Постфикс INI, `false` — не включать в INI |
+Плагины из репозитория настраиваются на самом репо:
+
+```yaml
+repos:
+  - repo: Org/VipModular
+    plugins:
+      ini: vip           # → plugins-vip.ini
+      debug: false
+```
+
+**Значения `ini`:**
+
+| Значение | Результат |
+| --- | --- |
+| `false` | Скомпилировать, но не включать ни в один INI |
+| `true` или `""` | Включить в `plugins.ini` |
+| `"<postfix>"` | Включить в `plugins-<postfix>.ini` |
+| не задано | Наследуется у более низкого слоя приоритета |
+
+**Поля:**
+
+| Поле | Где | По умолчанию | Описание |
+| --- | --- | --- | --- |
+| `defaults.ini` | `plugins` | — | Базовый INI для всех плагинов |
+| `defaults.debug` | `plugins` | `false` | `true` — к строке плагина добавляется ` debug` |
+| `rules[].match` | `plugins` | — | Glob-паттерн относительно `scripting/` |
+| `rules[].enabled` | `plugins` | `true` | `false` — пропустить компиляцию и деплой |
+| `rules[].ini` | `plugins` | `defaults.ini` | Значение `ini` для совпавших локальных плагинов |
+| `rules[].debug` | `plugins` | `defaults.debug` | `debug` для совпавших локальных плагинов |
+| `repos[].plugins.ini` | репо | `defaults.ini` | Значение `ini` для плагинов этого репо |
+| `repos[].plugins.debug` | репо | `defaults.debug` | `debug` для плагинов этого репо |
+
+**Приоритет:** `plugins.rules` → `repos[].plugins` → `plugins.defaults` → выключено (без INI). Правила `rules` действуют только на локальные плагины; `defaults` и `repos[].plugins` — на все.
+
+Генерация INI включается сама, как только любое эффективное значение `ini` не `false` (задано в `defaults`, в правиле или на репо). Если `defaults.ini` при этом не задан, а INI включён только правилом или репо, все остальные плагины попадают в `plugins.ini`. Если `ini` не задано нигде — INI-файлы не создаются.
+
+Старая форма `plugins:` — массив правил без `defaults` — ещё принимается. Поля `output.generate_ini`, верхнеуровневый `plugins_ini_postfix` и `repos[].plugins_ini_postfix` устарели: они продолжают работать, но при сборке пишут предупреждение. Используйте вместо них `plugins.defaults.ini` и `repos[].plugins`.
 
 ## Удалённые ассеты
 
@@ -321,8 +359,9 @@ repos:
   - source: local
     path: ../ProjectA          # относительно папки манифеста (или абсолютный)
     name: projecta             # необязательно; по умолчанию basename пути
-    # также поддерживаются amxmodx_dir, plugins_ini_postfix,
+    # также поддерживаются amxmodx_dir, plugins (ini/debug),
     # exclude, exclude_files, deps_override
+    # устаревший plugins_ini_postfix ещё принимается (с предупреждением)
 ```
 
 `path` обязателен, `name` необязателен. Внутренний id такой записи: `local/<name>`, по умолчанию `local/<basename пути>`. Поля `repo` и `ref` указывать нельзя. `DEPS_LIST` и `deps_override` локального репо продолжают работать.
@@ -699,8 +738,8 @@ curl -fsSL https://raw.githubusercontent.com/AmxxModularEcosystem/amxx-builder/m
 
 | Что | Порядок (↑ выше) |
 | --- | --- |
-| плагины `plugins:` | правила применяются по порядку, первое совпадение побеждает |
-| `plugins_ini_postfix` | правило `plugins:` → репо → глобальный |
+| плагины (`plugins.rules`) | правила применяются по порядку, первое совпадение побеждает |
+| INI плагинов | `plugins.rules` → `repos[].plugins` → `plugins.defaults` → выключено |
 | зависимости | `manifest.deps` → `deps_override` → `DEPS_LIST` файл в репо |
 | локальные источники | `AMXB_LOCAL_SOURCES` (env) → манифест `source: local` → GitHub |
 | ассеты | порядок в `sources:` + `on_conflict` |

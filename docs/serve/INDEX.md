@@ -563,6 +563,15 @@ child.stdin.write(JSON.stringify({
 
 Ответ — объект `buildPlanData` (см. `src/build-plan.js`): `name`, `version`, `compiler`, `repos`, `deps`, `assets`, `output`, ... Элементы `repos[]` и `globalDeps[]` несут `source` (`"local"` для локального источника) и `local_dir` (абсолютный путь или `null`); для локальных записей `ref` равен `null`.
 
+INI-настройки плана лежат в `output`:
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `generate_ini` | boolean | Включена ли генерация INI по единой секции `plugins` (любое эффективное значение `ini` не `false`). |
+| `plugins_ini` | object \| null | Аддитивная сводка базового слоя: `{ enabled, default, debug }`. `enabled` — генерируется ли INI; `default` — `false`, когда INI выключены, иначе эффективный постфикс (`""` → `plugins.ini`, иначе `plugins-<default>.ini`); `debug` — базовый флаг debug из `plugins.defaults`. `null`, если манифест не нёс `pluginIni`. |
+
+`generate_ini` отражает фактическое состояние (а не сырое устаревшее поле): для манифестов со старыми `output.generate_ini` / `plugins_ini_postfix` / `repos[].plugins_ini_postfix` работает адаптация, и в `generate_ini` попадает её результат.
+
 ### Сборка
 
 #### `build.start`

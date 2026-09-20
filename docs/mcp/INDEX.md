@@ -51,7 +51,7 @@ amxb mcp
 
 - `build_plan` (данные `buildPlanData`): у элементов `repos[]` и `globalDeps[]` есть `source` (`"local"` для локального источника) и `local_dir` (абсолютный путь или `null`); для локальных записей `ref` равен `null`.
 - `get_dep_tree`: узлы локальных записей несут `source: "local"` и `localDir` (абсолютный путь).
-- `validate_manifest`: локальная запись проходит схему как `{ source: local, path, name? }` (для dep ещё `include_path?`); у локального репо также допустимы `amxmodx_dir`, `plugins_ini_postfix`, `exclude`, `exclude_files`, `deps_override`.
+- `validate_manifest`: локальная запись проходит схему как `{ source: local, path, name? }` (для dep ещё `include_path?`); у локального репо также допустимы `amxmodx_dir`, `plugins`, `exclude`, `exclude_files`, `deps_override`. Поле `plugins` (`{ ini, debug }`) настраивает INI плагинов этого репо; устаревший `plugins_ini_postfix` ещё принимается, но пишет предупреждение при сборке.
 
 ```yaml
 repos:
