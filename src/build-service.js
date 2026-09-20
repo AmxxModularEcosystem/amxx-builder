@@ -46,6 +46,19 @@ const { fetchAssets }    = require('./asset-fetcher');
 const { buildIniFiles }  = require('./ini-builder');
 const { createArchive, copyOutput } = require('./archiver');
 
+// Legacy manifest knobs (output.generate_ini, *.plugins_ini_postfix) still work
+// but warn. Watch/serve call runBuild repeatedly with the same manifest, so the
+// same warning is emitted only once per process to avoid rebuild-time noise.
+const loggedDeprecations = new Set();
+
+function logDeprecations(manifest) {
+  for (const message of manifest._deprecations || []) {
+    if (loggedDeprecations.has(message)) continue;
+    loggedDeprecations.add(message);
+    logger.warn(message);
+  }
+}
+
 /**
  * Run the full build pipeline for an already-resolved manifest.
  *
@@ -86,6 +99,8 @@ async function runBuild(manifest, options = {}) {
       emitEvent(EVENTS.ERROR, payload);
     } catch (_) { /* no subscriber — keep the original error surface */ }
   };
+
+  logDeprecations(manifest);
 
   // Cancellation is checked between stages. Compilation itself is atomic per
   // plugin and runs to completion — cancellation only takes effect at the next
@@ -170,7 +185,7 @@ async function runBuild(manifest, options = {}) {
     );
 
     // ── 7. Generate plugins-*.ini ───────────────────────────────────────────
-    if (manifest.output.generate_ini) {
+    if (manifest.pluginIni.enabled) {
       emitEvent(EVENTS.STAGE, { stage: 'ini', message: 'Generating plugins ini files' });
       buildIniFiles(compiledPlugins, buildDir);
     }

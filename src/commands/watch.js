@@ -21,6 +21,13 @@ const { subscribeCompiledRendering } = require('./compile-renderer');
 // Render compiler 'compiled' events (previously direct stdout/stderr writes).
 subscribeCompiledRendering();
 
+// Watch never regenerates INI files, so applyPluginRule is only used as a skip
+// check here; the base only has to be a valid defaults layer.
+function pluginRuleBase(manifest) {
+  const { defaultIni, defaultDebug } = manifest.pluginIni;
+  return { ini: defaultIni, debug: defaultDebug === true };
+}
+
 async function runWatch(options) {
   const manifestPath = resolveManifestPath(options.manifest);
   const buildDir     = path.resolve(options.buildDir || './build');
@@ -151,7 +158,7 @@ async function runWatch(options) {
       return enqueue(async () => {
         state.depGraph.update(smaPath);
         const smaRel = path.relative(state.scriptingRootDir, smaPath).split(path.sep).join('/');
-        const pluginRule = applyPluginRule(smaRel, state.manifest.pluginRules, state.manifest.globalPostfix);
+        const pluginRule = applyPluginRule(smaRel, state.manifest.plugins.rules, pluginRuleBase(state.manifest));
         if (!pluginRule) {
           logger.dim(`  Skipped by plugin rule: ${smaRel}`);
           return;
@@ -185,7 +192,7 @@ async function runWatch(options) {
           const compiled = [];
           for (const smaPath of affected) {
             const smaRel = path.relative(state.scriptingRootDir, smaPath).split(path.sep).join('/');
-            const pluginRule = applyPluginRule(smaRel, state.manifest.pluginRules, state.manifest.globalPostfix);
+            const pluginRule = applyPluginRule(smaRel, state.manifest.plugins.rules, pluginRuleBase(state.manifest));
             if (!pluginRule) {
               logger.dim(`  Skipped by plugin rule: ${smaRel}`);
               continue;

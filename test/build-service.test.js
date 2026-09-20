@@ -31,6 +31,22 @@ function useTempCache() {
   return dir;
 }
 
+function withTempCache(t) {
+  const dir = useTempCache();
+  t.after(() => {
+    if (ORIG_CACHE_ENV === undefined) delete process.env.AMXX_BUILDER_CACHE;
+    else process.env.AMXX_BUILDER_CACHE = ORIG_CACHE_ENV;
+  });
+  return dir;
+}
+
+function seedCompiler(cache) {
+  writeFile(cache, `amxxpc/1.10.5428/${PLATFORM}/${BIN}`, 'mock-binary');
+  if (PLATFORM !== 'windows') {
+    fs.chmodSync(path.join(cache, 'amxxpc', '1.10.5428', PLATFORM, BIN), 0o755);
+  }
+}
+
 function writeFile(dir, rel, content = '') {
   const p = path.join(dir, rel);
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -38,7 +54,7 @@ function writeFile(dir, rel, content = '') {
   return p;
 }
 
-function emptyManifest(manifestDir) {
+function emptyManifest(manifestDir, overrides = {}) {
   return {
     name: 'B2Test',
     version: '1.0.0',
@@ -46,8 +62,9 @@ function emptyManifest(manifestDir) {
     _path: path.join(manifestDir, 'amxbuild.yml'),
     amxmodx: { dir: 'amxmodx', version: '1.10.5428', defines: [] },
     globalDeps: [],
-    globalPostfix: '',
-    pluginRules: [],
+    plugins: { defaults: { ini: null, debug: null }, rules: [] },
+    pluginIni: { enabled: false, defaultIni: false, defaultDebug: false },
+    _deprecations: [],
     repos: [],
     github: { ssh: false, token_env: 'GITHUB_TOKEN', tokens: {} },
     output: {
@@ -56,32 +73,24 @@ function emptyManifest(manifestDir) {
       amxmodx_path: '{name}/addons/amxmodx',
       assets_path: '{name}',
       readme: false,
-      generate_ini: false,
       pack: true,
       on_conflict: 'last_wins',
     },
     assets: { sources: [], on_conflict: 'last_wins' },
     deploy: { path: null, amxmodx_path: 'addons/amxmodx', watch_debounce_ms: 500, exclude: [], rcon: { port: 27015 } },
+    ...overrides,
   };
 }
 
 test('runBuild with archive:false emits EVENTS.DONE (noArchive)', async (t) => {
-  const cache    = useTempCache();
+  const cache    = withTempCache(t);
   const workDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'amxb-b2-work-'));
   const buildDir = path.join(workDir, 'build');
 
   // Seed a cached compiler so fetchCompiler returns offline.
-  writeFile(cache, `amxxpc/1.10.5428/${PLATFORM}/${BIN}`, 'mock-binary');
-  if (PLATFORM !== 'windows') {
-    fs.chmodSync(path.join(cache, 'amxxpc', '1.10.5428', PLATFORM, BIN), 0o755);
-  }
+  seedCompiler(cache);
 
   const manifest = emptyManifest(workDir);
-
-  t.after(() => {
-    if (ORIG_CACHE_ENV === undefined) delete process.env.AMXX_BUILDER_CACHE;
-    else process.env.AMXX_BUILDER_CACHE = ORIG_CACHE_ENV;
-  });
 
   let donePayload = null;
   const listener = (p) => { donePayload = p; };
@@ -98,4 +107,58 @@ test('runBuild with archive:false emits EVENTS.DONE (noArchive)', async (t) => {
   } finally {
     off(EVENTS.DONE, listener);
   }
+});
+
+test('runBuild: INI stage runs only when manifest.pluginIni.enabled', async (t) => {
+  const cache    = withTempCache(t);
+  const workDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'amxb-b2-ini-'));
+  const buildDir = path.join(workDir, 'build');
+  seedCompiler(cache);
+
+  const logger = require('../src/logger');
+  const warnings = [];
+  const origWarn = logger.warn;
+  logger.warn = (msg) => warnings.push(msg);
+  t.after(() => { logger.warn = origWarn; });
+
+  async function stagesFor(pluginIni) {
+    const stages = [];
+    const listener = (p) => stages.push(p.stage);
+    on(EVENTS.STAGE, listener);
+    try {
+      await runBuild(emptyManifest(workDir, { pluginIni }), { buildDir, archive: false });
+    } finally {
+      off(EVENTS.STAGE, listener);
+    }
+    return stages;
+  }
+
+  const disabled = await stagesFor({ enabled: false, defaultIni: false, defaultDebug: false });
+  assert.equal(disabled.includes('ini'), false);
+  assert.equal(warnings.length, 0, 'new-shape manifest must not emit deprecation warnings');
+
+  const enabled = await stagesFor({ enabled: true, defaultIni: '', defaultDebug: false });
+  assert.equal(enabled.includes('ini'), true);
+});
+
+test('runBuild: logs each manifest._deprecations entry once per process', async (t) => {
+  const cache    = withTempCache(t);
+  const workDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'amxb-b2-dep-'));
+  const buildDir = path.join(workDir, 'build');
+  seedCompiler(cache);
+
+  const deprecation = 'DEPRECATED: output.generate_ini — use plugins.defaults.ini';
+
+  const logger = require('../src/logger');
+  const warnings = [];
+  const origWarn = logger.warn;
+  logger.warn = (msg) => warnings.push(msg);
+  t.after(() => { logger.warn = origWarn; });
+
+  const manifest = emptyManifest(workDir, { _deprecations: [deprecation] });
+
+  await runBuild(manifest, { buildDir, archive: false });
+  await runBuild(manifest, { buildDir, archive: false });
+
+  assert.equal(warnings.filter((m) => m === deprecation).length, 1);
 });
