@@ -59,6 +59,18 @@ function logDeprecations(manifest) {
   }
 }
 
+// Same once-per-process dedupe as logDeprecations: watch/serve rebuild often.
+const loggedForcedDebug = new Set();
+
+function logForcedDebug(manifest) {
+  const forceDebug = manifest.pluginIni ? manifest.pluginIni.forceDebug : null;
+  if (forceDebug == null) return;
+  const message = `AMXB_PLUGINS_DEBUG — plugin debug forced ${forceDebug ? 'on' : 'off'} for this build`;
+  if (loggedForcedDebug.has(message)) return;
+  loggedForcedDebug.add(message);
+  logger.dim(message);
+}
+
 /**
  * Run the full build pipeline for an already-resolved manifest.
  *
@@ -101,6 +113,7 @@ async function runBuild(manifest, options = {}) {
   };
 
   logDeprecations(manifest);
+  logForcedDebug(manifest);
 
   // Cancellation is checked between stages. Compilation itself is atomic per
   // plugin and runs to completion — cancellation only takes effect at the next

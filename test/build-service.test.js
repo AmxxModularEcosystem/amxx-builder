@@ -63,7 +63,7 @@ function emptyManifest(manifestDir, overrides = {}) {
     amxmodx: { dir: 'amxmodx', version: '1.10.5428', defines: [] },
     globalDeps: [],
     plugins: { defaults: { ini: null, debug: null }, rules: [] },
-    pluginIni: { enabled: false, defaultIni: false, defaultDebug: false },
+    pluginIni: { enabled: false, defaultIni: false, defaultDebug: false, forceDebug: null },
     _deprecations: [],
     repos: [],
     github: { ssh: false, token_env: 'GITHUB_TOKEN', tokens: {} },
@@ -161,4 +161,28 @@ test('runBuild: logs each manifest._deprecations entry once per process', async 
   await runBuild(manifest, { buildDir, archive: false });
 
   assert.equal(warnings.filter((m) => m === deprecation).length, 1);
+});
+
+test('runBuild: logs the AMXB_PLUGINS_DEBUG forced-debug line once per process', async (t) => {
+  const cache    = withTempCache(t);
+  const workDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'amxb-b2-force-'));
+  const buildDir = path.join(workDir, 'build');
+  seedCompiler(cache);
+
+  const logger = require('../src/logger');
+  const dimmed = [];
+  const origDim = logger.dim;
+  logger.dim = (msg) => dimmed.push(msg);
+  t.after(() => { logger.dim = origDim; });
+
+  const manifest = emptyManifest(workDir, {
+    pluginIni: { enabled: false, defaultIni: false, defaultDebug: false, forceDebug: true },
+  });
+
+  await runBuild(manifest, { buildDir, archive: false });
+  await runBuild(manifest, { buildDir, archive: false });
+
+  const forced = dimmed.filter((m) => /AMXB_PLUGINS_DEBUG/.test(m));
+  assert.equal(forced.length, 1);
+  assert.match(forced[0], /plugin debug forced on for this build/);
 });
