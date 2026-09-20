@@ -64,13 +64,13 @@ function makeMockCompiler(dir) {
   return { compilerPath };
 }
 
-// Minimal manifest in the shape compilePlugins expects.
+// Minimal manifest in the shape compilePlugins expects (resolved manifest).
 function makeManifest(dir, overrides = {}) {
   return {
     _path: path.join(dir, 'amxbuild.yml'),
     amxmodx: { dir: 'amxmodx', defines: [] },
-    globalPostfix: '',
-    pluginRules: [],
+    plugins: { defaults: { ini: null, debug: null }, rules: [] },
+    pluginIni: { enabled: false, defaultIni: false, defaultDebug: false },
     output: { on_conflict: 'last_wins' },
     repos: [],
     ...overrides,
@@ -84,32 +84,62 @@ function makeRepoLocalDirs(repo, ref, repoDir) {
 
 // ─── applyPluginRule (pure logic, no compiler needed) ────────────────────────
 
-test('applyPluginRule: no rules → default postfix', () => {
-  const r = applyPluginRule('VipM/core.sma', [], 'myserver');
-  assert.deepEqual(r, { postfix: 'myserver', skipIni: false });
+test('applyPluginRule: no rules → base ini and debug', () => {
+  const r = applyPluginRule('VipM/core.sma', [], { ini: 'myserver', debug: true });
+  assert.deepEqual(r, { postfix: 'myserver', skipIni: false, debug: true });
 });
 
 test('applyPluginRule: first matching rule wins', () => {
   const rules = [
-    { match: 'VipM/*.sma', enabled: true, ini: 'vipm' },
-    { match: '*.sma', enabled: true, ini: 'fallback' },
+    { match: 'VipM/*.sma', enabled: true, ini: 'vipm', debug: true },
+    { match: '*.sma', enabled: true, ini: 'fallback', debug: null },
   ];
-  assert.deepEqual(applyPluginRule('VipM/core.sma', rules, 'global'), { postfix: 'vipm', skipIni: false });
+  assert.deepEqual(
+    applyPluginRule('VipM/core.sma', rules, { ini: 'global', debug: false }),
+    { postfix: 'vipm', skipIni: false, debug: true }
+  );
 });
 
-test('applyPluginRule: ini: false → skipIni, postfix false', () => {
-  const rules = [{ match: 'utils/*.sma', enabled: true, ini: false }];
-  assert.deepEqual(applyPluginRule('utils/helpers.sma', rules, 'global'), { postfix: false, skipIni: true });
+test('applyPluginRule: ini: false → skipIni, empty postfix, inherited debug', () => {
+  const rules = [{ match: 'utils/*.sma', enabled: true, ini: false, debug: null }];
+  assert.deepEqual(
+    applyPluginRule('utils/helpers.sma', rules, { ini: 'global', debug: true }),
+    { postfix: '', skipIni: true, debug: true }
+  );
 });
 
 test('applyPluginRule: enabled: false → null (skip)', () => {
-  const rules = [{ match: 'wip/*.sma', enabled: false, ini: null }];
-  assert.equal(applyPluginRule('wip/scratch.sma', rules, 'global'), null);
+  const rules = [{ match: 'wip/*.sma', enabled: false, ini: null, debug: null }];
+  assert.equal(applyPluginRule('wip/scratch.sma', rules, { ini: 'global', debug: false }), null);
 });
 
-test('applyPluginRule: rule without ini falls back to default postfix', () => {
-  const rules = [{ match: '*.sma', enabled: true, ini: null }];
-  assert.deepEqual(applyPluginRule('core.sma', rules, 'defaultp'), { postfix: 'defaultp', skipIni: false });
+test('applyPluginRule: rule without ini/debug falls back to base', () => {
+  const rules = [{ match: '*.sma', enabled: true, ini: null, debug: null }];
+  assert.deepEqual(
+    applyPluginRule('core.sma', rules, { ini: 'defaultp', debug: true }),
+    { postfix: 'defaultp', skipIni: false, debug: true }
+  );
+});
+
+test('applyPluginRule: rule debug:false overrides base debug:true', () => {
+  const rules = [{ match: '*.sma', enabled: true, ini: 'x', debug: false }];
+  assert.deepEqual(
+    applyPluginRule('core.sma', rules, { ini: 'base', debug: true }),
+    { postfix: 'x', skipIni: false, debug: false }
+  );
+});
+
+test('applyPluginRule: base ini:false excludes an unmatched plugin', () => {
+  const r = applyPluginRule('a.sma', [], { ini: false, debug: false });
+  assert.deepEqual(r, { postfix: '', skipIni: true, debug: false });
+});
+
+test('applyPluginRule: matched rule ini overrides base ini:false', () => {
+  const rules = [{ match: 'vip/*.sma', enabled: true, ini: 'vip', debug: null }];
+  assert.deepEqual(
+    applyPluginRule('vip/core.sma', rules, { ini: false, debug: false }),
+    { postfix: 'vip', skipIni: false, debug: false }
+  );
 });
 
 // ─── compileSingle (watch-mode single-file compile) ──────────────────────────
@@ -190,11 +220,8 @@ test('compilePlugins: compiles all .sma from a repo scripting dir', async () => 
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'a.sma'), 'main() { }\n');
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'b.sma'), 'main() { }\n');
 
-  const repo = { repo: 'org/plugin', _resolvedRef: 'v1.0.0', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'main' };
-  const manifest = makeManifest(dir, {
-    repos: [repo],
-    globalPostfix: 'main',
-  });
+  const repo = { repo: 'org/plugin', _resolvedRef: 'v1.0.0', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'main', debug: null } };
+  const manifest = makeManifest(dir, { repos: [repo] });
   const repoLocalDirs = makeRepoLocalDirs('org/plugin', 'v1.0.0', repoDir);
 
   const compiled = await compilePlugins(manifest, repoLocalDirs, compilerPath, [], buildDir);
@@ -202,6 +229,11 @@ test('compilePlugins: compiles all .sma from a repo scripting dir', async () => 
   assert.equal(compiled.length, 2);
   assert.ok(compiled.some((c) => c.amxxName === 'a.amxx' && c.repo === 'org/plugin' && c.ref === 'v1.0.0'));
   assert.ok(compiled.some((c) => c.amxxName === 'b.amxx'));
+  for (const c of compiled) {
+    assert.equal(c.plugins_ini_postfix, 'main');
+    assert.equal(c.skipIni, false);
+    assert.equal(c.debug, false);
+  }
   assert.ok(fs.existsSync(path.join(buildDir, 'amxmodx', 'plugins', 'a.amxx')));
   assert.ok(fs.existsSync(path.join(buildDir, 'amxmodx', 'plugins', 'b.amxx')));
 });
@@ -215,7 +247,7 @@ test('compilePlugins: subdirectory .sma preserved in plugins/ subdir', async () 
   fs.mkdirSync(path.join(repoDir, 'amxmodx', 'scripting', 'SubDir'), { recursive: true });
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'SubDir', 'deep.sma'), 'main() { }\n');
 
-  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
   const manifest = makeManifest(dir, { repos: [repo] });
   const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
 
@@ -255,7 +287,7 @@ test('compilePlugins: repo script is passed -o with abs path and -i include dirs
   // during a real build) — simulate it for the argument-order assertion.
   fs.mkdirSync(path.join(buildDir, 'amxmodx', 'scripting', 'include'), { recursive: true });
 
-  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
   const manifest = makeManifest(dir, { repos: [repo] });
   const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
   const extraInclude = path.join(dir, 'extra-inc');
@@ -283,7 +315,7 @@ test('compilePlugins: value-less defines are normalized to NAME=1 and passed to 
   fs.mkdirSync(path.join(repoDir, 'amxmodx', 'scripting'), { recursive: true });
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'p.sma'), 'main() { }\n');
 
-  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
   const manifest = makeManifest(dir, {
     repos: [repo],
     amxmodx: { dir: 'amxmodx', defines: ['DEBUG', 'VERSION=2'] },
@@ -301,7 +333,7 @@ test('compilePlugins: value-less defines are normalized to NAME=1 and passed to 
   assert.deepEqual(argsJson.defines, ['DEBUG=1', 'VERSION=2']);
 });
 
-test('compilePlugins: plugin rule enabled:false skips the plugin', async () => {
+test('compilePlugins: repo plugins ignore plugins.rules (rules are local-only)', async () => {
   const dir = makeTmpDir('amxb-cp-skip-');
   const { compilerPath } = makeMockCompiler(dir);
 
@@ -311,15 +343,170 @@ test('compilePlugins: plugin rule enabled:false skips the plugin', async () => {
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'keep.sma'), 'main() { }\n');
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'wip.sma'), 'main() { }\n');
 
-  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
   const manifest = makeManifest(dir, {
     repos: [repo],
-    // plugin rules apply only to LOCAL plugins — repo plugins use their own postfix
+    // A rule that would skip wip.sma if it applied to repo plugins.
+    plugins: {
+      defaults: { ini: null, debug: null },
+      rules: [{ match: 'wip.sma', enabled: false, ini: null, debug: null }],
+    },
   });
   const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
 
   const compiled = await compilePlugins(manifest, repoLocalDirs, compilerPath, [], buildDir);
-  assert.equal(compiled.length, 2); // repo plugins ignore pluginRules
+  assert.equal(compiled.length, 2);
+});
+
+test('compilePlugins: repo ini:false compiles the plugin but skips the INI', async () => {
+  const dir = makeTmpDir('amxb-cp-reposkip-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const buildDir = path.join(dir, 'build');
+  const repoDir  = path.join(dir, 'repo');
+  fs.mkdirSync(path.join(repoDir, 'amxmodx', 'scripting'), { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'hidden.sma'), 'main() { }\n');
+
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: false, debug: null } };
+  const manifest = makeManifest(dir, {
+    repos: [repo],
+    pluginIni: { enabled: true, defaultIni: '', defaultDebug: false },
+  });
+  const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
+
+  const compiled = await compilePlugins(manifest, repoLocalDirs, compilerPath, [], buildDir);
+  assert.equal(compiled.length, 1);
+  assert.equal(compiled[0].plugins_ini_postfix, '');
+  assert.equal(compiled[0].skipIni, true);
+  assert.equal(compiled[0].debug, false);
+});
+
+test('compilePlugins: defaults.ini:false + repo ini set → repo compiles into its own INI', async () => {
+  const dir = makeTmpDir('amxb-cp-repoini-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const buildDir = path.join(dir, 'build');
+  const repoDir  = path.join(dir, 'repo');
+  fs.mkdirSync(path.join(repoDir, 'amxmodx', 'scripting'), { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'vip.sma'), 'main() { }\n');
+
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'vip', debug: null } };
+  const manifest = makeManifest(dir, {
+    repos: [repo],
+    pluginIni: { enabled: true, defaultIni: false, defaultDebug: false },
+  });
+  const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
+
+  const compiled = await compilePlugins(manifest, repoLocalDirs, compilerPath, [], buildDir);
+  assert.equal(compiled.length, 1);
+  assert.equal(compiled[0].plugins_ini_postfix, 'vip');
+  assert.equal(compiled[0].skipIni, false);
+});
+
+test('compilePlugins: defaults.ini:false excludes an unmatched local plugin', async () => {
+  const dir = makeTmpDir('amxb-cp-localexcl-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const buildDir = path.join(dir, 'build');
+  const localDir = path.join(dir, 'local');
+  fs.mkdirSync(path.join(localDir, 'amxmodx', 'scripting'), { recursive: true });
+  fs.writeFileSync(path.join(localDir, 'amxmodx', 'scripting', 'base.sma'), 'main() { }\n');
+
+  const manifest = makeManifest(localDir, {
+    pluginIni: { enabled: true, defaultIni: false, defaultDebug: false },
+  });
+
+  const compiled = await compilePlugins(manifest, {}, compilerPath, [], buildDir);
+  assert.equal(compiled.length, 1);
+  assert.equal(compiled[0].plugins_ini_postfix, '');
+  assert.equal(compiled[0].skipIni, true);
+  assert.equal(compiled[0].debug, false);
+});
+
+test('compilePlugins: repo _pluginSettings debug overrides pluginIni.defaultDebug', async () => {
+  const dir = makeTmpDir('amxb-cp-repodebug-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const buildDir = path.join(dir, 'build');
+  const repoDir  = path.join(dir, 'repo');
+  fs.mkdirSync(path.join(repoDir, 'amxmodx', 'scripting'), { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'debugme.sma'), 'main() { }\n');
+
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'vip', debug: true } };
+  const manifest = makeManifest(dir, {
+    repos: [repo],
+    pluginIni: { enabled: true, defaultIni: '', defaultDebug: false },
+  });
+  const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
+
+  const compiled = await compilePlugins(manifest, repoLocalDirs, compilerPath, [], buildDir);
+  assert.equal(compiled.length, 1);
+  assert.equal(compiled[0].plugins_ini_postfix, 'vip');
+  assert.equal(compiled[0].debug, true);
+});
+
+test('compilePlugins: local rules set postfix/skipIni/debug over pluginIni defaults', async () => {
+  const dir = makeTmpDir('amxb-cp-rules-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const buildDir = path.join(dir, 'build');
+  const localDir = path.join(dir, 'local');
+  const scriptingDir = path.join(localDir, 'amxmodx', 'scripting');
+  fs.mkdirSync(path.join(scriptingDir, 'vip'), { recursive: true });
+  fs.mkdirSync(path.join(scriptingDir, 'utils'), { recursive: true });
+  fs.writeFileSync(path.join(scriptingDir, 'base.sma'), 'main() { }\n');
+  fs.writeFileSync(path.join(scriptingDir, 'vip', 'core.sma'), 'main() { }\n');
+  fs.writeFileSync(path.join(scriptingDir, 'utils', 'helpers.sma'), 'main() { }\n');
+
+  const manifest = makeManifest(localDir, {
+    pluginIni: { enabled: true, defaultIni: '', defaultDebug: true },
+    plugins: {
+      defaults: { ini: null, debug: null },
+      rules: [
+        { match: 'vip/core.sma', enabled: true, ini: 'vipm', debug: false },
+        { match: 'utils/*.sma', enabled: true, ini: false, debug: null },
+      ],
+    },
+  });
+
+  const compiled = await compilePlugins(manifest, {}, compilerPath, [], buildDir);
+  const byName = Object.fromEntries(compiled.map((c) => [c.amxxName, c]));
+
+  assert.deepEqual(
+    [byName['base.amxx'].plugins_ini_postfix, byName['base.amxx'].skipIni, byName['base.amxx'].debug],
+    ['', false, true]
+  );
+  assert.deepEqual(
+    [byName['vip/core.amxx'].plugins_ini_postfix, byName['vip/core.amxx'].skipIni, byName['vip/core.amxx'].debug],
+    ['vipm', false, false]
+  );
+  assert.deepEqual(
+    [byName['utils/helpers.amxx'].plugins_ini_postfix, byName['utils/helpers.amxx'].skipIni, byName['utils/helpers.amxx'].debug],
+    ['', true, true]
+  );
+});
+
+test('compilePlugins: local rule enabled:false skips the plugin', async () => {
+  const dir = makeTmpDir('amxb-cp-lskip-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const buildDir = path.join(dir, 'build');
+  const localDir = path.join(dir, 'local');
+  const scriptingDir = path.join(localDir, 'amxmodx', 'scripting');
+  fs.mkdirSync(scriptingDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptingDir, 'keep.sma'), 'main() { }\n');
+  fs.writeFileSync(path.join(scriptingDir, 'wip.sma'), 'main() { }\n');
+
+  const manifest = makeManifest(localDir, {
+    plugins: {
+      defaults: { ini: null, debug: null },
+      rules: [{ match: 'wip.sma', enabled: false, ini: null, debug: null }],
+    },
+  });
+
+  const compiled = await compilePlugins(manifest, {}, compilerPath, [], buildDir);
+  assert.equal(compiled.length, 1);
+  assert.equal(compiled[0].amxxName, 'keep.amxx');
 });
 
 test('compilePlugins: repo exclude patterns skip matching .sma', async () => {
@@ -332,7 +519,7 @@ test('compilePlugins: repo exclude patterns skip matching .sma', async () => {
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'good.sma'), 'main() { }\n');
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'wip', 'scratch.sma'), 'main() { }\n');
 
-  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: ['wip/**'], plugins_ini_postfix: 'x' };
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: ['wip/**'], _pluginSettings: { ini: 'x', debug: null } };
   const manifest = makeManifest(dir, { repos: [repo] });
   const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
 
@@ -351,7 +538,7 @@ test('compilePlugins: compile error → throws with failed count and names', asy
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'ok.sma'), 'main() { }\n');
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'broken.sma'), '#error nope\n');
 
-  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
   const manifest = makeManifest(dir, { repos: [repo] });
   const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
 
@@ -374,7 +561,7 @@ test('compilePlugins: emits COMPILED ok:true and ok:false events', async () => {
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'good.sma'), 'main() { }\n');
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'bad.sma'), '#error boom\n');
 
-  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
   const manifest = makeManifest(dir, { repos: [repo] });
   const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
 
@@ -402,8 +589,8 @@ test('compilePlugins: on_conflict=error throws on duplicate output names', async
   fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'same.sma'), 'main() { }\n');
 
   // Two repos both providing same.sma → conflict
-  const repoA = { repo: 'org/a', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
-  const repoB = { repo: 'org/b', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
+  const repoA = { repo: 'org/a', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
+  const repoB = { repo: 'org/b', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
   const manifest = makeManifest(dir, { repos: [repoA, repoB], output: { on_conflict: 'error' } });
   const repoLocalDirs = {
     ...makeRepoLocalDirs('org/a', 'HEAD', repoDir),
@@ -428,8 +615,8 @@ test('compilePlugins: on_conflict=first_wins keeps the first plugin', async () =
     fs.writeFileSync(path.join(d, 'amxmodx', 'scripting', 'same.sma'), 'main() { }\n');
   }
 
-  const repoA = { repo: 'org/a', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
-  const repoB = { repo: 'org/b', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], plugins_ini_postfix: 'x' };
+  const repoA = { repo: 'org/a', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
+  const repoB = { repo: 'org/b', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'x', debug: null } };
   const manifest = makeManifest(dir, { repos: [repoA, repoB], output: { on_conflict: 'first_wins' } });
   const repoLocalDirs = {
     ...makeRepoLocalDirs('org/a', 'HEAD', repoDirA),

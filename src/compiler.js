@@ -9,19 +9,31 @@ const { repoKey, normalizeRepo } = require('./deps-resolver');
 
 /**
  * Applies plugin rules to a local .sma file path (relative to scripting/).
- * Returns null if the plugin should be skipped (enabled: false),
- * or { postfix, skipIni } where postfix is the INI postfix (false = skip INI).
+ *
+ * @param {string} smaRelPath - .sma path relative to scripting/
+ * @param {Array}  rules      - manifest.plugins.rules (first matching rule wins)
+ * @param {{ ini: false|string, debug: boolean }} base - plugins.defaults layer:
+ *   ini '' → plugins.ini, ini false → excluded from every INI
+ * @returns {null|{ postfix: string, skipIni: boolean, debug: boolean }} null
+ *   when the matching rule has enabled:false (skip the plugin entirely);
+ *   otherwise the effective INI postfix, whether the plugin is excluded from
+ *   every INI (ini:false), and the effective debug flag. `ini` unset/null and
+ *   `debug` unset/null inherit `base`.
  */
-function applyPluginRule(smaRelPath, rules, defaultPostfix) {
+function applyPluginRule(smaRelPath, rules, base) {
   const normalized = smaRelPath.split(path.sep).join('/');
   for (const rule of rules) {
     if (micromatch.isMatch(normalized, rule.match, { dot: true })) {
-      if (!rule.enabled) return null;
-      const postfix = rule.ini !== null ? rule.ini : defaultPostfix;
-      return { postfix, skipIni: rule.ini === false };
+      if (rule.enabled === false) return null;
+      const ini = rule.ini != null ? rule.ini : base.ini;
+      return {
+        postfix: ini === false ? '' : ini,
+        skipIni: ini === false,
+        debug: rule.debug != null ? rule.debug : base.debug,
+      };
     }
   }
-  return { postfix: defaultPostfix, skipIni: false };
+  return { postfix: base.ini === false ? '' : base.ini, skipIni: base.ini === false, debug: base.debug };
 }
 
 async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs, buildDir) {
@@ -29,6 +41,10 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   fs.mkdirSync(pluginsDir, { recursive: true });
 
   const collectedIncDir = path.join(buildDir, 'amxmodx', 'scripting', 'include');
+
+  // plugins.defaults is the base layer for every plugin (local + repo).
+  const pluginIni = manifest.pluginIni || { defaultIni: false, defaultDebug: false };
+  const base = { ini: pluginIni.defaultIni, debug: pluginIni.defaultDebug === true };
 
   // ── Build unified source list ──────────────────────────────────────────────
   const seenSources = new Set(); // case-insensitive repo identity (dedupe)
@@ -46,7 +62,7 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
         'scripting'
       ),
       exclude: repoConfig.exclude,
-      postfix: repoConfig.plugins_ini_postfix,
+      settings: repoConfig._pluginSettings || { ini: null, debug: null },
     });
   }
 
@@ -54,7 +70,7 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   if (fs.existsSync(localScriptingDir)) {
     sources.push({
       label: '(local)', ref: 'local', isLocal: true, scriptingDir: localScriptingDir,
-      exclude: [], postfix: manifest.globalPostfix,
+      exclude: [], settings: null,
     });
   }
 
@@ -62,7 +78,7 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   const onConflict = manifest.output.on_conflict || 'last_wins';
   const tasksByOut = new Map(); // outPath → task (dedupe cross-source collisions)
   for (const src of sources) {
-    const { scriptingDir, exclude, postfix, label, ref, isLocal = false } = src;
+    const { scriptingDir, exclude, settings, label, ref, isLocal = false } = src;
 
     if (!fs.existsSync(scriptingDir)) {
       logger.dim(`  ${label}: no scripting/ dir`);
@@ -86,23 +102,30 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
     }
 
     for (const smaRel of smaFiles) {
-      let taskPostfix = postfix;
-      let skipIni     = false;
+      let taskPostfix;
+      let skipIni = false;
+      let taskDebug = base.debug;
 
       if (isLocal) {
-        const ruleResult = applyPluginRule(smaRel, manifest.pluginRules, postfix);
+        const ruleResult = applyPluginRule(smaRel, manifest.plugins.rules, base);
         if (!ruleResult) {
           logger.skip(`Skipped (plugin rule): ${smaRel}`);
           continue;
         }
         taskPostfix = ruleResult.postfix;
         skipIni     = ruleResult.skipIni;
+        taskDebug   = ruleResult.debug;
+      } else {
+        const ini = settings.ini != null ? settings.ini : base.ini;
+        taskPostfix = ini === false ? '' : ini;
+        skipIni     = ini === false;
+        taskDebug   = settings.debug != null ? settings.debug : base.debug;
       }
 
       const baseName = path.basename(smaRel);
       const outName  = smaRel.replace(/\.sma$/, '.amxx').split(path.sep).join('/');
       const task = {
-        label, ref, postfix: taskPostfix, skipIni, baseName,
+        label, ref, postfix: taskPostfix, skipIni, debug: taskDebug, baseName,
         srcPath: path.join(scriptingDir, smaRel),
         outName,
         outPath: path.join(pluginsDir, ...outName.split('/')),
@@ -172,7 +195,7 @@ async function mapLimit(items, limit, fn) {
 }
 
 async function runCompile(compilerPath, task) {
-  const { srcPath, outPath, outName, includes, defines, baseName, postfix, skipIni, label, ref } = task;
+  const { srcPath, outPath, outName, includes, defines, baseName, postfix, skipIni, debug, label, ref } = task;
 
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   const args = [srcPath, `-o${outPath}`, ...includes, ...defines];
@@ -189,7 +212,7 @@ async function runCompile(compilerPath, task) {
 
   emit(EVENTS.COMPILED, { baseName, ok: true, output, amxxName: outName, repo: label, ref, outName });
 
-  return { amxxName: outName, plugins_ini_postfix: postfix, skipIni: skipIni || false, repo: label, ref };
+  return { amxxName: outName, plugins_ini_postfix: postfix, skipIni: skipIni || false, debug: debug === true, repo: label, ref };
 }
 
 async function findExcluded(dir, patterns) {
