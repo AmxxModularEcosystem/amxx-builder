@@ -69,7 +69,22 @@ function printDryRun(manifest) {
     logger.dim(`  amxmodx path in archive: ${expand(out.amxmodx_path)}/`);
   }
   if (out.assets_path) logger.dim(`  assets path: ${expand(out.assets_path)}/`);
-  logger.dim(`  generate_ini: ${out.generate_ini}  |  on_conflict: ${out.on_conflict}`);
+
+  if (manifest.pluginIni) {
+    const { enabled, defaultIni, defaultDebug } = manifest.pluginIni;
+    const base = defaultIni === false
+      ? 'none'
+      : (defaultIni === '' ? 'plugins.ini' : `plugins-${defaultIni}.ini`);
+    logger.dim(`  plugins ini: ${enabled ? 'enabled' : 'disabled'}  |  default: ${base}  |  debug: ${defaultDebug}`);
+    logger.dim(`  on_conflict: ${out.on_conflict}`);
+  } else {
+    logger.dim(`  generate_ini: ${out.generate_ini}  |  on_conflict: ${out.on_conflict}`);
+  }
+
+  if (manifest._deprecations && manifest._deprecations.length) {
+    logger.info(`\nDeprecations (${manifest._deprecations.length}):`);
+    for (const d of manifest._deprecations) logger.warn(`  ${d}`);
+  }
 
   logger.info(`\n=== END DRY RUN ===`);
 }

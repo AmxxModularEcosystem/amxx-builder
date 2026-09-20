@@ -1,7 +1,7 @@
 'use strict';
 
 const logger = require('../logger');
-const { parseManifest, applyOverrides } = require('../manifest');
+const { resolveManifest } = require('../manifest');
 const { resolveManifestPath, loadEnv } = require('./shared');
 const { printDryRun } = require('./dry-run');
 const { subscribeCompiledRendering } = require('./compile-renderer');
@@ -29,9 +29,10 @@ async function runBuildCLI(options) {
   const manifestPath = resolveManifestPath(options.manifest);
   loadEnv(manifestPath);
 
-  const manifest = parseManifest(manifestPath);
-  if (options.set?.length)    applyOverrides(manifest, options.set);
-  if (options.define?.length) manifest.amxmodx.defines.push(...options.define);
+  const manifest = resolveManifest(manifestPath, {
+    set:    options.set,
+    define: options.define,
+  });
   logger.info(`Manifest: ${manifest.name} v${manifest.version}`);
 
   if (options.dryRun) {

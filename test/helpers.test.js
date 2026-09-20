@@ -27,7 +27,9 @@ const { resolveRefIfLatest } = require('../src/repo-fetcher');
 const { findCaseInsensitive } = require('../src/include-tree');
 const { buildIncludeArgs, buildDefineArgs } = require('../src/compile-utils');
 const { buildPlanData } = require('../src/build-plan');
+const { printDryRun } = require('../src/commands/dry-run');
 const { loadEnv } = require('../src/env');
+const { on, off, EVENTS } = require('../src/events');
 
 const ORIG_CWD = process.cwd();
 
@@ -580,6 +582,58 @@ test('buildPlanData: listLocal=false omits local files', () => {
     { detailedAssets: true, listLocal: false }
   );
   assert.equal(plan.assets[0].files, undefined);
+});
+
+test('buildPlanData: resolved pluginIni drives generate_ini and exposes plugins_ini', () => {
+  const manifest = fakeManifest();
+  manifest.output.generate_ini = false;
+  manifest.pluginIni = { enabled: true, defaultIni: 'vip', defaultDebug: true };
+
+  const plan = buildPlanData(manifest);
+
+  // pluginIni (resolved) wins over the legacy raw flag
+  assert.equal(plan.output.generate_ini, true);
+  assert.deepEqual(plan.output.plugins_ini, { enabled: true, default: 'vip', debug: true });
+});
+
+test('buildPlanData: hand-built manifest without pluginIni falls back to raw flag', () => {
+  const plan = buildPlanData(fakeManifest());
+
+  assert.equal(plan.output.generate_ini, true);
+  assert.equal(plan.output.plugins_ini, null);
+});
+
+test('printDryRun: renders pluginIni summary and deprecation warnings', () => {
+  const manifest = fakeManifest({
+    pluginIni: { enabled: true, defaultIni: '', defaultDebug: false },
+    _deprecations: ['[DEPRECATED] output.generate_ini — use plugins.defaults.ini'],
+  });
+  const messages = [];
+  const handler = (p) => messages.push(`${p.level}: ${p.message}`);
+  on(EVENTS.LOG, handler);
+  try {
+    printDryRun(manifest);
+  } finally {
+    off(EVENTS.LOG, handler);
+  }
+
+  const text = messages.join('\n');
+  assert.match(text, /plugins ini: enabled\s+\|\s+default: plugins\.ini\s+\|\s+debug: false/);
+  assert.match(text, /warn: \s*\[DEPRECATED\] output\.generate_ini/);
+});
+
+test('printDryRun: legacy manifest without pluginIni keeps raw generate_ini line', () => {
+  const manifest = fakeManifest();
+  const messages = [];
+  const handler = (p) => messages.push(p.message);
+  on(EVENTS.LOG, handler);
+  try {
+    printDryRun(manifest);
+  } finally {
+    off(EVENTS.LOG, handler);
+  }
+
+  assert.match(messages.join('\n'), /generate_ini: true\s+\|\s+on_conflict: last_wins/);
 });
 
 // ─── loadEnv ─────────────────────────────────────────────────────────────────

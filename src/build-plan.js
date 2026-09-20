@@ -98,7 +98,17 @@ function buildPlanData(manifest, options = {}) {
         : path.join(path.resolve(out.dir), expand(out.archive_name)),
       amxmodx_path: expand(out.amxmodx_path) + '/',
       assets_path: out.assets_path ? expand(out.assets_path) + '/' : null,
-      generate_ini: out.generate_ini,
+      // `pluginIni` is the resolved source of truth; hand-built fixtures
+      // (tests, external callers) may not carry it → fall back to the legacy
+      // raw output flag.
+      generate_ini: manifest.pluginIni ? manifest.pluginIni.enabled : Boolean(out.generate_ini),
+      plugins_ini: manifest.pluginIni
+        ? {
+            enabled: manifest.pluginIni.enabled,
+            default: manifest.pluginIni.defaultIni,
+            debug: manifest.pluginIni.defaultDebug,
+          }
+        : null,
       on_conflict: out.on_conflict,
     },
   };
