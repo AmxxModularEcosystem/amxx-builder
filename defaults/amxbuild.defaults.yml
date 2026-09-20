@@ -21,7 +21,6 @@ output:
   amxmodx_path: "{name}/addons/amxmodx"
   assets_path: "{name}"
   readme: true
-  generate_ini: false
   pack: true
   on_conflict: last_wins
 

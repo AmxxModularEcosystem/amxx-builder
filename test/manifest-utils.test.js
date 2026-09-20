@@ -122,7 +122,6 @@ test('loadDefaultsRaw: known default values', () => {
   assert.deepEqual(defaults.skills, []);
   assert.equal(defaults.github.token_env, 'GITHUB_TOKEN');
   assert.equal(defaults.output.pack, true);
-  assert.equal(defaults.output.generate_ini, false);
   assert.equal(defaults.output.archive_name, '{name}.zip');
   assert.equal(defaults.output.on_conflict, 'last_wins');
   assert.equal(defaults.assets.on_conflict, 'last_wins');
