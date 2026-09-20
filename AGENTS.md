@@ -105,6 +105,7 @@ This is automated in `.github/workflows/release.yml` on `v*.*.*` tags.
 - Win: `%LOCALAPPDATA%\amxx-builder`, Unix: `~/.cache/amxx-builder`
 - Override: `AMXX_BUILDER_CACHE`
 - Local source redirects: `AMXB_LOCAL_SOURCES` maps an existing repo/dep id (`owner/repo`) to a path (pairs `id=path` separated by `;`/newlines, or a JSON object), `AMXB_LOCAL_STRICT=1` makes an unmatched id an error (default: warn and ignore). `.env` next to the manifest is honored — see `src/local-sources.js`.
+- Plugin INI debug override: `AMXB_PLUGINS_DEBUG` (read from `.env` next to the manifest, local only — `.env` is gitignored) forces the ` debug` suffix in generated `plugins-*.ini` on/off for every included plugin. `1`/`true`/`yes`/`on` force on, `0`/`false`/`no`/`off` force off, anything else (unset/empty) leaves the manifest in charge. Case-insensitive. Precedence: `AMXB_PLUGINS_DEBUG` > per-rule/per-repo `debug` > `plugins.defaults.debug`; it only affects plugins already in an INI and never enables INI generation by itself.
 - Local per-manifest asset cache: `.amxb-cache/` next to `amxbuild.yml`
 - Separate dirs: `repos/`, `release-deps/`, `amxxpc/` (compiler binaries)
 
