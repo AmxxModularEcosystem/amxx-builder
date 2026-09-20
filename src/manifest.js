@@ -54,11 +54,10 @@ function parseManifest(manifestPath) {
   const ssh      = !!gh.ssh;
   const tokens   = parseTokenMap(gh.tokens);
 
-  const globalPostfix = raw.plugins_ini_postfix != null ? String(raw.plugins_ini_postfix) : '';
   const globalAmxDir  = (raw.amxmodx && raw.amxmodx.dir) || 'amxmodx';
   const globalDeps    = parseDepsLines(raw.deps || []);
 
-  const repos  = (raw.repos || []).map((r) => parseRepoEntry(r, globalPostfix, globalAmxDir));
+  const repos  = (raw.repos || []).map((r) => parseRepoEntry(r, globalAmxDir));
   const output = raw.output || {};
 
   const manifest = {
@@ -75,10 +74,12 @@ function parseManifest(manifestPath) {
     },
     github: { token_env: tokenEnv, tokens, token, ssh },
     globalDeps,
-    globalPostfix,
     repos,
     assets:      parseAssets(raw.assets || {}),
-    pluginRules: parsePluginRules(raw.plugins || []),
+    plugins:     parsePlugins(raw.plugins),
+    // DEPRECATED (remove in v2): legacy raw ini inputs, kept verbatim for
+    // detection/adaptation in finalizePluginConfig. Never derived.
+    plugins_ini_postfix: raw.plugins_ini_postfix != null ? String(raw.plugins_ini_postfix) : null,
     docs:        parseDocEntries(raw.docs || []),
     skills:      parseSkillEntries(raw.skills || []),
     deploy:      parseDeploy(raw),
@@ -88,6 +89,7 @@ function parseManifest(manifestPath) {
       amxmodx_path: String(output.amxmodx_path),
       assets_path:  output.assets_path != null ? String(output.assets_path) : '',
       readme:       Boolean(output.readme),
+      // DEPRECATED (remove in v2): legacy raw input only — never derived.
       generate_ini: Boolean(output.generate_ini),
       pack:         Boolean(output.pack),
       on_conflict:  validateOnConflict(output.on_conflict),
@@ -95,6 +97,7 @@ function parseManifest(manifestPath) {
   };
 
   applyLocalOverrides(manifest, process.env);
+  finalizePluginConfig(manifest);
   return manifest;
 }
 
@@ -148,20 +151,24 @@ function resolveGithubToken(manifest, repoPath) {
   return process.env[envName] || null;
 }
 
-function parseRepoEntry(r, globalPostfix, globalAmxDir) {
+function parseRepoEntry(r, globalAmxDir) {
   // Shorthand: "owner/repo" or "owner/repo@ref"
   if (typeof r === 'string') {
     const atIdx = r.indexOf('@');
     const repo  = atIdx === -1 ? r.trim() : r.slice(0, atIdx).trim();
     const ref   = atIdx === -1 ? null     : r.slice(atIdx + 1).trim() || null;
-    return makeRepo({ repo, ref }, globalPostfix, globalAmxDir);
+    return makeRepo({ repo, ref }, globalAmxDir);
   }
-  if (r && r.source === 'local') return makeRepo(r, globalPostfix, globalAmxDir);
+  if (r && r.source === 'local') return makeRepo(r, globalAmxDir);
   if (!r.repo) throw new Error(`manifest: repo entry missing "repo" field: ${JSON.stringify(r)}`);
-  return makeRepo(r, globalPostfix, globalAmxDir);
+  return makeRepo(r, globalAmxDir);
 }
 
-function makeRepo(r, globalPostfix, globalAmxDir) {
+function makeRepo(r, globalAmxDir) {
+  const plugins = r.plugins != null ? parsePluginSettings(r.plugins) : null;
+  // DEPRECATED (remove in v2): kept raw; the global plugins_ini_postfix is no
+  // longer injected here — only the repo's own explicit value survives.
+  const postfix = r.plugins_ini_postfix != null ? String(r.plugins_ini_postfix) : null;
   if (r.source === 'local') {
     if (typeof r.path !== 'string' || r.path.trim() === '') {
       throw new Error('manifest: repo entry source "local" requires "path"');
@@ -173,7 +180,8 @@ function makeRepo(r, globalPostfix, globalAmxDir) {
       ref:                 null,
       source:              'local',
       amxmodx_dir:         r.amxmodx_dir || globalAmxDir,
-      plugins_ini_postfix: r.plugins_ini_postfix != null ? String(r.plugins_ini_postfix) : globalPostfix,
+      plugins,
+      plugins_ini_postfix: postfix,
       exclude:             r.exclude       || [],
       exclude_files:       r.exclude_files || [],
       deps_override:       r.deps_override ? parseDepsLines(r.deps_override) : null,
@@ -184,7 +192,8 @@ function makeRepo(r, globalPostfix, globalAmxDir) {
     repo:                r.repo,
     ref:                 r.ref || null,
     amxmodx_dir:         r.amxmodx_dir || globalAmxDir,
-    plugins_ini_postfix: r.plugins_ini_postfix != null ? String(r.plugins_ini_postfix) : globalPostfix,
+    plugins,
+    plugins_ini_postfix: postfix,
     exclude:             r.exclude       || [],
     exclude_files:       r.exclude_files || [],
     deps_override:       r.deps_override ? parseDepsLines(r.deps_override) : null,
@@ -486,17 +495,159 @@ function parseAssetCache(val) {
   return val;
 }
 
+/**
+ * Single ini normaliser (source of truth) for defaults, rules, repos and
+ * post-`--set` values.
+ *
+ *   undefined|null -> null  (inherit the parent layer)
+ *   false          -> false (compile, exclude from every INI)
+ *   true           -> ''    (plugins.ini)
+ *   anything else  -> String(v)  (also coerces numeric --set values)
+ *
+ * @param {*} v
+ * @returns {null|false|string}
+ */
+function normalizeIni(v) {
+  if (v === undefined || v === null) return null;
+  if (v === false) return false;
+  if (v === true)  return '';
+  return String(v);
+}
+
+function emptyPluginSettings() {
+  return { ini: null, debug: null };
+}
+
+function parsePluginSettings(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`manifest: plugin settings must be an object: ${JSON.stringify(raw)}`);
+  }
+  return {
+    ini:   normalizeIni(raw.ini),
+    debug: raw.debug == null ? null : Boolean(raw.debug),
+  };
+}
+
 function parsePluginRules(rules) {
-  if (!Array.isArray(rules)) return [];
+  if (rules == null) return [];
+  if (!Array.isArray(rules)) {
+    throw new Error('manifest: "plugins.rules" must be an array');
+  }
   return rules.map((r, i) => {
-    if (!r.match) throw new Error(`plugins[${i}]: missing "match" field`);
-    const ini = r.ini === false ? false : (r.ini != null ? String(r.ini) : null);
+    if (!r || typeof r !== 'object' || Array.isArray(r)) {
+      throw new Error(`plugins.rules[${i}]: must be an object`);
+    }
+    if (!r.match) throw new Error(`plugins.rules[${i}]: missing "match" field`);
     return {
       match:   String(r.match),
       enabled: r.enabled !== false,
-      ini,
+      ini:     normalizeIni(r.ini),
+      debug:   r.debug == null ? null : Boolean(r.debug),
     };
   });
+}
+
+/**
+ * Parse top-level `plugins` — canonical object form `{ defaults, rules }` or
+ * the legacy array form (rules only). All sentinels are explicit `null`.
+ *
+ * @param {*} raw
+ * @returns {{ defaults: {ini: null|false|string, debug: null|boolean},
+ *             rules: {match: string, enabled: boolean, ini: null|false|string, debug: null|boolean}[] }}
+ */
+function parsePlugins(raw) {
+  if (Array.isArray(raw)) {
+    return { defaults: emptyPluginSettings(), rules: parsePluginRules(raw) };
+  }
+  if (raw != null) {
+    if (typeof raw !== 'object') {
+      throw new Error('manifest: "plugins" must be an array or an object with "defaults"/"rules"');
+    }
+    return {
+      defaults: raw.defaults != null ? parsePluginSettings(raw.defaults) : emptyPluginSettings(),
+      rules:    parsePluginRules(raw.rules),
+    };
+  }
+  return { defaults: emptyPluginSettings(), rules: [] };
+}
+
+/**
+ * Recompute the resolved plugin-ini state on a manifest. Idempotent; mutates
+ * `manifest`. Must run at the end of parseManifest and at the end of
+ * resolveManifest (after --set), so overridden values are normalised and the
+ * legacy adaptation/warnings reflect what was actually requested.
+ *
+ * Sets `manifest.pluginIni`, `manifest.repos[i]._pluginSettings` and
+ * `manifest._deprecations`; never replaces `manifest.repos[i].plugins`.
+ *
+ * @param {object} manifest — parsed (and possibly overridden) manifest
+ * @returns {void}
+ */
+function finalizePluginConfig(manifest) {
+  manifest._deprecations = [];
+
+  const cfg = manifest.plugins || (manifest.plugins = { defaults: emptyPluginSettings(), rules: [] });
+  if (!cfg.defaults || typeof cfg.defaults !== 'object') cfg.defaults = emptyPluginSettings();
+  if (!Array.isArray(cfg.rules)) cfg.rules = [];
+  const repos = Array.isArray(manifest.repos) ? manifest.repos : (manifest.repos = []);
+
+  // Normalise every layer (covers --set values that bypass parsePlugins).
+  cfg.defaults.ini   = normalizeIni(cfg.defaults.ini);
+  cfg.defaults.debug = cfg.defaults.debug == null ? null : Boolean(cfg.defaults.debug);
+  for (const rule of cfg.rules) {
+    rule.ini   = normalizeIni(rule.ini);
+    rule.debug = rule.debug == null ? null : Boolean(rule.debug);
+  }
+  for (const repo of repos) {
+    if (!repo.plugins) continue;
+    repo.plugins.ini   = normalizeIni(repo.plugins.ini);
+    repo.plugins.debug = repo.plugins.debug == null ? null : Boolean(repo.plugins.debug);
+  }
+
+  // Legacy global adaptation: output.generate_ini === true enables generation,
+  // but only when the project did not set plugins.defaults.ini itself.
+  let defaultsIni = cfg.defaults.ini;
+  if (manifest.output && manifest.output.generate_ini === true && defaultsIni === null) {
+    defaultsIni = normalizeIni(manifest.plugins_ini_postfix);
+    if (defaultsIni === null) defaultsIni = '';
+  }
+
+  // Effective per-repo settings; repo.plugins stays untouched user data.
+  for (const repo of repos) {
+    if (repo.plugins != null) {
+      repo._pluginSettings = { ini: repo.plugins.ini, debug: repo.plugins.debug };
+    } else if (repo.plugins_ini_postfix != null) {
+      repo._pluginSettings = { ini: normalizeIni(repo.plugins_ini_postfix), debug: null };
+    } else {
+      repo._pluginSettings = { ini: null, debug: null };
+    }
+  }
+
+  const isSet = (v) => v !== null && v !== undefined && v !== false;
+  const enabled = isSet(defaultsIni)
+    || cfg.rules.some((r) => isSet(r.ini))
+    || repos.some((r) => isSet(r._pluginSettings.ini));
+
+  manifest.pluginIni = {
+    enabled,
+    defaultIni: !enabled ? false : (defaultsIni !== null ? defaultsIni : ''),
+    defaultDebug: cfg.defaults.debug === true,
+  };
+
+  // Deprecations are detected on the legacy raw fields only.
+  const deprecations = [];
+  if (manifest.output && manifest.output.generate_ini === true) {
+    deprecations.push('[DEPRECATED] output.generate_ini — use plugins.defaults.ini instead');
+  }
+  if (manifest.plugins_ini_postfix != null) {
+    deprecations.push('[DEPRECATED] plugins_ini_postfix — use plugins.defaults.ini instead');
+  }
+  for (const repo of repos) {
+    if (repo.plugins_ini_postfix != null) {
+      deprecations.push(`[DEPRECATED] repos[].plugins_ini_postfix (${repo.repo}) — use repos[].plugins.ini instead`);
+    }
+  }
+  manifest._deprecations = [...new Set(deprecations)];
 }
 
 function interpolateEnv(val) {
@@ -558,7 +709,8 @@ function resolveManifest(manifestPath, options = {}) {
     manifest.amxmodx.defines.push(...options.define);
   }
 
+  finalizePluginConfig(manifest);
   return manifest;
 }
 
-module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge };
+module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge, normalizeIni, finalizePluginConfig };
