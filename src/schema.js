@@ -31,7 +31,7 @@ try {
 function validateManifest(raw) {
   if (!schemaCache) return { valid: true, errors: [] };
 
-  const ajv = new Ajv({ allErrors: true });
+  const ajv = new Ajv({ allErrors: true, allowUnionTypes: true });
   addFormats(ajv);
   const validate = ajv.compile(schemaCache);
   const valid = validate(raw);

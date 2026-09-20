@@ -155,17 +155,39 @@ test('validateManifestFile: repos wrong type → schema error at /repos', (t) =>
   assert.match(reposErr.message, /must be array/);
 });
 
-test('validateManifestFile: plugins wrong type → schema error at /plugins', (t) => {
+test('validateManifestFile: plugins wrong type (string) → schema error at /plugins', (t) => {
   const dir = makeTmpDir('amxb-val-plugins-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const manifestPath = writeManifest(dir, 'name: Test\nplugins:\n  a: 1');
+  const manifestPath = writeManifest(dir, 'name: Test\nplugins: "nope"');
 
   const result = validateManifestFile(manifestPath);
 
   assert.equal(result.valid, false);
   const pluginsErr = result.errors.find((e) => e.path === '/plugins');
   assert.ok(pluginsErr, `expected a schema error at /plugins, got: ${JSON.stringify(result.errors)}`);
-  assert.match(pluginsErr.message, /must be array/);
+  assert.match(pluginsErr.message, /must be array|must be object|oneOf/);
+});
+
+test('validateManifestFile: plugins object form is valid', (t) => {
+  const dir = makeTmpDir('amxb-val-plugins-obj-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'plugins:',
+    '  defaults:',
+    '    ini: true',
+    '    debug: true',
+    '  rules:',
+    '    - match: "VipM/*.sma"',
+    '      ini: false',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
 });
 
 test('validateManifestFile: invalid manifest accumulates multiple errors', (t) => {
