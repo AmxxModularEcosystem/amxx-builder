@@ -114,7 +114,7 @@ test('parseManifest: canonical object form parses defaults + rules', () => {
     { match: 'VipM/*.sma', enabled: true, ini: 'vipm', debug: false },
     { match: 'wip/*.sma', enabled: false, ini: null, debug: null },
   ]);
-  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: 'myserver', defaultDebug: true });
+  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: 'myserver', defaultDebug: true, forceDebug: null });
   assert.deepEqual(m._deprecations, []);
 });
 
@@ -124,7 +124,7 @@ test('parseManifest: empty object form → explicit null sentinels, disabled', (
 
   assert.deepEqual(m.plugins.defaults, { ini: null, debug: null });
   assert.deepEqual(m.plugins.rules, []);
-  assert.deepEqual(m.pluginIni, { enabled: false, defaultIni: false, defaultDebug: false });
+  assert.deepEqual(m.pluginIni, { enabled: false, defaultIni: false, defaultDebug: false, forceDebug: null });
 });
 
 test('parseManifest: legacy array form → rules only, null defaults', () => {
@@ -145,7 +145,7 @@ test('parseManifest: legacy array form → rules only, null defaults', () => {
     { match: 'VipM/*.sma', enabled: true, ini: 'vipm', debug: null },
     { match: 'legacy.sma', enabled: false, ini: null, debug: null },
   ]);
-  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: '', defaultDebug: false });
+  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: '', defaultDebug: false, forceDebug: null });
 });
 
 test('parseManifest: ini true/false normalise per rule', () => {
@@ -367,7 +367,7 @@ test('legacy: output.generate_ini:true → plugins.ini + deprecation', () => {
 
   const m = parseManifest(file);
 
-  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: '', defaultDebug: false });
+  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: '', defaultDebug: false, forceDebug: null });
   assert.equal(m._deprecations.length, 1);
   assert.match(m._deprecations[0], /output\.generate_ini/);
 });
@@ -383,7 +383,7 @@ test('legacy: generate_ini:true + plugins_ini_postfix → adapted postfix, both 
 
   const m = parseManifest(file);
 
-  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: 'mypost', defaultDebug: false });
+  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: 'mypost', defaultDebug: false, forceDebug: null });
   assert.equal(m._deprecations.length, 2);
   assert.ok(m._deprecations.some((d) => /output\.generate_ini/.test(d)));
   assert.ok(m._deprecations.some((d) => /plugins_ini_postfix/.test(d)));
@@ -399,7 +399,7 @@ test('legacy: plugins_ini_postfix without generate_ini is inert but warns', () =
   const m = parseManifest(file);
 
   assert.equal(m.plugins_ini_postfix, 'inertpost');
-  assert.deepEqual(m.pluginIni, { enabled: false, defaultIni: false, defaultDebug: false });
+  assert.deepEqual(m.pluginIni, { enabled: false, defaultIni: false, defaultDebug: false, forceDebug: null });
   assert.equal(m._deprecations.length, 1);
   assert.match(m._deprecations[0], /plugins_ini_postfix/);
 });
@@ -416,7 +416,7 @@ test('legacy: repos[].plugins_ini_postfix → _pluginSettings + warning', () => 
   const m = parseManifest(file);
 
   assert.deepEqual(m.repos[0]._pluginSettings, { ini: 'repo-post', debug: null });
-  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: '', defaultDebug: false });
+  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: '', defaultDebug: false, forceDebug: null });
   assert.equal(m._deprecations.length, 1);
   assert.match(m._deprecations[0], /repos\[\]\.plugins_ini_postfix/);
 });
@@ -460,14 +460,14 @@ test('resolveManifest --set: plugins.defaults.ini/debug take effect after overri
   });
 
   assert.deepEqual(m.plugins.defaults, { ini: 'vip', debug: true });
-  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: 'vip', defaultDebug: true });
+  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: 'vip', defaultDebug: true, forceDebug: null });
 });
 
 test('resolveManifest --set: output.generate_ini=true adapts defaults.ini', () => {
   const file = writeTmpYaml('name: TestServer\nversion: "1.0.0"\n');
   const m = resolveManifest(file, { set: ['output.generate_ini=true'] });
 
-  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: '', defaultDebug: false });
+  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: '', defaultDebug: false, forceDebug: null });
   assert.equal(m._deprecations.length, 1);
   assert.match(m._deprecations[0], /output\.generate_ini/);
 });
@@ -490,7 +490,7 @@ test('resolveManifest --set: numeric ini coerces to string, false disables', () 
   assert.equal(numeric.pluginIni.defaultIni, '0');
 
   const disabled = resolveManifest(file, { set: ['plugins.defaults.ini=false'] });
-  assert.deepEqual(disabled.pluginIni, { enabled: false, defaultIni: false, defaultDebug: false });
+  assert.deepEqual(disabled.pluginIni, { enabled: false, defaultIni: false, defaultDebug: false, forceDebug: null });
 });
 
 test('resolveManifest --set: repos.0.plugins.ini overrides the repo layer', () => {
@@ -553,5 +553,71 @@ test('finalizePluginConfig: idempotent across repeated runs', () => {
 
   assert.deepEqual(snapshot(m), once);
   assert.equal(m.plugins.rules[0].ini, '5');
-  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: 'mypost', defaultDebug: true });
+  assert.deepEqual(m.pluginIni, { enabled: true, defaultIni: 'mypost', defaultDebug: true, forceDebug: null });
+});
+
+// ─── AMXB_PLUGINS_DEBUG (local-only env override) ───────────────────────────
+
+test('finalizePluginConfig: AMXB_PLUGINS_DEBUG 1/true/yes/on → forceDebug true', () => {
+  for (const value of ['1', 'true', 'yes', 'on']) {
+    const m = bareManifest();
+    finalizePluginConfig(m, { AMXB_PLUGINS_DEBUG: value });
+    assert.equal(m.pluginIni.forceDebug, true, `value ${JSON.stringify(value)}`);
+  }
+});
+
+test('finalizePluginConfig: AMXB_PLUGINS_DEBUG 0/false/no/off → forceDebug false', () => {
+  for (const value of ['0', 'false', 'no', 'off']) {
+    const m = bareManifest();
+    finalizePluginConfig(m, { AMXB_PLUGINS_DEBUG: value });
+    assert.equal(m.pluginIni.forceDebug, false, `value ${JSON.stringify(value)}`);
+  }
+});
+
+test('finalizePluginConfig: AMXB_PLUGINS_DEBUG is trimmed and case-insensitive', () => {
+  const on  = bareManifest();
+  const off = bareManifest();
+  finalizePluginConfig(on,  { AMXB_PLUGINS_DEBUG: '  TRUE ' });
+  finalizePluginConfig(off, { AMXB_PLUGINS_DEBUG: '\tOff\n' });
+  assert.equal(on.pluginIni.forceDebug, true);
+  assert.equal(off.pluginIni.forceDebug, false);
+});
+
+test('finalizePluginConfig: unset/empty/unknown AMXB_PLUGINS_DEBUG → forceDebug null', () => {
+  const envs = [
+    {},
+    { AMXB_PLUGINS_DEBUG: '' },
+    { AMXB_PLUGINS_DEBUG: '   ' },
+    { AMXB_PLUGINS_DEBUG: null },
+    { AMXB_PLUGINS_DEBUG: 'maybe' },
+  ];
+  for (const env of envs) {
+    const m = bareManifest();
+    finalizePluginConfig(m, env);
+    assert.equal(m.pluginIni.forceDebug, null, JSON.stringify(env));
+  }
+});
+
+test('finalizePluginConfig: forceDebug never modifies defaultDebug', () => {
+  const on = bareManifest({ defaults: { debug: false } });
+  finalizePluginConfig(on, { AMXB_PLUGINS_DEBUG: '1' });
+  assert.deepEqual(on.pluginIni, {
+    enabled: false, defaultIni: false, defaultDebug: false, forceDebug: true,
+  });
+
+  const off = bareManifest({ defaults: { debug: true } });
+  finalizePluginConfig(off, { AMXB_PLUGINS_DEBUG: '0' });
+  assert.deepEqual(off.pluginIni, {
+    enabled: false, defaultIni: false, defaultDebug: true, forceDebug: false,
+  });
+});
+
+test('finalizePluginConfig: forceDebug is recomputed per call from the given env', () => {
+  const m = bareManifest();
+  finalizePluginConfig(m, { AMXB_PLUGINS_DEBUG: '1' });
+  assert.equal(m.pluginIni.forceDebug, true);
+  finalizePluginConfig(m, {});
+  assert.equal(m.pluginIni.forceDebug, null);
+  finalizePluginConfig(m, { AMXB_PLUGINS_DEBUG: 'off' });
+  assert.equal(m.pluginIni.forceDebug, false);
 });

@@ -518,6 +518,28 @@ function emptyPluginSettings() {
   return { ini: null, debug: null };
 }
 
+/**
+ * Parse the local-only `AMXB_PLUGINS_DEBUG` override (trimmed,
+ * case-insensitive):
+ *
+ *   unset / empty / other   -> null  (no override)
+ *   1 | true | yes | on     -> true  (force ` debug` on every compiled plugin)
+ *   0 | false | no | off    -> false (force ` debug` off)
+ *
+ * Lives in core so every interface resolves the override the same way.
+ *
+ * @param {object} [env=process.env]
+ * @returns {boolean|null}
+ */
+function parsePluginsDebugEnv(env = process.env) {
+  const raw = env ? env.AMXB_PLUGINS_DEBUG : null;
+  if (raw == null) return null;
+  const value = String(raw).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(value))   return true;
+  if (['0', 'false', 'no', 'off'].includes(value))  return false;
+  return null;
+}
+
 function parsePluginSettings(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error(`manifest: plugin settings must be an object: ${JSON.stringify(raw)}`);
@@ -577,13 +599,15 @@ function parsePlugins(raw) {
  * resolveManifest (after --set), so overridden values are normalised and the
  * legacy adaptation/warnings reflect what was actually requested.
  *
- * Sets `manifest.pluginIni`, `manifest.repos[i]._pluginSettings` and
- * `manifest._deprecations`; never replaces `manifest.repos[i].plugins`.
+ * Sets `manifest.pluginIni` (including `forceDebug` from `env`),
+ * `manifest.repos[i]._pluginSettings` and `manifest._deprecations`; never
+ * replaces `manifest.repos[i].plugins`.
  *
  * @param {object} manifest — parsed (and possibly overridden) manifest
+ * @param {object} [env=process.env] — env source for AMXB_PLUGINS_DEBUG
  * @returns {void}
  */
-function finalizePluginConfig(manifest) {
+function finalizePluginConfig(manifest, env = process.env) {
   manifest._deprecations = [];
 
   const cfg = manifest.plugins || (manifest.plugins = { defaults: emptyPluginSettings(), rules: [] });
@@ -632,6 +656,7 @@ function finalizePluginConfig(manifest) {
     enabled,
     defaultIni: !enabled ? false : (defaultsIni !== null ? defaultsIni : ''),
     defaultDebug: cfg.defaults.debug === true,
+    forceDebug: parsePluginsDebugEnv(env),
   };
 
   // Deprecations are detected on the legacy raw fields only.
@@ -713,4 +738,4 @@ function resolveManifest(manifestPath, options = {}) {
   return manifest;
 }
 
-module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge, normalizeIni, finalizePluginConfig };
+module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge, normalizeIni, finalizePluginConfig, parsePluginsDebugEnv };
