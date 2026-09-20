@@ -45,6 +45,8 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
   // plugins.defaults is the base layer for every plugin (local + repo).
   const pluginIni = manifest.pluginIni || { defaultIni: false, defaultDebug: false };
   const base = { ini: pluginIni.defaultIni, debug: pluginIni.defaultDebug === true };
+  // AMXB_PLUGINS_DEBUG outranks rule/repo debug when set (true or false).
+  const forceDebug = pluginIni.forceDebug != null ? pluginIni.forceDebug : null;
 
   // ── Build unified source list ──────────────────────────────────────────────
   const seenSources = new Set(); // case-insensitive repo identity (dedupe)
@@ -114,12 +116,14 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
         }
         taskPostfix = ruleResult.postfix;
         skipIni     = ruleResult.skipIni;
-        taskDebug   = ruleResult.debug;
+        taskDebug   = forceDebug != null ? forceDebug : ruleResult.debug;
       } else {
         const ini = settings.ini != null ? settings.ini : base.ini;
         taskPostfix = ini === false ? '' : ini;
         skipIni     = ini === false;
-        taskDebug   = settings.debug != null ? settings.debug : base.debug;
+        taskDebug   = forceDebug != null
+          ? forceDebug
+          : (settings.debug != null ? settings.debug : base.debug);
       }
 
       const baseName = path.basename(smaRel);

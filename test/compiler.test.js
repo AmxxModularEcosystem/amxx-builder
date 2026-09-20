@@ -70,7 +70,7 @@ function makeManifest(dir, overrides = {}) {
     _path: path.join(dir, 'amxbuild.yml'),
     amxmodx: { dir: 'amxmodx', defines: [] },
     plugins: { defaults: { ini: null, debug: null }, rules: [] },
-    pluginIni: { enabled: false, defaultIni: false, defaultDebug: false },
+    pluginIni: { enabled: false, defaultIni: false, defaultDebug: false, forceDebug: null },
     output: { on_conflict: 'last_wins' },
     repos: [],
     ...overrides,
@@ -443,6 +443,74 @@ test('compilePlugins: repo _pluginSettings debug overrides pluginIni.defaultDebu
   assert.equal(compiled.length, 1);
   assert.equal(compiled[0].plugins_ini_postfix, 'vip');
   assert.equal(compiled[0].debug, true);
+});
+
+test('compilePlugins: pluginIni.forceDebug true overrides a local rule debug:false', async () => {
+  const dir = makeTmpDir('amxb-cp-force-local-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const buildDir = path.join(dir, 'build');
+  const localDir = path.join(dir, 'local');
+  const scriptingDir = path.join(localDir, 'amxmodx', 'scripting');
+  fs.mkdirSync(scriptingDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptingDir, 'core.sma'), 'main() { }\n');
+
+  const manifest = makeManifest(localDir, {
+    pluginIni: { enabled: true, defaultIni: 'x', defaultDebug: false, forceDebug: true },
+    plugins: {
+      defaults: { ini: null, debug: null },
+      rules: [{ match: 'core.sma', enabled: true, ini: null, debug: false }],
+    },
+  });
+
+  const compiled = await compilePlugins(manifest, {}, compilerPath, [], buildDir);
+  assert.equal(compiled.length, 1);
+  assert.equal(compiled[0].debug, true);
+});
+
+test('compilePlugins: pluginIni.forceDebug true overrides repo _pluginSettings.debug:false', async () => {
+  const dir = makeTmpDir('amxb-cp-force-repo-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const buildDir = path.join(dir, 'build');
+  const repoDir  = path.join(dir, 'repo');
+  fs.mkdirSync(path.join(repoDir, 'amxmodx', 'scripting'), { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'amxmodx', 'scripting', 'debugme.sma'), 'main() { }\n');
+
+  const repo = { repo: 'org/p', _resolvedRef: 'HEAD', amxmodx_dir: 'amxmodx', exclude: [], _pluginSettings: { ini: 'vip', debug: false } };
+  const manifest = makeManifest(dir, {
+    repos: [repo],
+    pluginIni: { enabled: true, defaultIni: 'x', defaultDebug: false, forceDebug: true },
+  });
+  const repoLocalDirs = makeRepoLocalDirs('org/p', 'HEAD', repoDir);
+
+  const compiled = await compilePlugins(manifest, repoLocalDirs, compilerPath, [], buildDir);
+  assert.equal(compiled.length, 1);
+  assert.equal(compiled[0].plugins_ini_postfix, 'vip');
+  assert.equal(compiled[0].debug, true);
+});
+
+test('compilePlugins: pluginIni.forceDebug false overrides a local rule debug:true', async () => {
+  const dir = makeTmpDir('amxb-cp-force-off-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const buildDir = path.join(dir, 'build');
+  const localDir = path.join(dir, 'local');
+  const scriptingDir = path.join(localDir, 'amxmodx', 'scripting');
+  fs.mkdirSync(scriptingDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptingDir, 'core.sma'), 'main() { }\n');
+
+  const manifest = makeManifest(localDir, {
+    pluginIni: { enabled: true, defaultIni: 'x', defaultDebug: true, forceDebug: false },
+    plugins: {
+      defaults: { ini: null, debug: null },
+      rules: [{ match: 'core.sma', enabled: true, ini: null, debug: true }],
+    },
+  });
+
+  const compiled = await compilePlugins(manifest, {}, compilerPath, [], buildDir);
+  assert.equal(compiled.length, 1);
+  assert.equal(compiled[0].debug, false);
 });
 
 test('compilePlugins: local rules set postfix/skipIni/debug over pluginIni defaults', async () => {
