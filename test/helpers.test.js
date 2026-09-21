@@ -531,6 +531,20 @@ function fakeManifest(overrides = {}) {
   };
 }
 
+test('buildPlanData: forwards ref_ttl only when declared', () => {
+  const plan = buildPlanData(fakeManifest({
+    repos: [{ repo: 'org/a', ref: 'v1', ref_ttl: 1800000, amxmodx_dir: 'amxmodx', deps_override: null }],
+    globalDeps: [{ source: 'git', repo: 'org/dep', ref: 'v2', ref_ttl: 'never', include_path: null, asset: null }],
+  }));
+
+  assert.equal(plan.repos[0].ref_ttl, 1800000);
+  assert.equal(plan.globalDeps[0].ref_ttl, 'never');
+
+  const plain = buildPlanData(fakeManifest());
+  assert.equal('ref_ttl' in plain.repos[0], false);
+  assert.equal('ref_ttl' in plain.globalDeps[0], false);
+});
+
 test('buildPlanData: compact shape has name, output and typed assets', () => {
   const plan = buildPlanData(fakeManifest());
 

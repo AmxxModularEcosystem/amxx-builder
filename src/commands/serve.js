@@ -54,7 +54,7 @@ const { on, off, EVENTS } = require('../events');
 
 const { loadEnv } = require('../env');
 const { resolveManifestPath } = require('../manifest-path');
-const { resolveManifest, parseManifest, resolveGithubToken, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries } = require('../manifest');
+const { resolveManifest, parseManifest, resolveGithubToken, parseDepString, parseDepObject, parseRefTtl, parseDocEntries, parseSkillEntries } = require('../manifest');
 const { resolveLocalEntry } = require('../local-sources');
 const { readDepManifest, collectDepAssets, collectLocalAssets } = require('../agent-assets');
 const { validateManifestFile } = require('../validate');
@@ -546,6 +546,7 @@ function createServeServer() {
           source: entry.source || 'git',
           include_path: entry.include_path || null,
           asset: entry.asset != null ? entry.asset : null,
+          ...(entry.ref_ttl != null ? { ref_ttl: parseRefTtl(entry.ref_ttl, `deps entry ${entry.repo}`) } : {}),
         };
       });
       return buildDepTree(rootDeps, { token: params?.token, noFetch, depth, from: 'user' });

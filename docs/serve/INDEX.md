@@ -337,7 +337,7 @@ child.stdin.write(JSON.stringify({
 | Параметр | Тип | Описание |
 |---|---|---|
 | `manifest` | string | Построить дерево из манифеста (repos + globalDeps, учитывая `deps_override`) |
-| `deps` | array | Вместо манифеста: массив строк (`"owner/repo@ref"`) или объектов `{repo, ref, source?, include_path?, asset?}` |
+| `deps` | array | Вместо манифеста: массив строк (`"owner/repo@ref"`) или объектов `{repo, ref, source?, include_path?, asset?, ref_ttl?}`. Для git-объекта `ref_ttl` задаёт TTL кэша резолва `ref → SHA` (`never`, длительность вида `30m`/`1h`/`7d` или целое число секунд; по умолчанию тег — вечно, ветка — 1ч) |
 | `depth` | number | Макс. глубина (0 = без ограничений) |
 | `token` | string | GitHub PAT |
 | `noFetch` | boolean | Только кэш |
@@ -561,7 +561,7 @@ child.stdin.write(JSON.stringify({
 | `detailedAssets` | boolean | Развёрнутая информация об ассетах (`map`, `source`, `cache`, файлы локальных) |
 | `listLocal` | boolean | Листинг файлов локальных ассетов (по умолчанию true) |
 
-Ответ — объект `buildPlanData` (см. `src/build-plan.js`): `name`, `version`, `compiler`, `repos`, `deps`, `assets`, `output`, ... Элементы `repos[]` и `globalDeps[]` несут `source` (`"local"` для локального источника) и `local_dir` (абсолютный путь или `null`); для локальных записей `ref` равен `null`.
+Ответ — объект `buildPlanData` (см. `src/build-plan.js`): `name`, `version`, `compiler`, `repos`, `deps`, `assets`, `output`, ... Элементы `repos[]` и `globalDeps[]` несут `source` (`"local"` для локального источника) и `local_dir` (абсолютный путь или `null`); для локальных записей `ref` равен `null`. У git-записей может присутствовать `ref_ttl` — TTL кэша резолва `ref → SHA` (`"never"` или число миллисекунд; поле отсутствует, если в манифесте оно не задано).
 
 INI-настройки плана лежат в `output`:
 

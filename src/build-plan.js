@@ -41,6 +41,7 @@ function buildPlanData(manifest, options = {}) {
       amxmodx_dir: r.amxmodx_dir,
       deps_override: r.deps_override || null,
       local_dir: r._localDir || null,
+      ...(r.ref_ttl !== undefined ? { ref_ttl: r.ref_ttl } : {}),
     })),
     globalDeps: manifest.globalDeps.map((d) => ({
       source: isLocal(d) ? 'local' : d.source,
@@ -51,6 +52,7 @@ function buildPlanData(manifest, options = {}) {
       include_path: d.include_path || null,
       asset: d.asset ?? null,
       local_dir: d._localDir || null,
+      ...(d.ref_ttl !== undefined ? { ref_ttl: d.ref_ttl } : {}),
     })),
     assets: manifest.assets.sources.map((s) => {
       if (detailed) {
