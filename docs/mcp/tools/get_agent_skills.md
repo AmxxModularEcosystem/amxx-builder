@@ -10,6 +10,7 @@
 |------|-----|:---:|---------|
 | `dep` | `string` | — | Зависимость в формате `owner/repo@ref` или `owner/repo@ref:путь_до_include` |
 | `repo` / `ref` / `source` / `include_path` / `asset` | — | — | Альтернатива `dep`: указать репозиторий и опции напрямую |
+| `ref_ttl` | `string \| number` | — | Для git: TTL кэша резолва `ref → SHA` — `"never"`, `30m`/`1h`/`7d` или целое число секунд. По умолчанию тег — вечно, ветка — 1 час |
 | `manifest` | `string` | — | Локальный режим: путь к `amxbuild.yml` (без `dep`/`repo` автоопределяется в cwd) |
 | `name` | `string` | — | Прочитать один скилл по имени. По умолчанию — все объявленные |
 | `token` | `string` | — | GitHub PAT. Если не указан, берётся из `GITHUB_TOKEN` |

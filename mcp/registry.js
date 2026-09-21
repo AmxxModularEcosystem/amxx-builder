@@ -135,7 +135,7 @@ const TOOLS = [
             'into sub-dependencies. Detects cycles and handles deps_override.\n\n' +
             'Provide either "manifest" (path to amxbuild.yml) or "deps" (array of dep entries).\n\n' +
             'Each dep entry can be a string ("owner/repo@ref") or an object ' +
-            '({ repo, ref, source?, include_path?, asset? }).',
+            '({ repo, ref, source?, include_path?, asset?, ref_ttl? }).',
           inputSchema: {
             type: 'object',
             properties: {
@@ -161,6 +161,13 @@ const TOOLS = [
                         source: { type: 'string', enum: ['git', 'release'] },
                         include_path: { type: 'string' },
                         asset: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+                        ref_ttl: {
+                          description:
+                            'TTL of the cached ref→SHA resolution for git deps: "never", a duration ' +
+                            'like "30m"/"1h"/"7d", or an integer number of seconds. Default: tags ' +
+                            'cached forever, branches 1h.',
+                          oneOf: [{ type: 'string' }, { type: 'integer' }],
+                        },
                       },
                       required: ['repo', 'ref'],
                     },
@@ -582,6 +589,12 @@ const TOOLS = [
               asset: {
                 description: 'For source=release: asset selector (glob pattern or index).',
               },
+              ref_ttl: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'TTL of the cached ref→SHA resolution for git deps: "never", a duration like ' +
+                  '"30m"/"1h"/"7d", or an integer number of seconds. Default: tags cached forever, branches 1h.',
+              },
               pattern: {
                 type: 'string',
                 description: 'Glob pattern, e.g. "**/*.sma", "amxmodx/**", "**/*".',
@@ -639,6 +652,12 @@ const TOOLS = [
               },
               asset: {
                 description: 'For source=release: asset selector (glob pattern or index).',
+              },
+              ref_ttl: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'TTL of the cached ref→SHA resolution for git deps: "never", a duration like ' +
+                  '"30m"/"1h"/"7d", or an integer number of seconds. Default: tags cached forever, branches 1h.',
               },
               file: {
                 type: 'string',
@@ -709,6 +728,12 @@ const TOOLS = [
               asset: {
                 description: 'For source=release: asset selector (glob pattern or index).',
               },
+              ref_ttl: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'TTL of the cached ref→SHA resolution for git deps: "never", a duration like ' +
+                  '"30m"/"1h"/"7d", or an integer number of seconds. Default: tags cached forever, branches 1h.',
+              },
               token: {
                 type: 'string',
                 description: 'GitHub PAT override. Defaults to GITHUB_TOKEN env.',
@@ -758,6 +783,12 @@ const TOOLS = [
               },
               asset: {
                 description: 'For source=release: asset selector (glob pattern or index).',
+              },
+              ref_ttl: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'TTL of the cached ref→SHA resolution for git deps: "never", a duration like ' +
+                  '"30m"/"1h"/"7d", or an integer number of seconds. Default: tags cached forever, branches 1h.',
               },
               manifest: {
                 type: 'string',
@@ -813,6 +844,12 @@ const TOOLS = [
               },
               asset: {
                 description: 'For source=release: asset selector (glob pattern or index).',
+              },
+              ref_ttl: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'TTL of the cached ref→SHA resolution for git deps: "never", a duration like ' +
+                  '"30m"/"1h"/"7d", or an integer number of seconds. Default: tags cached forever, branches 1h.',
               },
               manifest: {
                 type: 'string',
@@ -894,6 +931,12 @@ const TOOLS = [
               asset: {
                 description: 'For source=release: asset selector (glob pattern or index).',
               },
+              ref_ttl: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'TTL of the cached ref→SHA resolution for git deps: "never", a duration like ' +
+                  '"30m"/"1h"/"7d", or an integer number of seconds. Default: tags cached forever, branches 1h.',
+              },
               manifest: {
                 type: 'string',
                 description: 'Local mode: path to amxbuild.yml. Auto-detected in cwd when no dep/repo is given.',
@@ -948,6 +991,12 @@ const TOOLS = [
               },
               asset: {
                 description: 'For source=release: asset selector (glob pattern or index).',
+              },
+              ref_ttl: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'TTL of the cached ref→SHA resolution for git deps: "never", a duration like ' +
+                  '"30m"/"1h"/"7d", or an integer number of seconds. Default: tags cached forever, branches 1h.',
               },
               manifest: {
                 type: 'string',
@@ -1103,6 +1152,13 @@ const TOOLS = [
                         source: { type: 'string', enum: ['git', 'release'] },
                         include_path: { type: 'string' },
                         asset: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+                        ref_ttl: {
+                          description:
+                            'TTL of the cached ref→SHA resolution for git deps: "never", a duration ' +
+                            'like "30m"/"1h"/"7d", or an integer number of seconds. Default: tags ' +
+                            'cached forever, branches 1h.',
+                          oneOf: [{ type: 'string' }, { type: 'integer' }],
+                        },
                       },
                       required: ['repo', 'ref'],
                     },

@@ -9,7 +9,7 @@ const { resolveRefIfLatest }   = require('../src/repo-fetcher');
 const { fetchDepRoot, collectDepIncludeDirs } = require('../src/deps-resolver');
 const { resolveAssets, readAssets, readDepManifest, collectDepAssets, collectLocalAssets } = require('../src/agent-assets');
 const { getCompilerInfo, resolveStdlibVersion } = require('../src/compiler-fetcher');
-const { resolveManifest, resolveGithubToken, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries } = require('../src/manifest');
+const { resolveManifest, resolveGithubToken, parseDepString, parseDepObject, parseRefTtl, parseDocEntries, parseSkillEntries } = require('../src/manifest');
 const { parseManifest }         = require('../src/manifest');
 const { validateManifestFile }  = require('../src/validate');
 const { getManifestSchema }     = require('../src/schema');
@@ -266,7 +266,15 @@ async function handleGetDepTree(args, token, noFetch) {
         const parsed = parseDep(entry);
         return { repo: parsed.repo, ref: parsed.ref, source: parsed.source, include_path: parsed.include_path, asset: parsed.asset };
       }
-      return { repo: entry.repo, ref: entry.ref, source: entry.source || 'git', include_path: entry.include_path || null, asset: entry.asset != null ? entry.asset : null, _localDir: entry._localDir || null };
+      return {
+        repo: entry.repo,
+        ref: entry.ref,
+        source: entry.source || 'git',
+        include_path: entry.include_path || null,
+        asset: entry.asset != null ? entry.asset : null,
+        _localDir: entry._localDir || null,
+        ...(entry.ref_ttl != null ? { ref_ttl: parseRefTtl(entry.ref_ttl, `deps entry ${entry.repo}`) } : {}),
+      };
     });
   } else {
     return errorResult('Provide either "manifest" or "deps"', -32602);
@@ -562,7 +570,7 @@ async function handleBuildPlan(args) {
 
 /**
  * Build a parsed dep object from MCP tool args: either a full `dep` string/object
- * or explicit { repo, ref?, source?, include_path?, asset? } fields.
+ * or explicit { repo, ref?, source?, include_path?, asset?, ref_ttl? } fields.
  * Preserves the arg-shape handling of the former inline fetchDepRoot.
  */
 function depFromArgs(args) {
@@ -574,7 +582,14 @@ function depFromArgs(args) {
     const source = args.source || 'git';
     // Release deps need a ref — default to 'latest' when omitted.
     const ref = args.ref || (source === 'release' ? 'latest' : null);
-    dep = { repo: args.repo, ref, source, include_path: args.include_path || null, asset: args.asset ?? null };
+    dep = {
+      repo: args.repo,
+      ref,
+      source,
+      include_path: args.include_path || null,
+      asset: args.asset ?? null,
+      ...(args.ref_ttl != null ? { ref_ttl: parseRefTtl(args.ref_ttl, `deps entry ${args.repo}`) } : {}),
+    };
   }
   if (args?.source)        dep.source = args.source;
   if (args?.include_path)  dep.include_path = args.include_path;

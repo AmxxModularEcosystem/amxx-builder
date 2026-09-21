@@ -14,6 +14,7 @@
 | `source` | `"git" \| "release"` | — | Откуда скачать. По умолчанию `"git"` |
 | `include_path` | `string` | — | Считать этот путь внутри репо корнем при поиске манифеста |
 | `asset` | `string \| number` | — | Для `source: release` — какой ассет скачать (glob или индекс) |
+| `ref_ttl` | `string \| number` | — | Для git: TTL кэша резолва `ref → SHA` — `"never"`, `30m`/`1h`/`7d` или целое число секунд. По умолчанию тег — вечно, ветка — 1 час |
 | `token` | `string` | — | GitHub PAT. Если не указан, берётся из `GITHUB_TOKEN` |
 | `no_fetch` | `boolean` | — | Не ходить в сеть, только кэш |
 
