@@ -13,7 +13,7 @@ const assert = require('node:assert/strict');
 const axios = require('axios');
 
 const {
-  getRepoInfo, listBranches, getRepoStructure,
+  getRepoInfo, listBranches, getRepoStructure, getRefKind,
   GithubError, isValidRepo, validateRepoStructureOptions, filterTreeEntries,
 } = require('../src/github-api');
 
@@ -51,6 +51,7 @@ function withRoutes(r, fn) {
 const isRepo = (repo) => (u) => u.endsWith(`/repos/${repo}`);
 const isTree = () => (u) => u.includes('/git/trees/');
 const isBranches = (repo) => (u) => u.includes(`/repos/${repo}/branches`);
+const isRef = (repo, ns, ref) => (u) => u === `https://api.github.com/repos/${repo}/git/ref/${ns}/${ref}`;
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -163,6 +164,65 @@ test('getRepoInfo: network errors throw GithubError with status null', async () 
       (err) => err instanceof GithubError && err.status === null
     );
   });
+});
+
+// ─── getRefKind ───────────────────────────────────────────────────────────────
+
+test('getRefKind: tags 200 → "tag" (heads is never queried)', async () => {
+  let headsCalls = 0;
+  await withRoutes([
+    [isRef('o/r', 'tags', 'v1'), { ref: 'refs/tags/v1' }],
+    [isRef('o/r', 'heads', 'v1'), () => { headsCalls++; return { ref: 'refs/heads/v1' }; }],
+  ], async () => {
+    assert.equal(await getRefKind('o/r', 'v1', {}), 'tag');
+    assert.equal(headsCalls, 0);
+  });
+});
+
+test('getRefKind: tags 404 + heads 200 → "branch"', async () => {
+  await withRoutes([
+    [isRef('o/r', 'tags', 'dev'), () => { throw axiosError(404); }],
+    [isRef('o/r', 'heads', 'dev'), { ref: 'refs/heads/dev' }],
+  ], async () => {
+    assert.equal(await getRefKind('o/r', 'dev', {}), 'branch');
+  });
+});
+
+test('getRefKind: 404 from both namespaces → null', async () => {
+  let calls = 0;
+  await withRoutes([
+    [(u) => u.includes('/git/ref/tags/'), () => { calls++; throw axiosError(404); }],
+    [(u) => u.includes('/git/ref/heads/'), () => { calls++; throw axiosError(404); }],
+  ], async () => {
+    assert.equal(await getRefKind('o/r', 'nope', {}), null);
+    assert.equal(calls, 2, 'both namespaces are probed before giving up');
+  });
+});
+
+test('getRefKind: non-404 error propagates as GithubError without falling through', async () => {
+  let headsCalls = 0;
+  await withRoutes([
+    [isRef('o/r', 'tags', 'v1'), () => { throw axiosError(403, 'rate limit'); }],
+    [isRef('o/r', 'heads', 'v1'), () => { headsCalls++; return {}; }],
+  ], async () => {
+    await assert.rejects(
+      () => getRefKind('o/r', 'v1', {}),
+      (err) => err instanceof GithubError && err.status === 403 && /rate limit/.test(err.message)
+    );
+    assert.equal(headsCalls, 0);
+  });
+});
+
+test('getRefKind: slashes stay path separators, other chars are encoded per segment', async () => {
+  const urls = [];
+  await withRoutes([
+    [(u) => { urls.push(u); return u.includes('/git/ref/'); }, { ref: 'x' }],
+  ], async () => {
+    assert.equal(await getRefKind('o/r', 'release/v1.0 beta', {}), 'tag');
+  });
+  assert.deepEqual(urls, [
+    'https://api.github.com/repos/o/r/git/ref/tags/release/v1.0%20beta',
+  ]);
 });
 
 // ─── listBranches ─────────────────────────────────────────────────────────────

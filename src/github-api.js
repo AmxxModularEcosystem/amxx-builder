@@ -95,6 +95,37 @@ async function githubGet(url, { token } = {}) {
   }
 }
 
+/**
+ * Determine the kind of a ref: `'tag'`, `'branch'`, or `null` when neither
+ * namespace has it.
+ *
+ * Tags are probed first: when a name exists as both a tag and a branch, the
+ * immutable tag wins (a source pinned to a tag must not follow a branch).
+ * 404 from both namespaces → `null` (no such ref); any other GitHub error
+ * propagates as `GithubError` so a network/rate-limit failure is never
+ * mistaken for a successful classification.
+ *
+ * @param {string} repo - "owner/repo"
+ * @param {string} ref - branch/tag name (slashes stay path separators)
+ * @param {{ token?: string|null }} [options]
+ * @returns {Promise<'tag'|'branch'|null>}
+ */
+async function getRefKind(repo, ref, { token } = {}) {
+  // Slashes in the ref (feature/foo) stay path separators; each segment is
+  // encoded so '#', spaces, '?' in a ref name cannot break the URL.
+  const enc = String(ref).split('/').map(encodeURIComponent).join('/');
+  for (const [kind, ns] of [['tag', 'tags'], ['branch', 'heads']]) {
+    try {
+      await githubGet(`https://api.github.com/repos/${repo}/git/ref/${ns}/${enc}`, { token });
+      return kind;
+    } catch (err) {
+      if (err instanceof GithubError && err.status === 404) continue;
+      throw err;
+    }
+  }
+  return null;
+}
+
 function notFoundResult(repo) {
   return { repo, exists: false, reason: 'not_found_or_no_access' };
 }
@@ -302,6 +333,7 @@ module.exports = {
   isValidRepo,
   validateRepoStructureOptions,
   githubGet,
+  getRefKind,
   getRepoInfo,
   listBranches,
   getRepoStructure,
