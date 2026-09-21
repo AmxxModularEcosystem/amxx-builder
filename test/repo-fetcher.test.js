@@ -21,7 +21,8 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
-const { fetchRepo, getRepoCacheDir, isCacheValid } = require('../src/repo-fetcher');
+const { fetchRepo, getRepoCacheDir, isCacheValid, refTtlMs, applicableRefTtl } = require('../src/repo-fetcher');
+const logger = require('../src/logger');
 
 function makeTmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -121,5 +122,87 @@ test('fetchRepo: noFetch with missing cache rejects with --no-fetch hint', async
   await assert.rejects(
     fetchRepo('org/repo', 'v1', null, true),
     /--no-fetch/
+  );
+});
+
+// ─── ref_ttl policy ─────────────────────────────────────────────────────────
+
+function captureWarnings(fn) {
+  const warnings = [];
+  const origWarn = logger.warn;
+  logger.warn = (msg) => warnings.push(msg);
+  return fn()
+    .then((value) => ({ value, warnings }))
+    .finally(() => { logger.warn = origWarn; });
+}
+
+test('refTtlMs: explicit ref_ttl wins, tag defaults to forever, branch to 1h', () => {
+  const hour = 60 * 60 * 1000;
+  assert.equal(refTtlMs(undefined, 'tag'), Infinity);
+  assert.equal(refTtlMs(undefined, 'branch'), hour);
+  assert.equal(refTtlMs(undefined, undefined), hour);
+  assert.equal(refTtlMs(undefined, null), hour);
+  assert.equal(refTtlMs('never', 'branch'), Infinity);
+  assert.equal(refTtlMs(60000, 'tag'), 60000);
+  assert.equal(refTtlMs(60000, undefined), 60000);
+});
+
+test('applicableRefTtl: named refs pass through, others warn once and yield undefined', async () => {
+  const { warnings } = await captureWarnings(async () => {
+    assert.equal(applicableRefTtl('v1.2.3', 'never'), 'never');
+    assert.equal(applicableRefTtl('feature/x', 60000), 60000);
+    assert.equal(applicableRefTtl('v1', undefined), undefined);
+    assert.equal(applicableRefTtl(null, 60000), undefined);
+    assert.equal(applicableRefTtl(undefined, 60000), undefined);
+    assert.equal(applicableRefTtl('latest', 60000), undefined);
+    assert.equal(applicableRefTtl(sha(3), 60000), undefined);
+  });
+
+  assert.equal(warnings.length, 4, 'one warning per inapplicable ref with a configured ttl');
+  for (const w of warnings) assert.match(w, /ref_ttl does not apply/);
+});
+
+test('fetchRepo: ref_ttl on a pinned SHA is ignored with a warning (no network)', async (t) => {
+  withCacheDir(t);
+  const pinnedSha = sha(4);
+  const dir = getRepoCacheDir('org/repo', pinnedSha);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.extracted'), pinnedSha);
+
+  const { value: result, warnings } = await captureWarnings(
+    () => fetchRepo('org/repo', pinnedSha, null, false, false, 'never')
+  );
+
+  assert.equal(result, dir);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /ref_ttl does not apply/);
+});
+
+// ─── URL path-traversal guard (no network) ───────────────────────────────────
+
+test('fetchRepo: unsafe ref path segments are rejected before any network call', async (t) => {
+  const cacheRoot = withCacheDir(t);
+
+  await assert.rejects(
+    fetchRepo('org/repo', '../../../tarball/main', null, false),
+    /Unsafe ref "\.\.\/\.\.\/\.\.\/tarball\/main" — refs must not contain empty, "\." or "\.\." path segments/
+  );
+  await assert.rejects(fetchRepo('org/repo', 'feature//x', null, false), /Unsafe ref/);
+  await assert.rejects(fetchRepo('org/repo', 'a/./b', null, false), /Unsafe ref/);
+
+  // Rejected before resolution: nothing was fetched into the cache root.
+  assert.deepEqual(fs.readdirSync(cacheRoot), []);
+});
+
+test('fetchRepo: invalid repo string is rejected before any network call', async (t) => {
+  withCacheDir(t);
+
+  await assert.rejects(
+    fetchRepo('just-a-name', 'main', null, false),
+    /Invalid repo "just-a-name" — expected "owner\/repo"/
+  );
+  await assert.rejects(
+    fetchRepo('a/../b', 'main', null, false),
+    /Invalid repo "a\/\.\.\/b" — expected "owner\/repo"/
   );
 });

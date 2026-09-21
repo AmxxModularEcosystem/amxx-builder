@@ -32,6 +32,7 @@ const zlib = require('node:zlib');
 
 const axios = require('axios');
 const { fetchRepo, getRepoCacheDir } = require('../src/repo-fetcher');
+const logger = require('../src/logger');
 const { setEnabled } = require('../src/progress');
 
 setEnabled(false); // keep test output clean — no \r progress bars
@@ -124,6 +125,7 @@ function stubStream(buf) {
 // Routes axios.get by URL against a per-test state object. Each URL family:
 //   api.github.com/repos/{repo}               → { default_branch } (or failApi)
 //   api.github.com/repos/{repo}/commits/{ref} → { sha } (or failApi)
+//   api.github.com/repos/{repo}/git/ref/…     → 200/404 per state.refKinds
 //   codeload.github.com/{repo}/tar.gz/{ref}   → tar.gz stream from state.tarballs
 function installFake(t, state) {
   const calls = [];
@@ -142,6 +144,14 @@ function installFake(t, state) {
       const ref = m[2];
       if (!(ref in state.commits)) throw makeAxiosError('Request failed with status code 404', 404);
       return { data: { sha: state.commits[ref] }, headers: {} };
+    }
+    m = url.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/git\/ref\/(tags|heads)\/(.+)$/);
+    if (m) {
+      const kinds = state.refKinds && state.refKinds[m[1]];
+      if (!kinds) throw new Error('unmocked URL: ' + url);
+      const kind = m[2] === 'tags' ? 'tag' : 'branch';
+      if (!kinds.includes(kind)) throw makeAxiosError('Request failed with status code 404', 404);
+      return { data: { ref: m[2] + '/' + m[3] }, headers: {} };
     }
     m = url.match(/^https:\/\/codeload\.github\.com\/([^/]+\/[^/]+)\/tar\.gz\/(.+)$/);
     if (m) {
@@ -423,3 +433,152 @@ test('pinned SHA ref skips resolution entirely and caches under that SHA', async
 // not exercisable offline. Its moving-ref behavior is exactly the existing
 // explicit-SHA path (fetch + checkout, never --branch) — see the module
 // docstring of the test file for why that is left to the real-git coverage.
+
+// ─── (h) ref_ttl: tag/branch TTL policy + kind classification ───────────────
+
+test('tag-kind entry is eternal: stale timestamp still resolves with zero HTTP', async (t) => {
+  const cacheRoot = useTempCache(t);
+  const calls = installFake(t, makeState());
+
+  const repo = 'org/ttl-eternal';
+  const tagSha = sha(10);
+  writeRefHeads(cacheRoot, repo, 'v1', { sha: tagSha, kind: 'tag', at: Date.now() - 2 * 3600 * 1000 });
+  const dir = seedCloneDir(repo, tagSha, 'eternal tag');
+
+  const result = await fetchRepo(repo, 'v1', null, false);
+
+  assert.equal(result, dir);
+  assert.equal(fs.readFileSync(path.join(result, 'hello.txt'), 'utf8'), 'eternal tag');
+  assert.equal(calls.length, 0, 'a tag entry never expires — no ref resolution network call');
+});
+
+test('expired branch TTL returning the same SHA reuses the dir without re-download', async (t) => {
+  const cacheRoot = useTempCache(t);
+  const state = makeState();
+  const calls = installFake(t, state);
+
+  const repo = 'org/ttl-same-sha';
+  const branchSha = sha(11);
+  state.commits.dev = branchSha;
+  writeRefHeads(cacheRoot, repo, 'dev', { sha: branchSha, kind: 'branch', at: Date.now() - 2 * 3600 * 1000 });
+  const dir = seedCloneDir(repo, branchSha, 'stable branch');
+  // Sentinel content is never rewritten when the existing dir is reused.
+  fs.writeFileSync(path.join(dir, '.extracted'), 'do-not-recreate');
+
+  const result = await fetchRepo(repo, 'dev', null, false);
+
+  assert.equal(result, dir, 'same SHA → same dir');
+  assert.equal(
+    fs.readFileSync(path.join(result, '.extracted'), 'utf8'), 'do-not-recreate',
+    '.extracted was not recreated'
+  );
+  assert.deepEqual(apiCalls(calls).map((c) => c.url), [
+    'https://api.github.com/repos/org/ttl-same-sha/commits/dev',
+  ], 'one re-resolution, no kind probe (kind is cached)');
+  assert.equal(dlCalls(calls).length, 0, 'no re-download for an unchanged SHA');
+  const entry = readRefHeads(cacheRoot)[`org/ttl-same-sha@dev`];
+  assert.equal(entry.kind, 'branch', 'cached kind is preserved across the re-resolution');
+  assert.ok(entry.at > Date.now() - 1000, 'resolution timestamp extended on same-SHA refresh');
+});
+
+test("ref_ttl 'never' on a branch: a stale entry resolves with zero HTTP", async (t) => {
+  const cacheRoot = useTempCache(t);
+  const calls = installFake(t, makeState());
+
+  const repo = 'org/ttl-never';
+  const branchSha = sha(12);
+  writeRefHeads(cacheRoot, repo, 'dev', { sha: branchSha, kind: 'branch', at: Date.now() - 2 * 3600 * 1000 });
+  const dir = seedCloneDir(repo, branchSha, 'frozen branch');
+
+  const result = await fetchRepo(repo, 'dev', null, false, false, 'never');
+
+  assert.equal(result, dir);
+  assert.equal(calls.length, 0, 'explicit ref_ttl never → the entry never expires');
+});
+
+test('a new ref is classified once and the tag kind is persisted in the index', async (t) => {
+  if (!HAS_TAR) return t.skip('tar binary not available');
+  const cacheRoot = useTempCache(t);
+  const state = makeState();
+  const calls = installFake(t, state);
+
+  const repo = 'org/ttl-classify';
+  const tagSha = sha(13);
+  state.refKinds = { [repo]: ['tag'] };
+  state.commits['v2.0.0'] = tagSha;
+  state.tarballs[tagSha] = tarGz('classify-' + tagSha, 'hello.txt', 'tagged');
+
+  const dir = await fetchRepo(repo, 'v2.0.0', null, false);
+
+  assert.equal(dir, getRepoCacheDir(repo, tagSha));
+  assert.deepEqual(apiCalls(calls).map((c) => c.url), [
+    'https://api.github.com/repos/org/ttl-classify/git/ref/tags/v2.0.0',
+    'https://api.github.com/repos/org/ttl-classify/commits/v2.0.0',
+  ], 'tags probed first; a tag needs no heads probe');
+  const entry = readRefHeads(cacheRoot)[`org/ttl-classify@v2.0.0`];
+  assert.equal(entry.kind, 'tag');
+  assert.equal(entry.sha, tagSha);
+
+  calls.length = 0;
+  assert.equal(await fetchRepo(repo, 'v2.0.0', null, false), dir, 'second build reuses the dir');
+  assert.equal(calls.length, 0, 'kind tag ⇒ resolution cached forever');
+});
+
+test('ref kind probe failure warns, keeps the branch TTL and never fails the fetch', async (t) => {
+  if (!HAS_TAR) return t.skip('tar binary not available');
+  const cacheRoot = useTempCache(t);
+  const state = makeState();
+  const calls = installFake(t, state);
+
+  const repo = 'org/ttl-probe-fail';
+  const branchSha = sha(14);
+  state.commits.dev = branchSha;
+  state.tarballs[branchSha] = tarGz('probe-fail-' + branchSha, 'hello.txt', 'branch fallback');
+  // No refKinds route for this repo → both probes fail, SHA resolution succeeds.
+
+  const warnings = [];
+  const origWarn = logger.warn;
+  logger.warn = (msg) => warnings.push(msg);
+  let dir;
+  try {
+    dir = await fetchRepo(repo, 'dev', null, false);
+  } finally {
+    logger.warn = origWarn;
+  }
+
+  assert.equal(dir, getRepoCacheDir(repo, branchSha));
+  assert.ok(warnings.some((m) => /ref kind probe failed/.test(m)), 'failed probe is warned');
+  const entry = readRefHeads(cacheRoot)[`org/ttl-probe-fail@dev`];
+  assert.equal(entry.sha, branchSha);
+  assert.ok(entry.kind == null, 'unknown kind → branch TTL');
+
+  // The failed probe is not retried within the process; the ref still resolves.
+  writeRefHeads(cacheRoot, repo, 'dev', { sha: branchSha, at: Date.now() - 2 * 3600 * 1000 });
+  calls.length = 0;
+  assert.equal(await fetchRepo(repo, 'dev', null, false), dir);
+  assert.deepEqual(apiCalls(calls).map((c) => c.url), [
+    'https://api.github.com/repos/org/ttl-probe-fail/commits/dev',
+  ], 'failed classification is memoized for the process, never grants eternity');
+});
+
+test('a known kind survives a TTL-forced re-resolution without a new probe', async (t) => {
+  const cacheRoot = useTempCache(t);
+  const state = makeState();
+  const calls = installFake(t, state);
+
+  const repo = 'org/ttl-preserve';
+  const tagSha = sha(15);
+  state.commits.v3 = tagSha;
+  state.refKinds = { [repo]: ['tag'] };
+  writeRefHeads(cacheRoot, repo, 'v3', { sha: tagSha, kind: 'tag', at: Date.now() - 2 * 3600 * 1000 });
+  const dir = seedCloneDir(repo, tagSha, 'preserved');
+
+  const result = await fetchRepo(repo, 'v3', null, false, false, 60 * 1000);
+
+  assert.equal(result, dir, 'same SHA → same dir, no re-download');
+  assert.deepEqual(apiCalls(calls).map((c) => c.url), [
+    'https://api.github.com/repos/org/ttl-preserve/commits/v3',
+  ], 'kind is already known — no git/ref probe on re-resolution');
+  assert.equal(dlCalls(calls).length, 0);
+  assert.equal(readRefHeads(cacheRoot)[`org/ttl-preserve@v3`].kind, 'tag');
+});

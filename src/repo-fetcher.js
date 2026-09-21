@@ -12,8 +12,10 @@
  * skip resolution and keep the old ref-keyed fast path. `latest` is resolved to
  * a concrete tag by resolveRef() before any fetch and is otherwise untouched.
  *
- * Resolutions are cached in <cache>/.ref-heads.json with a 1h TTL (same cadence
- * as the latest-tag cache) so repeated builds do not hit the GitHub API for
+ * Resolutions are cached in <cache>/.ref-heads.json. Their lifetime depends on
+ * the ref kind — a tag is cached forever, a branch keeps the 1h TTL (same
+ * cadence as the latest-tag cache) — and a parsed manifest `ref_ttl` can
+ * override that per entry, so repeated builds do not hit the GitHub API for
  * every repo.
  */
 
@@ -25,6 +27,7 @@ axios.defaults.timeout = 30000;
 const simpleGit = require('simple-git');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
+const { getRefKind, isValidRepo } = require('./github-api');
 // Top-level is safe: local-sources lazy-requires this module (no cycle).
 const { isLocal } = require('./local-sources');
 
@@ -45,6 +48,48 @@ const LATEST_TAG_TTL_MS = 60 * 60 * 1000; // releases update rarely
 
 // Ref→SHA resolutions are cheap to refresh and share the 1h cadence.
 const REF_HEAD_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Effective TTL of a cached ref→SHA resolution.
+ *
+ * An explicit manifest `ref_ttl` always wins (`'never'` → forever, a number is
+ * already in milliseconds). Without one, a ref confirmed as an immutable tag
+ * is cached forever; a branch and an unclassified ref (legacy entry, failed
+ * probe) keep the hourly refresh.
+ *
+ * @param {number|'never'|undefined} refTtl - parsed manifest `ref_ttl`
+ * @param {'tag'|'branch'|undefined|null} kind - cached ref classification
+ * @returns {number} milliseconds, or Infinity for "never expires"
+ */
+function refTtlMs(refTtl, kind) {
+  if (refTtl === 'never') return Infinity;
+  if (typeof refTtl === 'number') return refTtl;
+  if (kind === 'tag') return Infinity;
+  return REF_HEAD_TTL_MS;
+}
+
+/**
+ * Decide whether a per-entry `ref_ttl` applies to the ref as written in the
+ * manifest — the single place that decision (and its warning) lives.
+ *
+ * `ref_ttl` only governs a named, moving ref: a pinned SHA is never resolved,
+ * a null ref is the default branch, and `latest` is a meta-ref resolved to a
+ * tag name before any fetch. A configured value on any of those is ignored
+ * with one warning; call sites forward the result to fetchRepo.
+ *
+ * @param {string|null|undefined} ref - original manifest ref (not `_resolvedRef`)
+ * @param {number|'never'|undefined|null} refTtl - parsed manifest `ref_ttl`
+ * @returns {number|'never'|undefined} refTtl when applicable, else undefined
+ */
+function applicableRefTtl(ref, refTtl) {
+  if (refTtl === undefined || refTtl === null) return undefined;
+  if (ref == null || ref === 'latest' || SHA_REF_RE.test(ref)) {
+    const shown = ref == null ? 'the default branch' : `"${ref}"`;
+    logger.warn(`  ref_ttl does not apply to ${shown} — ignored`);
+    return undefined;
+  }
+  return refTtl;
+}
 
 function latestTagIndexPath() {
   return path.join(getCacheDir(), '.latest-tags.json');
@@ -213,10 +258,46 @@ function isNotFound(err) {
 // In-process dedup: parallel fetches of the same repo@ref resolve once.
 const inflightRefHeads = new Map();
 
+// In-process memo of refs whose kind probe failed: one build can resolve the
+// same repo@ref several times (manifest deps, DEPS_LIST, interfaces), and a
+// failed probe must neither hammer the API nor ever grant an eternal TTL.
+// Only failures are memoized — the next build retries; success is persisted
+// in .ref-heads.json.
+const failedRefKindProbes = new Set();
+
+// Classify a moving ref, never failing the resolution: an unknown kind (null)
+// falls back to the branch TTL. ref === null is the default branch by
+// definition, so it is classified without a probe.
+async function detectRefKind(repo, ref, key, cached, token) {
+  if (ref == null) return 'branch';
+  if (cached && cached.kind) return cached.kind;
+  if (failedRefKindProbes.has(key)) return null;
+  try {
+    return await getRefKind(repo, ref, { token });
+  } catch (err) {
+    failedRefKindProbes.add(key);
+    logger.warn(`  ${repo} @ ${ref}: ref kind probe failed (${err.message}); using the branch TTL`);
+    return null;
+  }
+}
+
 async function resolveRefHeadFromNetwork(repo, ref, key, cached, token) {
   const headers = apiHeaders(token);
   const label   = ref || 'HEAD';
   try {
+    // SECURITY GUARD — must stay before the first network call: repo and ref
+    // are interpolated into api.github.com URL paths and encodeURIComponent
+    // leaves "." unescaped, so a ref like "../../../tarball/main" would be
+    // normalized out of the intended path into an unintended API GET. The
+    // catch below wraps this (or falls back to the cached SHA) like any other
+    // resolve failure.
+    if (!isValidRepo(repo)) {
+      throw new Error(`Invalid repo "${repo}" — expected "owner/repo"`);
+    }
+    if (ref != null && String(ref).split('/').some((s) => s === '' || s === '.' || s === '..')) {
+      throw new Error(`Unsafe ref "${ref}" — refs must not contain empty, "." or ".." path segments`);
+    }
+    const kind = await detectRefKind(repo, ref, key, cached, token);
     let branch = ref || (cached && cached.branch) || null;
     if (!branch) branch = await resolveDefaultBranch(repo, null, headers);
     let sha;
@@ -233,7 +314,7 @@ async function resolveRefHeadFromNetwork(repo, ref, key, cached, token) {
       }
     }
     logger.dim(`  ${repo} @ ${label} = ${sha} (resolved)`);
-    await updateRefHeadIndex(key, { sha, branch: ref ? null : branch, at: Date.now() });
+    await updateRefHeadIndex(key, { sha, branch: ref ? null : branch, at: Date.now(), kind });
     return { sha };
   } catch (err) {
     if (cached) {
@@ -248,17 +329,19 @@ async function resolveRefHeadFromNetwork(repo, ref, key, cached, token) {
 
 /**
  * Resolve a moving ref to the commit SHA to fetch. Results are cached in
- * .ref-heads.json for 1h; a cached resolution is also reused when it is stale
+ * .ref-heads.json; an entry is trusted while its effective TTL has not expired
+ * (see refTtlMs). A cached resolution is also reused when it is stale
  * (--no-fetch never hits the network) or when a refresh fails but a previous
  * resolution exists — both keep the build on the last-known good head.
  * Returns null when --no-fetch has nothing cached to go on.
  */
-async function resolveRefHead(repo, ref, token, noFetch) {
+async function resolveRefHead(repo, ref, token, noFetch, refTtl) {
   const key    = refHeadKey(repo, ref);
   const label  = ref || 'HEAD';
   const cached = readRefHeadsIndex()[key];
+  const ttl    = refTtlMs(refTtl, cached && cached.kind);
 
-  if (cached && Date.now() - cached.at < REF_HEAD_TTL_MS) {
+  if (cached && (ttl === Infinity || Date.now() - cached.at < ttl)) {
     logger.dim(`  ${repo} @ ${label} = ${cached.sha} (cached)`);
     return { sha: cached.sha };
   }
@@ -324,6 +407,10 @@ function isCacheValidSync(cacheDir, ref, gitBased) {
  * branch that moved upstream is re-downloaded into a fresh dir while the old
  * dir stays untouched. Pinned SHA refs skip resolution entirely.
  *
+ * `refTtl` (a parsed manifest `ref_ttl`: `'never'` or milliseconds) overrides
+ * how long a resolved head is trusted, and is ignored for refs that never
+ * resolve (pinned SHA, default branch) — see refTtlMs/applicableRefTtl.
+ *
  * Two fetch paths:
  *   ssh=true  → clone via system git (simple-git): URL is always
  *               git@github.com:owner/repo.git, no token handling.
@@ -331,15 +418,23 @@ function isCacheValidSync(cacheDir, ref, gitBased) {
  *               extract it — no system git needed. A 404 with a token present
  *               retries once through the API tarball endpoint (private repos).
  */
-async function fetchRepo(repo, ref, token, noFetch, ssh = false) {
+async function fetchRepo(repo, ref, token, noFetch, ssh = false, refTtl = undefined) {
   const resolvedRef = ref || null;  // null = default branch
   const refLabel    = resolvedRef || 'HEAD';
   let fetchRef      = resolvedRef;
   let resolveError  = null;
 
+  // A direct caller can still pass a TTL for a ref that never consults the
+  // ref→SHA cache; ignore it with one warning. Interface call sites pre-filter
+  // through applicableRefTtl(), so this never double-warns.
+  if (refTtl !== undefined && (resolvedRef == null || SHA_REF_RE.test(resolvedRef))) {
+    logger.warn(`  ${repo} @ ${refLabel}: ref_ttl does not apply to this ref — ignored`);
+    refTtl = undefined;
+  }
+
   if (isMovingRef(resolvedRef)) {
     // null (no recorded head) only happens under --no-fetch.
-    const head = await resolveRefHead(repo, resolvedRef, token, noFetch);
+    const head = await resolveRefHead(repo, resolvedRef, token, noFetch, refTtl);
     if (head) {
       fetchRef     = head.sha;
       resolveError = head.resolveError || null;
@@ -523,4 +618,7 @@ function wrapResolveError(err, repo, refLabel, token) {
   return new Error(`Failed to resolve ref ${refLabel} of ${repo}: ${msg}${errorHint(err)}`);
 }
 
-module.exports = { fetchRepo, resolveRef, resolveRefIfLatest, resolveRepoRefs, getRepoCacheDir, isCacheValid };
+module.exports = {
+  fetchRepo, resolveRef, resolveRefIfLatest, resolveRepoRefs, getRepoCacheDir, isCacheValid,
+  refTtlMs, applicableRefTtl,
+};
