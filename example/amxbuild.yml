@@ -42,6 +42,13 @@ deps:
   - AmxxModularEcosystem/ParamsController@1.4.0
   - Next21Team/AmxxEasyHttp@1.4.0:amxx/scripting/include
 
+  # Полная форма git-репо: ref_ttl управляет TTL кэша резолва ref → SHA.
+  # Строковая форма (owner/repo@ref) и DEPS_LIST это поле не поддерживают.
+  # - repo: Owner/Repo
+  #   ref: main
+  #   ref_ttl: 30m          # never / 30m / 1h / 7d / целое число секунд;
+  #                         # дефолт: тег — вечно, ветка — 1ч
+
   # Полная форма — скачать release-архив с GitHub
   - repo: rehlds/ReAPI
     ref: latest               # 'latest' или конкретный тег
@@ -92,6 +99,8 @@ repos:
   # Полная форма
   - repo: AmxxModularEcosystem/VipModular
     ref: 5.0.0-rc4f1      # ветка, тег или SHA; "latest" → последний GitHub release
+    # ref_ttl: 7d         # TTL кэша резолва ref → SHA (never/30m/1h/7d/секунды);
+    #                     # дефолт: тег — вечно, ветка — 1ч
     amxmodx_dir: amxmodx  # переопределяет amxmodx.dir для этого репо
     plugins:              # INI-настройки плагинов этого репо
       ini: vip            # → plugins-vip.ini
