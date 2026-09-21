@@ -4,7 +4,7 @@ const glob = require('fast-glob');
 const logger = require('./logger');
 const { parseDepsLines, resolveGithubToken } = require('./manifest');
 const { isLocal } = require('./local-sources');
-const { fetchRepo, resolveRefIfLatest } = require('./repo-fetcher');
+const { fetchRepo, resolveRefIfLatest, applicableRefTtl } = require('./repo-fetcher');
 const { fetchReleaseDep } = require('./release-fetcher');
 const { fetchFungunDep } = require('./fungun-fetcher');
 
@@ -68,7 +68,10 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
     } else {
       const token = resolveGithubToken(manifest, dep.repo);
       const resolvedDepRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
-      const depDir = await fetchRepo(dep.repo, resolvedDepRef, token, noFetch, manifest.github.ssh);
+      const depDir = await fetchRepo(
+        dep.repo, resolvedDepRef, token, noFetch, manifest.github.ssh,
+        applicableRefTtl(dep.ref, dep.ref_ttl)
+      );
       srcDir = resolveIncludePath(depDir, dep.include_path, dep.repo);
     }
 
@@ -181,7 +184,9 @@ async function fetchDepRoot(dep, { token, noFetch, ssh = false } = {}) {
   }
 
   const resolvedRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
-  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, ssh);
+  const repoDir = await fetchRepo(
+    dep.repo, resolvedRef, token, noFetch, ssh, applicableRefTtl(dep.ref, dep.ref_ttl)
+  );
   if (dep.include_path) {
     const sub = path.join(repoDir, dep.include_path);
     if (!fs.existsSync(sub)) {
@@ -226,7 +231,9 @@ async function fetchDepIncludeDir(dep, token, noFetch, ssh = false) {
   }
 
   const resolvedRef = await resolveRefIfLatest(dep.ref, dep.repo, token);
-  const repoDir = await fetchRepo(dep.repo, resolvedRef, token, noFetch, ssh);
+  const repoDir = await fetchRepo(
+    dep.repo, resolvedRef, token, noFetch, ssh, applicableRefTtl(dep.ref, dep.ref_ttl)
+  );
   return findDepIncludeDir(repoDir, dep.include_path);
 }
 

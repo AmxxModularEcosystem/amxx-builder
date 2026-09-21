@@ -16,7 +16,7 @@
 const fs   = require('fs');
 const path = require('path');
 
-const { fetchRepo, resolveRef } = require('./repo-fetcher');
+const { fetchRepo, resolveRef, applicableRefTtl } = require('./repo-fetcher');
 const { parseDepsLines }        = require('./manifest');
 const { normalize }             = require('./deps-resolver');
 const { isLocal }               = require('./local-sources');
@@ -214,7 +214,7 @@ async function getSubDeps(dep, resolvedRef, token, noFetch, getDepsOverride) {
   // 2. Clone repo (or use cache) and read DEPS_LIST
   const repoDir = isLocal(dep)
     ? dep._localDir
-    : await fetchRepo(dep.repo, resolvedRef, token, noFetch, false);
+    : await fetchRepo(dep.repo, resolvedRef, token, noFetch, false, applicableRefTtl(dep.ref, dep.ref_ttl));
   const depsPath = path.join(repoDir, 'DEPS_LIST');
 
   if (!fs.existsSync(depsPath)) {

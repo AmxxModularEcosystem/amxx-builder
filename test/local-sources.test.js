@@ -814,6 +814,29 @@ test('ensureRepoDir: local entry returns _localDir regardless of noFetch, no fet
   assert.deepEqual(fs.readdirSync(cache), [], 'fetch cache must stay untouched');
 });
 
+test('ensureRepoDir: forwards applicable ref_ttl, drops it for latest/SHA refs', async (t) => {
+  const repoFetcher = require('../src/repo-fetcher');
+  const calls = [];
+  const origFetch = repoFetcher.fetchRepo;
+  repoFetcher.fetchRepo = async (repo, ref, token, noFetch, ssh, refTtl) => {
+    calls.push({ repo, ref, refTtl });
+    return '/fake/dir';
+  };
+  t.after(() => { repoFetcher.fetchRepo = origFetch; });
+
+  assert.equal(await ensureRepoDir({ repo: 'Org/Repo', ref: 'v1', _resolvedRef: 'v1', ref_ttl: 'never' }), '/fake/dir');
+  assert.equal(await ensureRepoDir({ repo: 'Org/Repo', ref: 'latest', _resolvedRef: 'v1.2.3', ref_ttl: 60000 }), '/fake/dir');
+  assert.equal(await ensureRepoDir({ repo: 'Org/Repo', ref: 'abc1234', _resolvedRef: 'abc1234', ref_ttl: 60000 }), '/fake/dir');
+  assert.equal(await ensureRepoDir({ repo: 'Org/Repo', ref: 'main', _resolvedRef: 'main' }), '/fake/dir');
+
+  assert.deepEqual(calls, [
+    { repo: 'Org/Repo', ref: 'v1', refTtl: 'never' },
+    { repo: 'Org/Repo', ref: 'v1.2.3', refTtl: undefined },
+    { repo: 'Org/Repo', ref: 'abc1234', refTtl: undefined },
+    { repo: 'Org/Repo', ref: 'main', refTtl: undefined },
+  ]);
+});
+
 // ─── resolveRepoRefs ─────────────────────────────────────────────────────────
 
 test('resolveRepoRefs: local entry gets the "local" sentinel without ref/token resolution', async () => {

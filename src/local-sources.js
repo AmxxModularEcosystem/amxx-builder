@@ -338,9 +338,13 @@ async function ensureRepoDir(repoConfig, { token, noFetch, ssh } = {}) {
   if (isLocal(repoConfig)) return repoConfig._localDir;
 
   // Lazy require: keep this module dependency-light and cycle-free.
-  const { fetchRepo } = require('./repo-fetcher');
+  const { fetchRepo, applicableRefTtl } = require('./repo-fetcher');
   const ref = repoConfig._resolvedRef ?? repoConfig.ref ?? null;
-  return fetchRepo(repoConfig.repo, ref, token, noFetch, ssh);
+  // Applicability is judged on the original manifest ref: for `ref: latest`
+  // `_resolvedRef` is already the tag name, yet a configured ref_ttl still
+  // does not apply to the meta-ref.
+  const refTtl = applicableRefTtl(repoConfig.ref ?? null, repoConfig.ref_ttl);
+  return fetchRepo(repoConfig.repo, ref, token, noFetch, ssh, refTtl);
 }
 
 module.exports = {
