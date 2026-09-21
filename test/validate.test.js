@@ -345,3 +345,60 @@ test('validateManifestFile: fungun dep without id/url → schema error under /de
   const depsErr = result.errors.find((e) => e.path.startsWith('/deps'));
   assert.ok(depsErr, `expected a schema error under /deps, got: ${JSON.stringify(result.errors)}`);
 });
+
+test('validateManifestFile: repo ref_ttl "never" is valid', (t) => {
+  const dir = makeTmpDir('amxb-val-ttl-repo-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'repos:',
+    '  - repo: Org/Repo',
+    '    ref: v1',
+    '    ref_ttl: "never"',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('validateManifestFile: git dep ref_ttl (integer seconds) is valid', (t) => {
+  const dir = makeTmpDir('amxb-val-ttl-dep-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'deps:',
+    '  - repo: Org/Dep',
+    '    ref: v2',
+    '    ref_ttl: 3600',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('validateManifestFile: local repo with ref_ttl → schema error under /repos', (t) => {
+  const dir = makeTmpDir('amxb-val-ttl-local-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifestPath = writeManifest(dir, [
+    'name: Test',
+    'version: "1.0"',
+    'repos:',
+    '  - source: local',
+    '    path: ./vendor/a',
+    '    ref_ttl: "never"',
+  ].join('\n'));
+
+  const result = validateManifestFile(manifestPath);
+
+  assert.equal(result.valid, false);
+  const reposErr = result.errors.find((e) => e.path.startsWith('/repos'));
+  assert.ok(reposErr, `expected a schema error under /repos, got: ${JSON.stringify(result.errors)}`);
+});

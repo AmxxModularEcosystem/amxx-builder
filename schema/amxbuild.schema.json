@@ -409,6 +409,11 @@
                   "minimum": 0
                 }
               ]
+            },
+            "ref_ttl": {
+              "type": ["string", "integer"],
+              "minimum": 1,
+              "description": "For source=git: TTL of the cached ref → SHA resolution. \"never\" caches forever; a duration such as 30m/1h/7d; a bare integer is seconds. Default: tags forever, branches/unknown 1 hour. Rejected for source=release/fungun/local."
             }
           },
           "allOf": [
@@ -502,6 +507,11 @@
               "type": "string",
               "description": "Tag, branch, commit SHA, or \"latest\" (resolves to the latest GitHub release).",
               "examples": ["main", "v1.2.3", "latest", "abc1234"]
+            },
+            "ref_ttl": {
+              "type": ["string", "integer"],
+              "minimum": 1,
+              "description": "TTL of the cached ref → SHA resolution: \"never\" caches forever; a duration such as 30m/1h/7d; a bare integer is seconds. Default: tags forever, branches/unknown 1 hour. Ignored for SHA refs, ref=null and ref=latest."
             },
             "amxmodx_dir": {
               "type": "string",

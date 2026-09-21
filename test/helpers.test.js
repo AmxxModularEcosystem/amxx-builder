@@ -46,6 +46,7 @@ test('parseDepString: valid "owner/repo@ref"', () => {
     include_path: null,
     source: 'git',
     asset: null,
+    ref_ttl: undefined,
   });
 });
 
@@ -91,6 +92,7 @@ test('parseDepObject: valid long-form object', () => {
     include_path: 'inc',
     source: 'release',
     asset: 'plug.zip',
+    ref_ttl: undefined,
   });
 });
 

@@ -27,6 +27,9 @@ const {
   resolveGithubToken,
   resolveManifest,
   parseManifest,
+  parseRefTtl,
+  parseDepsLines,
+  parseDepString,
 } = manifest;
 
 function makeTmpDir(prefix) {
@@ -340,4 +343,168 @@ test('resolveManifest: combine set and define, defaults still merged', () => {
   assert.equal(m.output.archive_name, 'combo.zip');
   assert.deepEqual(m.amxmodx.defines, ['FLAG']);
   assert.equal(m.amxmodx.dir, 'amxmodx'); // from defaults
+});
+
+// ─── ref_ttl ─────────────────────────────────────────────────────────────────
+//
+// parseRefTtl is the single source of truth for the field format. The dep
+// helpers appear here only to pin ref_ttl propagation/rejection; their full
+// parse coverage stays in helpers.test.js.
+
+test('parseRefTtl: valid values → milliseconds or "never"', () => {
+  assert.equal(parseRefTtl(undefined), undefined);
+  assert.equal(parseRefTtl(null), undefined);
+  assert.equal(parseRefTtl('never'), 'never');
+  assert.equal(parseRefTtl('  NEVER  '), 'never');
+  assert.equal(parseRefTtl('45s'), 45000);
+  assert.equal(parseRefTtl('30m'), 1800000);
+  assert.equal(parseRefTtl('1h'), 3600000);
+  assert.equal(parseRefTtl('7d'), 604800000);
+  assert.equal(parseRefTtl('90'), 90000);
+  assert.equal(parseRefTtl(3600), 3600000);
+});
+
+test('parseRefTtl: invalid values throw a directive error', () => {
+  for (const bad of ['0', '0m', 'abc', '1y', 1.5, -1, 0, {}, Infinity]) {
+    assert.throws(
+      () => parseRefTtl(bad),
+      /manifest: invalid ref_ttl .* use "never" or a duration like 30m\/1h\/7d/,
+      `expected ref_ttl ${String(bad)} to be rejected`
+    );
+  }
+});
+
+test('parseRefTtl: results that overflow to a non-finite number are rejected', () => {
+  // 1e308 * 1000 and a 400-digit string both overflow a double to Infinity;
+  // a non-finite TTL must never enter the parsed manifest.
+  assert.throws(() => parseRefTtl(1e308), /manifest: invalid ref_ttl/);
+  assert.throws(() => parseRefTtl('9'.repeat(400)), /manifest: invalid ref_ttl/);
+  assert.throws(() => parseRefTtl('9'.repeat(400) + 'd'), /manifest: invalid ref_ttl/);
+});
+
+test('parseManifest: repo ref_ttl is parsed', () => {
+  const { file } = writeTmpYaml([
+    'name: TtlServer',
+    'version: "1.0.0"',
+    'repos:',
+    '  - repo: Org/Repo',
+    '    ref: v1',
+    '    ref_ttl: 30m',
+  ].join('\n'));
+  const m = parseManifest(file);
+  assert.equal(m.repos[0].ref_ttl, 1800000);
+});
+
+test('parseManifest: repo without ref_ttl → undefined', () => {
+  const { file } = writeTmpYaml([
+    'name: TtlServer',
+    'version: "1.0.0"',
+    'repos:',
+    '  - repo: Org/Repo',
+    '    ref: v1',
+  ].join('\n'));
+  const m = parseManifest(file);
+  assert.equal(m.repos[0].ref_ttl, undefined);
+});
+
+test('parseDepsLines: git dep object carries ref_ttl; string form yields undefined', () => {
+  const fromObject = parseDepsLines([{ repo: 'org/a', ref: 'v1', ref_ttl: '7d' }])[0];
+  assert.equal(fromObject.source, 'git');
+  assert.equal(fromObject.ref_ttl, 604800000);
+
+  assert.equal(parseDepsLines(['org/a@v1'])[0].ref_ttl, undefined);
+  assert.equal(parseDepString('org/a@v1').ref_ttl, undefined);
+});
+
+test('parseDepsLines: ref_ttl is rejected for source local', () => {
+  assert.throws(
+    () => parseDepsLines([{ source: 'local', path: './vendor/a', ref_ttl: '1h' }]),
+    /Dep entry source "local" does not support "ref_ttl"/
+  );
+});
+
+test('parseManifest: ref_ttl is rejected for a local repo', () => {
+  const { file } = writeTmpYaml([
+    'name: TtlServer',
+    'version: "1.0.0"',
+    'repos:',
+    '  - source: local',
+    '    path: ./vendor/a',
+    '    ref_ttl: 1h',
+  ].join('\n'));
+  // The JSON schema rejects it first (the local repoEntry variant has no
+  // ref_ttl); makeRepo keeps a parser-level guard as defense in depth.
+  assert.throws(() => parseManifest(file), /Manifest validation failed/);
+});
+
+test('parseDepsLines: ref_ttl is rejected for source fungun', () => {
+  assert.throws(
+    () => parseDepsLines([{ source: 'fungun', id: 106, ref_ttl: '1h' }]),
+    /Dep entry source "fungun" does not support "ref_ttl"/
+  );
+});
+
+test('parseDepsLines: ref_ttl is rejected for source release', () => {
+  assert.throws(
+    () => parseDepsLines([
+      { repo: 'org/a', ref: 'v1', source: 'release', asset: 'a.zip', ref_ttl: 3600 },
+    ]),
+    /Dep entry source "release" does not support "ref_ttl"/
+  );
+});
+
+// ─── ref_ttl via --set ────────────────────────────────────────────────────────
+//
+// --set writes raw string/int values onto the already-parsed manifest, so the
+// ref_ttl leaf must be run through parseRefTtl — and only that leaf.
+
+test('resolveManifest: --set ref_ttl is normalized via parseRefTtl', () => {
+  const { file } = writeTmpYaml([
+    'name: TtlSetServer',
+    'version: "1.0.0"',
+    'repos:',
+    '  - repo: Org/Repo',
+    '    ref: v1',
+  ].join('\n'));
+
+  const set = (v) => resolveManifest(file, { set: [`repos.0.ref_ttl=${v}`] }).repos[0].ref_ttl;
+  assert.equal(set('30m'), 1800000);
+  assert.equal(set('never'), 'never');
+  assert.equal(set('3600'), 3600000);
+});
+
+test('resolveManifest: --set ref_ttl with an invalid value throws', () => {
+  const { file } = writeTmpYaml([
+    'name: TtlSetServer',
+    'version: "1.0.0"',
+    'repos:',
+    '  - repo: Org/Repo',
+    '    ref: v1',
+  ].join('\n'));
+
+  assert.throws(
+    () => resolveManifest(file, { set: ['repos.0.ref_ttl=abc'] }),
+    /manifest: invalid ref_ttl "abc" \(--set repos\.0\.ref_ttl\)/
+  );
+});
+
+test('resolveManifest: --set never re-parses non-overridden ref_ttl values', () => {
+  const { file } = writeTmpYaml([
+    'name: TtlSetServer',
+    'version: "1.0.0"',
+    'repos:',
+    '  - repo: Org/A',
+    '    ref: v1',
+    '    ref_ttl: 30m',
+    '  - repo: Org/B',
+    '    ref: v2',
+    '    ref_ttl: never',
+  ].join('\n'));
+
+  // parseManifest already produced milliseconds for "30m" — no double parse.
+  assert.equal(resolveManifest(file).repos[0].ref_ttl, 1800000);
+
+  const m = resolveManifest(file, { set: ['repos.1.ref_ttl=1h'] });
+  assert.equal(m.repos[0].ref_ttl, 1800000, 'untouched ref_ttl must stay in ms, not be re-parsed');
+  assert.equal(m.repos[1].ref_ttl, 3600000);
 });

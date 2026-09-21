@@ -151,6 +151,56 @@ function resolveGithubToken(manifest, repoPath) {
   return process.env[envName] || null;
 }
 
+const REF_TTL_UNITS_MS = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+
+/**
+ * Parse a `ref_ttl` value — the TTL of the `ref → SHA` resolution cache.
+ *
+ *   undefined|null      -> undefined (default policy: tag → forever, branch → 1h)
+ *   integer N >= 1      -> N * 1000 (seconds → milliseconds)
+ *   "never"             -> "never"  (trimmed, case-insensitive)
+ *   "Ns"/"Nm"/"Nh"/"Nd" -> milliseconds (integer N >= 1)
+ *   "N"                 -> N seconds → milliseconds
+ *
+ * Anything else throws — including a value whose millisecond result would
+ * overflow to a non-finite number (e.g. 1e308, a 400-digit string). The result
+ * is JSON-safe: only `undefined`, `'never'` or a positive finite number of
+ * milliseconds — never `Infinity`.
+ *
+ * @param {*} val
+ * @param {string} [ctx] — entry label used in the error message
+ * @returns {undefined|'never'|number}
+ */
+function parseRefTtl(val, ctx) {
+  if (val == null) return undefined;
+  const where = ctx ? ` (${ctx})` : '';
+  const invalid = () => {
+    throw new Error(
+      `manifest: invalid ref_ttl "${val}"${where} — use "never" or a duration like 30m/1h/7d`
+    );
+  };
+  // Every branch funnels through here so an overflowing value cannot leak a
+  // non-finite TTL (Infinity) into the parsed manifest.
+  const finiteMs = (ms) => {
+    if (!Number.isFinite(ms)) invalid();
+    return ms;
+  };
+  if (typeof val === 'number') {
+    if (!Number.isInteger(val) || val < 1) invalid();
+    return finiteMs(val * 1000);
+  }
+  if (typeof val === 'string') {
+    const s = val.trim().toLowerCase();
+    if (s === 'never') return 'never';
+    const duration = s.match(/^(\d+)(s|m|h|d)$/);
+    if (duration && Number(duration[1]) >= 1) {
+      return finiteMs(Number(duration[1]) * REF_TTL_UNITS_MS[duration[2]]);
+    }
+    if (/^\d+$/.test(s) && Number(s) >= 1) return finiteMs(Number(s) * 1000);
+  }
+  invalid();
+}
+
 function parseRepoEntry(r, globalAmxDir) {
   // Shorthand: "owner/repo" or "owner/repo@ref"
   if (typeof r === 'string') {
@@ -175,6 +225,7 @@ function makeRepo(r, globalAmxDir) {
     }
     if (r.repo != null) throw new Error('manifest: repo entry source "local" does not support "repo"');
     if (r.ref  != null) throw new Error('manifest: repo entry source "local" does not support "ref"');
+    if (r.ref_ttl != null) throw new Error('manifest: repo entry source "local" does not support "ref_ttl"');
     return {
       repo:                synthesizeLocalId(r.name, r.path),
       ref:                 null,
@@ -191,6 +242,7 @@ function makeRepo(r, globalAmxDir) {
   return {
     repo:                r.repo,
     ref:                 r.ref || null,
+    ref_ttl:             parseRefTtl(r.ref_ttl, `repo ${r.repo}`),
     amxmodx_dir:         r.amxmodx_dir || globalAmxDir,
     plugins,
     plugins_ini_postfix: postfix,
@@ -214,7 +266,7 @@ const DEP_STRING_RE = /^([^@\s]+)@([^:\s]+)(?::(.+))?$/;
  *                        `{ source: 'fungun', url: <page link> }`
  *
  * @param {object} line
- * @returns {{ repo: string, ref: string|null, include_path: string|null, source: string, asset: * }}
+ * @returns {{ repo: string, ref: string|null, include_path: string|null, source: string, asset: *, ref_ttl?: undefined|'never'|number }}
  */
 function parseDepObject(line) {
   const source = line.source || 'git';
@@ -230,12 +282,18 @@ function parseDepObject(line) {
   }
   if (!line.repo) throw new Error(`Dep entry missing "repo": ${JSON.stringify(line)}`);
   if (!line.ref)  throw new Error(`Dep entry missing "ref": ${JSON.stringify(line)}`);
+  if (source !== 'git' && line.ref_ttl != null) {
+    throw new Error(`Dep entry source "${source}" does not support "ref_ttl": ${JSON.stringify(line)}`);
+  }
+  const repo = String(line.repo).trim();
+  const ref  = String(line.ref).trim();
   return {
-    repo:         String(line.repo).trim(),
-    ref:          String(line.ref).trim(),
+    repo,
+    ref,
     include_path: line.include_path ? String(line.include_path).trim() : null,
     source,
     asset:        line.asset != null ? line.asset : null,
+    ref_ttl:      parseRefTtl(line.ref_ttl, `dep ${repo}@${ref}`),
   };
 }
 
@@ -250,7 +308,7 @@ function parseLocalDepObject(line) {
   if (typeof line.path !== 'string' || line.path.trim() === '') {
     throw new Error(`Dep entry source "local" requires "path": ${JSON.stringify(line)}`);
   }
-  for (const field of ['repo', 'ref', 'id', 'url', 'asset']) {
+  for (const field of ['repo', 'ref', 'id', 'url', 'asset', 'ref_ttl']) {
     if (line[field] != null) {
       throw new Error(
         `Dep entry source "local" does not support "${field}": ${JSON.stringify(line)}`
@@ -300,6 +358,11 @@ function parseFungunDepObject(line) {
     throw new Error(
       `Dep entry source "fungun" does not support repo/ref — ` +
       `address the plugin by "id" or "url": ${JSON.stringify(line)}`
+    );
+  }
+  if (line.ref_ttl != null) {
+    throw new Error(
+      `Dep entry source "fungun" does not support "ref_ttl": ${JSON.stringify(line)}`
     );
   }
 
@@ -397,7 +460,7 @@ function parseSkillEntries(arr) {
  * Strict parse of a SINGLE dep string: "owner/repo@ref[:include_path]".
  *
  * @param {string} str
- * @returns {{ repo: string, ref: string, include_path: string|null, source: string, asset: null }}
+ * @returns {{ repo: string, ref: string, include_path: string|null, source: string, asset: null, ref_ttl: undefined }}
  */
 function parseDepString(str) {
   const trimmed = String(str).trim();
@@ -414,6 +477,7 @@ function parseDepString(str) {
     include_path: includePath ? includePath.trim() : null,
     source:       'git',
     asset:        null,
+    ref_ttl:      undefined,
   };
 }
 
@@ -437,6 +501,7 @@ function parseDepsLines(lines) {
       include_path: includePath ? includePath.trim() : null,
       source:       'git',
       asset:        null,
+      ref_ttl:      undefined,
     });
   }
   return result;
@@ -704,14 +769,20 @@ function applyOverrides(manifest, pairs) {
   for (const pair of pairs) {
     const eqIdx = pair.indexOf('=');
     if (eqIdx === -1) throw new Error(`--set: invalid format "${pair}" (expected key=value)`);
-    const keys  = pair.slice(0, eqIdx).trim().split('.');
-    const value = parseOverrideValue(pair.slice(eqIdx + 1));
+    const keyPath = pair.slice(0, eqIdx).trim();
+    const keys    = keyPath.split('.');
+    const leaf    = keys[keys.length - 1];
+    let value     = parseOverrideValue(pair.slice(eqIdx + 1));
+    // --set writes raw values (string/int) over the ALREADY-PARSED manifest, so
+    // a `ref_ttl` leaf needs the same parser as the manifest field. Only this
+    // leaf is normalized — parseManifest values are already in milliseconds.
+    if (leaf === 'ref_ttl') value = parseRefTtl(value, `--set ${keyPath}`);
     let node = manifest;
     for (let i = 0; i < keys.length - 1; i++) {
       if (node[keys[i]] == null) node[keys[i]] = {};
       node = node[keys[i]];
     }
-    node[keys[keys.length - 1]] = value;
+    node[leaf] = value;
   }
 }
 
@@ -738,4 +809,4 @@ function resolveManifest(manifestPath, options = {}) {
   return manifest;
 }
 
-module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, parseDocEntries, parseSkillEntries, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge, normalizeIni, finalizePluginConfig, parsePluginsDebugEnv };
+module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, parseRefTtl, parseDocEntries, parseSkillEntries, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge, normalizeIni, finalizePluginConfig, parsePluginsDebugEnv };
