@@ -3,6 +3,7 @@
 const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
+const micromatch = require('micromatch');
 const logger = require('./logger');
 
 const fileHashes = new Map();
@@ -14,6 +15,22 @@ function contentChanged(filePath) {
   if (fileHashes.get(filePath) === hash) return false;
   fileHashes.set(filePath, hash);
   return true;
+}
+
+/**
+ * True when a path under the project's local `amxmodx/` dir matches one of the
+ * `amxmodx.exclude_files` patterns. `relPath` is relative to `amxmodx.dir`;
+ * patterns follow the same forward-slash convention as `repos[].exclude_files`.
+ * Missing/empty patterns → false (default behavior: nothing excluded).
+ *
+ * @param {string} relPath
+ * @param {string[]} [patterns]
+ * @returns {boolean}
+ */
+function isExcludedLocalAmxmodx(relPath, patterns) {
+  if (!Array.isArray(patterns) || patterns.length === 0) return false;
+  const normalized = String(relPath).split(path.sep).join('/');
+  return micromatch.isMatch(normalized, patterns, { dot: true });
 }
 
 /**
@@ -83,6 +100,10 @@ function startWatch(manifest, manifestPath, handlers) {
       const section   = inAmxmodx ? 'amxmodx' : 'assets';
       const baseDir   = inAmxmodx ? localAmxmodxDir : localAssetsDir;
       let relToBase   = path.relative(baseDir, absPath);
+      if (inAmxmodx && isExcludedLocalAmxmodx(relToBase, manifest.amxmodx.exclude_files || [])) {
+        logger.dim(`  skip (excluded): ${rel}`);
+        return;
+      }
       if (inAmxmodx && caseNorm(relToBase).endsWith('.inc')) return; // includes are never deployed
       if (inAmxmodx && caseNorm(relToBase).endsWith('.sma')) {
         // A deleted .sma should remove its compiled output, not the source copy.
@@ -111,6 +132,11 @@ function startWatch(manifest, manifestPath, handlers) {
     const baseDir   = inAmxmodx ? localAmxmodxDir : localAssetsDir;
     const relToBase = path.relative(baseDir, absPath);
 
+    if (inAmxmodx && isExcludedLocalAmxmodx(relToBase, manifest.amxmodx.exclude_files || [])) {
+      logger.dim(`  skip (excluded): ${rel}`);
+      return;
+    }
+
     if (inAmxmodx && caseNorm(filePath).endsWith('.sma')) {
       logger.step(`Changed: ${rel}`);
       safeCall(() => handlers.onSmaChange(absPath));
@@ -132,4 +158,4 @@ function startWatch(manifest, manifestPath, handlers) {
   return watcher;
 }
 
-module.exports = { startWatch };
+module.exports = { startWatch, isExcludedLocalAmxmodx };

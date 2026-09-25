@@ -121,6 +121,7 @@ test('loadDefaultsRaw: known default values', () => {
   assert.equal(defaults.version, '1.0.0');
   assert.equal(defaults.amxmodx.dir, 'amxmodx');
   assert.deepEqual(defaults.amxmodx.defines, []);
+  assert.deepEqual(defaults.amxmodx.exclude_files, []);
   assert.deepEqual(defaults.docs, []);
   assert.deepEqual(defaults.skills, []);
   assert.equal(defaults.github.token_env, 'GITHUB_TOKEN');
@@ -311,6 +312,25 @@ test('parseManifest: absent docs/skills → empty arrays', () => {
   const m = parseManifest(file);
   assert.deepEqual(m.docs, []);
   assert.deepEqual(m.skills, []);
+});
+
+test('parseManifest: amxmodx.exclude_files parses from YAML and coerces to strings', () => {
+  const { file } = writeTmpYaml([
+    'name: ExcludeServer',
+    'version: "1.0.0"',
+    'amxmodx:',
+    '  exclude_files:',
+    '    - "configs/*.cfg"',
+    '    - "**/*.ini"',
+  ].join('\n'));
+  const m = parseManifest(file);
+  assert.deepEqual(m.amxmodx.exclude_files, ['configs/*.cfg', '**/*.ini']);
+});
+
+test('parseManifest: absent amxmodx.exclude_files → empty array (default behavior)', () => {
+  const { file } = writeTmpYaml('name: NoExcludeServer\nversion: "1.0.0"\n');
+  const m = parseManifest(file);
+  assert.deepEqual(m.amxmodx.exclude_files, []);
 });
 
 // ─── resolveManifest ─────────────────────────────────────────────────────────

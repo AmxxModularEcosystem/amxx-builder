@@ -41,6 +41,12 @@
           "description": "Compiler preprocessor defines passed to all plugin compilations (e.g. [\"DEBUG\", \"VERSION=1.2.3\"]). Appended to defines from --define CLI flag.",
           "items": { "type": "string" },
           "default": []
+        },
+        "exclude_files": {
+          "type": "array",
+          "description": "Glob patterns for local files to exclude from the build, relative to amxmodx.dir (e.g. [\"configs/*.cfg\"]). Excluded files are not copied into the archive; compilation of local .sma files is unaffected.",
+          "items": { "type": "string" },
+          "default": []
         }
       }
     },

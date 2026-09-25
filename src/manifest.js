@@ -71,6 +71,9 @@ function parseManifest(manifestPath) {
       defines: (raw.amxmodx && Array.isArray(raw.amxmodx.defines))
         ? raw.amxmodx.defines.map(String)
         : [],
+      exclude_files: (raw.amxmodx && Array.isArray(raw.amxmodx.exclude_files))
+        ? raw.amxmodx.exclude_files.map(String)
+        : [],
     },
     github: { token_env: tokenEnv, tokens, token, ssh },
     globalDeps,

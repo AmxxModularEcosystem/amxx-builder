@@ -8,6 +8,10 @@ platform: linux    # целевая платформа сервера (linux/win
 # version не указан → берётся последний релиз автоматически
 amxmodx:
   version: "1.10.5428"
+  # exclude_files:          # glob-паттерны от amxmodx.dir: файлы не копируются в build/
+  #   - configs/*.cfg
+  #   - "**/*.ini"
+  #   - scripting/dev.sma
 
 # ── GitHub ────────────────────────────────────────────────────────────────────
 # token_env: GITHUB_TOKEN   # имя env-переменной с PAT (default: GITHUB_TOKEN)

@@ -84,3 +84,65 @@ test('collectAll: distinct repos with same file conflict under on_conflict:error
 
   await assert.rejects(() => collectAll(manifest, repoLocalDirs, buildDir), /File conflict/);
 });
+
+test('collectAll: local amxmodx files matching exclude_files are not copied', async () => {
+  const manifestDir = makeTmpDir('amxb-col-');
+  const buildDir    = path.join(manifestDir, 'build');
+
+  write(manifestDir, 'amxmodx/configs/server.cfg', 'excluded');
+  write(manifestDir, 'amxmodx/configs/keep.txt', 'kept');
+  write(manifestDir, 'amxmodx/lang/ru/settings.ini', 'excluded');
+  write(manifestDir, 'amxmodx/scripting/p.sma', 'main(){}');
+
+  const manifest = {
+    _path: path.join(manifestDir, 'amxbuild.yml'),
+    repos: [],
+    amxmodx: { dir: 'amxmodx', exclude_files: ['configs/*.cfg', '**/*.ini'] },
+    output: { on_conflict: 'last_wins' },
+  };
+
+  await collectAll(manifest, {}, buildDir);
+
+  assert.ok(
+    !fs.existsSync(path.join(buildDir, 'amxmodx', 'configs', 'server.cfg')),
+    'root-glob excluded file must not be copied'
+  );
+  assert.ok(
+    !fs.existsSync(path.join(buildDir, 'amxmodx', 'lang', 'ru', 'settings.ini')),
+    'nested-glob excluded file must not be copied'
+  );
+  assert.ok(
+    fs.existsSync(path.join(buildDir, 'amxmodx', 'configs', 'keep.txt')),
+    'non-matching sibling must be copied'
+  );
+  assert.ok(
+    fs.existsSync(path.join(buildDir, 'amxmodx', 'scripting', 'p.sma')),
+    'exclude_files must not stop .sma from being copied'
+  );
+});
+
+test('collectAll: missing amxmodx.exclude_files copies every local file (default)', async () => {
+  const manifestDir = makeTmpDir('amxb-col-');
+  const buildDir    = path.join(manifestDir, 'build');
+
+  write(manifestDir, 'amxmodx/configs/server.cfg', 'cfg');
+  write(manifestDir, 'amxmodx/lang/ru/settings.ini', 'ini');
+
+  const manifest = {
+    _path: path.join(manifestDir, 'amxbuild.yml'),
+    repos: [],
+    amxmodx: { dir: 'amxmodx' },
+    output: { on_conflict: 'last_wins' },
+  };
+
+  await collectAll(manifest, {}, buildDir);
+
+  assert.ok(
+    fs.existsSync(path.join(buildDir, 'amxmodx', 'configs', 'server.cfg')),
+    'cfg copied when exclude_files is absent'
+  );
+  assert.ok(
+    fs.existsSync(path.join(buildDir, 'amxmodx', 'lang', 'ru', 'settings.ini')),
+    'ini copied when exclude_files is absent'
+  );
+});
