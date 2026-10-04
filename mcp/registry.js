@@ -2,6 +2,7 @@
 'use strict';
 
 const { HANDLERS } = require('./handlers');
+const { RPC_TOOLS, isRpcConfigured } = require('./rpc-tools');
 
 // Single source of truth for MCP tools: schemas, descriptions, handler wiring.
 // Adding a tool = one entry here (+ its handler in handlers.js).
@@ -1188,6 +1189,8 @@ const TOOLS = [
           },
         },
 
+        ...RPC_TOOLS,
+
 ];
 
 TOOLS.forEach((t) => {
@@ -1207,12 +1210,17 @@ TOOLS.forEach((t) => {
 });
 
 function listTools() {
-  return { tools: TOOLS.map(({ handler, ...def }) => def) };
+  const configured = isRpcConfigured();
+  return {
+    tools: TOOLS
+      .filter((t) => !t.optional || configured)
+      .map(({ handler, optional, group, ...def }) => def),
+  };
 }
 
 async function callTool(name, args) {
   const tool = TOOLS.find((t) => t.name === name);
-  if (!tool) {
+  if (!tool || (tool.optional && !isRpcConfigured())) {
     return {
       content: [{ type: 'text', text: 'Error: Unknown tool: ' + name }],
       isError: true,

@@ -45,6 +45,49 @@ amxb mcp
 | `build_include_tree` | Построить дерево `#include` для плагина | [→](tools/build_include_tree.md) |
 | `list_releases` | Узнать доступные версии (релизы/тэги) GitHub репозитория | [→](tools/list_releases.md) |
 
+## RPC-инструменты (опционально)
+
+28 дополнительных инструментов управляют **живым** AMX Mod X сервером через модуль `amxx-rpc-module` (RPC по TCP): серверные команды, cvar, игроки, события, фейк-игроки и боты YAPB. Они **скрыты по умолчанию** и регистрируются только когда задан `AMXB_RPC_TOKEN` (и `AMXB_RPC_ENABLED` не равен `0`). Полная документация — в [`tools/rpc.md`](tools/rpc.md).
+
+| Переменная | Обязательность | По умолчанию | Описание |
+|------------|:---:|--------------|----------|
+| `AMXB_RPC_HOST` | — | `127.0.0.1` | Хост RPC-эндпоинта |
+| `AMXB_RPC_PORT` | — | `27016` | Порт модуля (отдельный от игрового/RCon `27015`) |
+| `AMXB_RPC_TOKEN` | ✓ | — | Общий секрет (не короче 16 символов), совпадает с `token` в `amxxrpc.cfg` |
+| `AMXB_RPC_TIMEOUT` | — | `15` | Таймаут запроса и установки соединения, секунды |
+| `AMXB_RPC_ENABLED` | — | — | Явный тумблер; `0` принудительно скрывает инструменты |
+
+| Инструмент | Для чего | Документация |
+|---|---|---|
+| `rpc_call` | Вызвать произвольный RPC-метод | [→](tools/rpc.md#rpc_call) |
+| `rpc_methods` | Каталог методов сервера | [→](tools/rpc.md#rpc_methods) |
+| `rpc_status` | Версия RPC-модуля и пинг | [→](tools/rpc.md#rpc_status) |
+| `server_exec` | Выполнить серверную команду | [→](tools/rpc.md#server_exec) |
+| `cvar_get` | Прочитать cvar | [→](tools/rpc.md#cvar_get) |
+| `cvar_set` | Установить cvar | [→](tools/rpc.md#cvar_set) |
+| `players_list` | Список игроков | [→](tools/rpc.md#players_list) |
+| `player_get` | Данные одного игрока | [→](tools/rpc.md#player_get) |
+| `events_subscribe` | Подписаться на событие | [→](tools/rpc.md#events_subscribe) |
+| `events_unsubscribe` | Отписаться от события | [→](tools/rpc.md#events_unsubscribe) |
+| `events_drain` | Забрать буфер событий | [→](tools/rpc.md#events_drain) |
+| `fake_create` | Создать фейк-игрока | [→](tools/rpc.md#fake_create) |
+| `fake_remove` | Удалить фейк-игрока | [→](tools/rpc.md#fake_remove) |
+| `fake_list` | Список фейк-игроков | [→](tools/rpc.md#fake_list) |
+| `fake_get` | Данные фейк-игрока | [→](tools/rpc.md#fake_get) |
+| `fake_move` | Двигать фейк-игрока | [→](tools/rpc.md#fake_move) |
+| `fake_look` | Задать взгляд фейк-игрока | [→](tools/rpc.md#fake_look) |
+| `fake_stop` | Остановить фейк-игрока | [→](tools/rpc.md#fake_stop) |
+| `fake_buttons` | Нажать/отпустить кнопки | [→](tools/rpc.md#fake_buttons) |
+| `fake_set` | Изменить состояние фейк-игрока | [→](tools/rpc.md#fake_set) |
+| `fake_authid` | Задать authid фейк-игрока | [→](tools/rpc.md#fake_authid) |
+| `bot_available` | Доступны ли боты YAPB | [→](tools/rpc.md#bot_available) |
+| `bot_add` | Добавить бота | [→](tools/rpc.md#bot_add) |
+| `bot_list` | Список ботов | [→](tools/rpc.md#bot_list) |
+| `bot_goal` | Задать цель бота | [→](tools/rpc.md#bot_goal) |
+| `bot_look` | Заставить бота смотреть | [→](tools/rpc.md#bot_look) |
+| `bot_freeze` | Заморозить/разморозить бота | [→](tools/rpc.md#bot_freeze) |
+| `bot_status` | Состояние бота | [→](tools/rpc.md#bot_status) |
+
 ## Локальные источники
 
 `repos:`/`deps:` могут указывать на локальную папку (`source: local` + `path`), а `AMXB_LOCAL_SOURCES` перенаправляет уже объявленные записи на локальные каталоги. Инструменты отражают это так:

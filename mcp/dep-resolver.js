@@ -9,10 +9,13 @@
  */
 
 const path   = require('path');
+const fs     = require('fs');
 const dotenv = require('dotenv');
 
 const logger   = require('../src/logger');
 const progress = require('../src/progress');
+const { resolveManifestPath } = require('../src/manifest-path');
+const { loadEnv } = require('../src/env');
 const { McpServer } = require('./mcp-server');
 const { listTools, callTool } = require('./registry');
 
@@ -50,6 +53,18 @@ function createServer() {
 // No override: real process env (client-provided GITHUB_TOKEN etc.) wins.
 function prepareEnvironment() {
   dotenv.config({ path: path.join(process.cwd(), '.env'), quiet: true });
+
+  // Also honor a .env next to the auto-detected manifest, so AMXB_RPC_* placed
+  // beside amxbuild.yml is picked up even when cwd differs. Never break startup.
+  try {
+    const manifestPath = resolveManifestPath().path;
+    if (fs.existsSync(manifestPath)) {
+      loadEnv(manifestPath, { quiet: true, override: false });
+    }
+  } catch (_) {
+    // Missing/unreadable manifest .env is not fatal.
+  }
+
   logger.setStderr(true);
   progress.setEnabled(false);
 }
