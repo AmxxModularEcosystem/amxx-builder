@@ -17,7 +17,7 @@ const progress = require('../src/progress');
 const { resolveManifestPath } = require('../src/manifest-path');
 const { loadEnv } = require('../src/env');
 const { McpServer } = require('./mcp-server');
-const { listTools, callTool } = require('./registry');
+const { listTools, callTool, warmUp } = require('./registry');
 
 const SERVER_INFO = {
   name:    'amxx-dep-resolver',
@@ -31,7 +31,11 @@ const SERVER_INFO = {
 function createServer() {
   const server = new McpServer(SERVER_INFO, { tools: {} });
 
-  server.setRequestHandler('ListTools', async () => listTools());
+  server.setRequestHandler('ListTools', async () => {
+    const result = await listTools();
+    scheduleWarmup();
+    return result;
+  });
 
   server.setRequestHandler('CallTool', async (request) => {
     const { name, arguments: args } = request.params;
@@ -47,6 +51,16 @@ function createServer() {
   });
 
   return server;
+}
+
+let warmupScheduled = false;
+
+// opencode calls tools/list immediately after connecting; defer the heavy core
+// load until after that response is sent so the handshake stays instant.
+function scheduleWarmup() {
+  if (warmupScheduled) return;
+  warmupScheduled = true;
+  setImmediate(() => { warmUp().catch(() => {}); });
 }
 
 // Load project .env like the CLI does; keep stdout free for JSON-RPC.

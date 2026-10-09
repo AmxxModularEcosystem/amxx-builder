@@ -2,8 +2,6 @@ const fs   = require('fs');
 const yaml = require('js-yaml');
 const path = require('path');
 
-const { validateManifest: validateSchema } = require('./schema');
-const { parsePluginRef } = require('./fungun-fetcher');
 const { synthesizeLocalId, applyLocalOverrides } = require('./local-sources');
 
 const DEFAULTS_PATH  = path.join(__dirname, '..', 'defaults', 'amxbuild.defaults.yml');
@@ -28,6 +26,7 @@ function deepMerge(base, overlay) {
 }
 
 function validateManifest(raw) {
+  const { validateManifest: validateSchema } = require('./schema');
   const result = validateSchema(raw);
   if (!result.valid) {
     const errors = result.errors.map(e => `  ${e.path}: ${e.message}`);
@@ -35,7 +34,8 @@ function validateManifest(raw) {
   }
 }
 
-function parseManifest(manifestPath) {
+function parseManifest(manifestPath, options = {}) {
+  const { validate = true } = options;
   const absPath = path.resolve(manifestPath);
   if (!fs.existsSync(absPath)) {
     throw new Error(`Manifest not found: ${absPath}\n  → Run "amxb init" to create one`);
@@ -43,7 +43,7 @@ function parseManifest(manifestPath) {
 
   const projectRaw = yaml.load(fs.readFileSync(absPath, 'utf8'));
   const raw = deepMerge(loadDefaultsRaw(), projectRaw);
-  validateManifest(raw);
+  if (validate) validateManifest(raw);
 
   if (!raw.name) throw new Error('manifest: missing required field "name"');
 
@@ -369,6 +369,7 @@ function parseFungunDepObject(line) {
     );
   }
 
+  const { parsePluginRef } = require('./fungun-fetcher');
   let ref;
   try {
     ref = parsePluginRef(hasId ? rawId : rawUrl);

@@ -6,22 +6,6 @@ const { program } = require('commander');
 const logger = require('./logger');
 const { checkForUpdate } = require('./update-check');
 
-const { runBuild }            = require('./commands/build');
-const { runClean }            = require('./commands/clean');
-const { runDeploy }           = require('./commands/deploy');
-const { runWatch }            = require('./commands/watch');
-const { runCacheInfo, runCacheClean } = require('./commands/cache');
-const { runDoctor }           = require('./commands/doctor');
-const { runDepsTree }         = require('./commands/deps-tree');
-const { runResolveManifest }  = require('./commands/resolve-manifest');
-const { runValidate }         = require('./commands/validate');
-const { runReleases }         = require('./commands/releases');
-const { runInit, runInitInteractive } = require('./commands/init');
-const { runMcp }                     = require('./commands/mcp');
-const { runServe }                   = require('./commands/serve');
-const { runSkillsDir }               = require('./commands/skills-dir');
-const { runOpencodeSkills }          = require('./commands/opencode-skills');
-
 program
   .name('amxx-builder')
   .description('Build and package AMX Mod X server plugins')
@@ -61,6 +45,7 @@ program
   .option('--verbose',              'Show detailed output (compiler commands, per-file copies, include dirs)')
   .action(async (options) => {
     try {
+      const { runBuild } = require('./commands/build');
       await runBuild(options);
     } catch (err) {
       logger.error(err.message);
@@ -77,6 +62,7 @@ program
   .option('--all', 'Also clean compiler cache')
   .action(async (options) => {
     try {
+      const { runClean } = require('./commands/clean');
       await runClean(options);
     } catch (err) {
       logger.error(err.message);
@@ -96,6 +82,7 @@ cacheCmd
   .option('--manifest <path>', 'Show local .amxb-cache/ for this manifest')
   .action((options) => {
     try {
+      const { runCacheInfo } = require('./commands/cache');
       runCacheInfo(options);
     } catch (err) {
       logger.error(err.message);
@@ -112,6 +99,7 @@ cacheCmd
   .option('--all',      'Clean all caches')
   .action((options) => {
     try {
+      const { runCacheClean } = require('./commands/cache');
       runCacheClean(options);
     } catch (err) {
       logger.error(err.message);
@@ -131,6 +119,7 @@ program
   .option('--no-fetch',        'Use cached repos without re-cloning')
   .action(async (options) => {
     try {
+      const { runDepsTree } = require('./commands/deps-tree');
       await runDepsTree(options);
     } catch (err) {
       logger.error(err.message);
@@ -149,6 +138,7 @@ program
   .option('--json', 'Output as JSON')
   .action(async (options) => {
     try {
+      const { runResolveManifest } = require('./commands/resolve-manifest');
       await runResolveManifest(options);
     } catch (err) {
       logger.error(err.message);
@@ -165,6 +155,7 @@ program
   .option('--json', 'Output as JSON')
   .action(async (options) => {
     try {
+      const { runValidate } = require('./commands/validate');
       await runValidate(options);
     } catch (err) {
       logger.error(err.message);
@@ -184,6 +175,7 @@ program
   .option('--json', 'Output as JSON')
   .action(async (repo, options) => {
     try {
+      const { runReleases } = require('./commands/releases');
       await runReleases(repo, options);
     } catch (err) {
       logger.error(err.message);
@@ -202,6 +194,7 @@ program
   .option('--build',            'Run a full build before deploying')
   .action(async (options) => {
     try {
+      const { runDeploy } = require('./commands/deploy');
       await runDeploy(options);
     } catch (err) {
       logger.error(err.message);
@@ -219,6 +212,7 @@ program
   .option('--no-deploy',        'Watch and rebuild only, skip deploy')
   .action(async (options) => {
     try {
+      const { runWatch } = require('./commands/watch');
       await runWatch(options);
     } catch (err) {
       logger.error(err.message);
@@ -234,6 +228,7 @@ program
   .option('--manifest <path>', 'Path to manifest file to validate')
   .action(async (options) => {
     try {
+      const { runDoctor } = require('./commands/doctor');
       await runDoctor(options);
     } catch (err) {
       logger.error(err.message);
@@ -261,6 +256,7 @@ program
   .option('-i, --interactive', 'Interactive mode with prompts')
   .action(async (options) => {
     try {
+      const { runInit, runInitInteractive } = require('./commands/init');
       if (options.interactive) {
         await runInitInteractive(options);
       } else {
@@ -279,6 +275,7 @@ program
   .description('Start the MCP (Model Context Protocol) server for AMXX dependency resolution (stdio transport)')
   .action(async () => {
     try {
+      const { runMcp } = require('./commands/mcp');
       await runMcp();
     } catch (err) {
       logger.error(err.message);
@@ -293,6 +290,7 @@ program
   .description('Start JSON-RPC server for editor integration (stdio)')
   .action(async () => {
     try {
+      const { runServe } = require('./commands/serve');
       await runServe();
     } catch (err) {
       logger.error(err.message);
@@ -306,6 +304,7 @@ program
   .command('skills-dir')
   .description('Print the absolute path to the bundled skills directory (used by the opencode skills bridge plugin)')
   .action(() => {
+    const { runSkillsDir } = require('./commands/skills-dir');
     runSkillsDir();
   });
 
@@ -318,6 +317,7 @@ program
   .option('--no-fetch',        'Use cached repos without re-cloning')
   .action(async (options) => {
     try {
+      const { runOpencodeSkills } = require('./commands/opencode-skills');
       await runOpencodeSkills(options);
     } catch (err) {
       logger.error(err.message);

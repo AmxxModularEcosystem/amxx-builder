@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const { HANDLERS } = require('./handlers');
-const { RPC_TOOLS, isRpcConfigured } = require('./rpc-tools');
+const { RPC_TOOLS, RPC_HANDLERS, isRpcConfigured } = require('./rpc-tools');
 
 // Single source of truth for MCP tools: schemas, descriptions, handler wiring.
 // Adding a tool = one entry here (+ its handler in handlers.js).
@@ -1194,7 +1193,6 @@ const TOOLS = [
 ];
 
 TOOLS.forEach((t) => {
-  t.handler = HANDLERS[t.name];
   if (!t.inputSchema.properties) t.inputSchema.properties = {};
   t.inputSchema.properties.full_output = {
     type: 'boolean',
@@ -1218,6 +1216,25 @@ function listTools() {
   };
 }
 
+// Core tool handlers live in handlers.js, which pulls in the whole build stack
+// (ajv, fast-glob, axios, archiver, ...). Require it lazily so an MCP process
+// that only answers tools/list — or calls RPC-only tools — never pays that cost.
+let coreHandlers = null;
+
+function loadCoreHandlers() {
+  if (!coreHandlers) coreHandlers = require('./handlers').HANDLERS;
+  return coreHandlers;
+}
+
+function getHandler(name) {
+  if (RPC_HANDLERS[name]) return RPC_HANDLERS[name];
+  return loadCoreHandlers()[name];
+}
+
+function warmUp() {
+  return Promise.resolve().then(() => loadCoreHandlers());
+}
+
 async function callTool(name, args) {
   const tool = TOOLS.find((t) => t.name === name);
   if (!tool || (tool.optional && !isRpcConfigured())) {
@@ -1229,7 +1246,7 @@ async function callTool(name, args) {
   }
   const token   = args?.token || null; // explicit override; handlers fall back to env/manifest per-owner
   const noFetch = args?.no_fetch === true;
-  return tool.handler(args, token, noFetch);
+  return getHandler(name)(args, token, noFetch);
 }
 
-module.exports = { TOOLS, listTools, callTool };
+module.exports = { TOOLS, listTools, callTool, warmUp };

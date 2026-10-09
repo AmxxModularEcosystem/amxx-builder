@@ -2,11 +2,8 @@
 
 const fs   = require('fs');
 const path = require('path');
-const glob = require('fast-glob');
 const yaml = require('js-yaml');
 
-const { fetchDepRoot }  = require('./deps-resolver');
-const { parseDocEntries, parseSkillEntries } = require('./manifest');
 const { findManifestInDir } = require('./manifest-path');
 
 /**
@@ -90,6 +87,7 @@ function resolveAssets({ docs, skills }, rootDir) {
 
     const abs = safeResolve(rootDir, s.dir);
     if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) {
+      const glob = require('fast-glob');
       const files = sortBundleFiles(glob.sync('**/*', { cwd: abs, dot: false, onlyFiles: true }));
       outSkills.push({
         name: s.name,
@@ -142,6 +140,7 @@ function readAssets(resolved) {
  * @returns {Promise<{ label: string, rootDir: string, manifestPath: string|null, raw: object|null }>}
  */
 async function readDepManifest(dep, { token, noFetch, ssh, fetchRoot } = {}) {
+  const { fetchDepRoot } = require('./deps-resolver');
   const fetch = fetchRoot || fetchDepRoot;
   const { rootDir, label } = await fetch(dep, { token, noFetch, ssh });
 
@@ -170,6 +169,7 @@ async function collectDepAssets(dep, opts) {
     return { label: m.label, manifestPath: null, manifestName: null, docs: [], skills: [], missing: [] };
   }
 
+  const { parseDocEntries, parseSkillEntries } = require('./manifest');
   let docs;
   let skills;
   try { docs = parseDocEntries(m.raw.docs || []); } catch (_) { docs = []; }

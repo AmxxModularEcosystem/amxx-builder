@@ -10,8 +10,6 @@
 
 const fs   = require('fs');
 const path = require('path');
-const Ajv     = require('ajv');
-const addFormats = require('ajv-formats');
 
 const SCHEMA_PATH = path.join(__dirname, '..', 'schema', 'amxbuild.schema.json');
 
@@ -22,6 +20,8 @@ try {
   }
 } catch { /* no schema file — AJV validation skipped */ }
 
+let compiledValidator = null;
+
 /**
  * Validate a raw manifest object against the JSON schema.
  *
@@ -31,16 +31,21 @@ try {
 function validateManifest(raw) {
   if (!schemaCache) return { valid: true, errors: [] };
 
-  const ajv = new Ajv({ allErrors: true, allowUnionTypes: true });
-  addFormats(ajv);
-  const validate = ajv.compile(schemaCache);
-  const valid = validate(raw);
+  if (!compiledValidator) {
+    const Ajv = require('ajv');
+    const addFormats = require('ajv-formats');
+    const ajv = new Ajv({ allErrors: true, allowUnionTypes: true });
+    addFormats(ajv);
+    compiledValidator = ajv.compile(schemaCache);
+  }
+
+  const valid = compiledValidator(raw);
 
   if (valid) return { valid: true, errors: [] };
 
   return {
     valid: false,
-    errors: validate.errors.map((e) => ({
+    errors: compiledValidator.errors.map((e) => ({
       path: e.instancePath || '(root)',
       message: e.message,
     })),

@@ -13,12 +13,11 @@
  * adapter (`src/commands/opencode-skills.js`) renders what this returns.
  */
 
-const fs     = require('fs');
-const path   = require('path');
-const crypto = require('crypto');
+const fs   = require('fs');
+const path = require('path');
 
 const { collectLocalAssets, collectDepAssets } = require('./agent-assets');
-const { getCacheDir } = require('./cache-dir');
+const { CACHE_MARKER, containerRoot, containerDirFor, readFreshContainer } = require('./opencode-skills-cache');
 
 /**
  * Lowercase, turn runs of non `[a-z0-9]` into `-`, collapse and trim dashes.
@@ -209,8 +208,7 @@ async function buildOpencodeSkills(manifest, opts = {}) {
   const { noFetch, ssh, tokenFor, fetchRoot } = opts;
   const root = opts.containerRoot || containerRoot();
 
-  const key = crypto.createHash('sha1').update(String(manifest._path)).digest('hex').slice(0, 12);
-  const containerDir = path.join(root, key);
+  const containerDir = containerDirFor(manifest._path, root);
   fs.rmSync(containerDir, { recursive: true, force: true });
   fs.mkdirSync(containerDir, { recursive: true });
 
@@ -238,16 +236,17 @@ async function buildOpencodeSkills(manifest, opts = {}) {
     }
   }
 
-  return { containerDir, count, errors };
-}
+  if (fs.existsSync(manifest._path)) {
+    const marker = {
+      manifestPath: manifest._path,
+      manifestMtimeMs: fs.statSync(manifest._path).mtimeMs,
+      builtAt: Date.now(),
+      count,
+    };
+    fs.writeFileSync(path.join(containerDir, CACHE_MARKER), JSON.stringify(marker), 'utf8');
+  }
 
-/**
- * Absolute root directory that holds all per-manifest skill containers.
- *
- * @returns {string}
- */
-function containerRoot() {
-  return path.join(getCacheDir(), 'opencode-skills');
+  return { containerDir, count, errors };
 }
 
 module.exports = {
@@ -259,4 +258,5 @@ module.exports = {
   collectDepRepoSkills,
   buildOpencodeSkills,
   containerRoot,
+  readFreshContainer,
 };
