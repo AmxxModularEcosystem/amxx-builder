@@ -36,6 +36,18 @@ function applyPluginRule(smaRelPath, rules, base) {
   return { postfix: base.ini === false ? '' : base.ini, skipIni: base.ini === false, debug: base.debug };
 }
 
+/**
+ * The `plugins.defaults` base layer consumed by `applyPluginRule`:
+ * `{ ini, debug }`. Tolerates a hand-built manifest without `pluginIni`
+ * (falls back to no-INI / debug-off).
+ * @param {object} manifest
+ * @returns {{ ini: false|string|null, debug: boolean }}
+ */
+function pluginRuleBase(manifest) {
+  const pluginIni = manifest.pluginIni || { defaultIni: false, defaultDebug: false };
+  return { ini: pluginIni.defaultIni, debug: pluginIni.defaultDebug === true };
+}
+
 async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs, buildDir) {
   const pluginsDir = path.join(buildDir, 'amxmodx', 'plugins');
   fs.mkdirSync(pluginsDir, { recursive: true });
@@ -44,7 +56,7 @@ async function compilePlugins(manifest, repoLocalDirs, compilerPath, includeDirs
 
   // plugins.defaults is the base layer for every plugin (local + repo).
   const pluginIni = manifest.pluginIni || { defaultIni: false, defaultDebug: false };
-  const base = { ini: pluginIni.defaultIni, debug: pluginIni.defaultDebug === true };
+  const base = pluginRuleBase(manifest);
   // AMXB_PLUGINS_DEBUG outranks rule/repo debug when set (true or false).
   const forceDebug = pluginIni.forceDebug != null ? pluginIni.forceDebug : null;
 
@@ -287,4 +299,4 @@ async function compileSingle(manifest, smaPath, compilerPath, includeDirs, build
   return outName;
 }
 
-module.exports = { compilePlugins, compileSingle, compileFile, applyPluginRule };
+module.exports = { compilePlugins, compileSingle, compileFile, applyPluginRule, pluginRuleBase };

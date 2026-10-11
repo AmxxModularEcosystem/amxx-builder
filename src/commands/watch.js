@@ -6,27 +6,19 @@ const path = require('path');
 const logger                = require('../logger');
 const { parseManifest, resolveGithubToken } = require('../manifest');
 const { fetchCompiler }     = require('../compiler-fetcher');
-const { compileSingle, applyPluginRule } = require('../compiler');
-const { deployBuild, deployPlugin, deployFile, removeDeployedFile } = require('../deployer');
+const { compileSingle, applyPluginRule, pluginRuleBase } = require('../compiler');
+const { deployBuild, deployPlugin, deployFile, removeDeployedFile, gatherPluginNames } = require('../deployer');
 const { sendRconForPlugins } = require('../rcon');
 const { DepGraph }           = require('../dep-graph');
 const { startWatch }         = require('../watcher');
 const { resolveRepoRefs } = require('../repo-fetcher');
-const { ensureRepoDir }   = require('../local-sources');
-const { resolveDeps, repoKey, normalizeRepo } = require('../deps-resolver');
+const { cloneRepoLocalDirs, resolveBuildIncludeDirs } = require('../build-service');
 const { resolveManifestPath, loadEnv } = require('./shared');
 const { runBuild } = require('./build');
 const { subscribeCompiledRendering } = require('./compile-renderer');
 
 // Render compiler 'compiled' events (previously direct stdout/stderr writes).
 subscribeCompiledRendering();
-
-// Watch never regenerates INI files, so applyPluginRule is only used as a skip
-// check here; the base only has to be a valid defaults layer.
-function pluginRuleBase(manifest) {
-  const { defaultIni, defaultDebug } = manifest.pluginIni;
-  return { ini: defaultIni, debug: defaultDebug === true };
-}
 
 async function runWatch(options) {
   const manifestPath = resolveManifestPath(options.manifest);
@@ -53,35 +45,20 @@ async function runWatch(options) {
     // initial build just populated the clone cache), then resolveDeps collects
     // dep .inc files into build/_includes/ and returns those dirs; the compiler
     // bundle is appended last (deps before stdlib, matching the real build).
-    const repoLocalDirs = {};
+    // Refs stay inline (R1) so watch keeps its own resolution boundary; the
+    // helper is clone+map only.
+    let repoLocalDirs = {};
     if (manifest.repos.length > 0) {
       await resolveRepoRefs(manifest.repos, (repo) => resolveGithubToken(manifest, repo));
       // Dedup by the case-insensitive normalizeRepo identity (two spellings of
       // the same repo are one clone job), then map every manifest entry's raw
       // repoKey to the shared dir — mirroring src/build-service.js.
-      const cloneJobs = new Map();
-      for (const repoConfig of manifest.repos) {
-        const identity = normalizeRepo(repoConfig);
-        if (!cloneJobs.has(identity)) {
-          // Cache-only, like before; ensureRepoDir returns `_localDir` for
-          // local entries (no network, no noFetch check).
-          cloneJobs.set(identity,
-            ensureRepoDir(repoConfig, {
-              token: resolveGithubToken(manifest, repoConfig.repo),
-              noFetch: true,
-              ssh: manifest.github.ssh,
-            })
-          );
-        }
-      }
-      await Promise.all(cloneJobs.values());
-      for (const repoConfig of manifest.repos) {
-        repoLocalDirs[repoKey(repoConfig)] = await cloneJobs.get(normalizeRepo(repoConfig));
-      }
+      repoLocalDirs = await cloneRepoLocalDirs(manifest, { noFetch: true });
     }
 
-    const depsIncludeDirs = await resolveDeps(manifest, repoLocalDirs, true, buildDir);
-    const includeDirs = compilerIncludeDir ? [...depsIncludeDirs, compilerIncludeDir] : depsIncludeDirs;
+    const includeDirs = await resolveBuildIncludeDirs(
+      manifest, repoLocalDirs, { compilerIncludeDir, noFetch: true, buildDir }
+    );
 
     const manifestDir      = path.dirname(path.resolve(manifestPath));
     const scriptingRootDir = path.join(manifestDir, manifest.amxmodx.dir, 'scripting');
@@ -242,14 +219,6 @@ async function runWatch(options) {
   };
 
   startWatch(state.manifest, manifestPath, handlers);
-}
-
-function gatherPluginNames(buildDir) {
-  const pluginsDir = path.join(buildDir, 'amxmodx', 'plugins');
-  if (!fs.existsSync(pluginsDir)) return [];
-  return fs.readdirSync(pluginsDir)
-    .filter(f => f.endsWith('.amxx'))
-    .map(f => f.replace(/\.amxx$/, ''));
 }
 
 module.exports = { runWatch };

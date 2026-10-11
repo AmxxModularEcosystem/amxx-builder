@@ -72,6 +72,67 @@ function logForcedDebug(manifest) {
 }
 
 /**
+ * Clone (or locate) every manifest repo, returning a map from each entry's
+ * raw-spelling `repoKey` to its local clone directory. Clones are deduped by
+ * the case-insensitive `normalizeRepo` identity (two spellings of one repo
+ * share a single job). **Assumes refs are already resolved** — the caller runs
+ * `resolveRepoRefs` inline so it keeps its own cancellation boundary (R1).
+ * Pure: no events, no cancellation checks. Returns `{}` when `manifest.repos`
+ * is empty.
+ *
+ * @param {object} manifest
+ * @param {{ noFetch?: boolean }} [options]
+ * @returns {Promise<Record<string, string>>} repoLocalDirs
+ */
+async function cloneRepoLocalDirs(manifest, { noFetch = false } = {}) {
+  const repoLocalDirs = {};
+  if (manifest.repos.length === 0) return repoLocalDirs;
+
+  const cloneJobs = new Map(); // normalized repo identity → fetch promise
+  for (const repoConfig of manifest.repos) {
+    const identity = normalizeRepo(repoConfig);
+    if (!cloneJobs.has(identity)) {
+      // ensureRepoDir returns `_localDir` for local entries (never fetches).
+      cloneJobs.set(identity,
+        ensureRepoDir(repoConfig, {
+          token: resolveGithubToken(manifest, repoConfig.repo),
+          noFetch,
+          ssh: manifest.github.ssh,
+        })
+      );
+    }
+  }
+  const cloned = new Map();
+  await Promise.all(
+    [...cloneJobs.entries()].map(async ([identity, p]) => {
+      const dir = await p;
+      cloned.set(identity, dir);
+    })
+  );
+  // Map every manifest entry (raw spelling) to its clone dir; duplicate
+  // spellings of the same repo share the clone but each repoKey stays valid.
+  for (const repoConfig of manifest.repos) {
+    repoLocalDirs[repoKey(repoConfig)] = cloned.get(normalizeRepo(repoConfig));
+  }
+  return repoLocalDirs;
+}
+
+/**
+ * Resolve dep `.inc` include dirs and append the compiler stdlib include dir
+ * last (deps before stdlib, matching the real compile order). Pure.
+ *
+ * @param {object} manifest
+ * @param {Record<string, string>} repoLocalDirs
+ * @param {{ compilerIncludeDir?: string|null, noFetch?: boolean, buildDir?: string }} [options]
+ * @returns {Promise<string[]>} includeDirs
+ */
+async function resolveBuildIncludeDirs(manifest, repoLocalDirs,
+  { compilerIncludeDir = null, noFetch = false, buildDir = './build' } = {}) {
+  const depsIncludeDirs = await resolveDeps(manifest, repoLocalDirs, noFetch, buildDir);
+  return compilerIncludeDir ? [...depsIncludeDirs, compilerIncludeDir] : depsIncludeDirs;
+}
+
+/**
  * Run the full build pipeline for an already-resolved manifest.
  *
  * @param {object} manifest - fully resolved manifest (parseManifest + any
@@ -141,45 +202,21 @@ async function runBuild(manifest, options = {}) {
     checkCancelled();
 
     // ── 2. Repos — resolve refs + clone (deduped by repo@resolved_ref) ──────
-    const repoLocalDirs = {};
+    let repoLocalDirs = {};
     if (hasRepos) {
       emitEvent(EVENTS.STAGE, { stage: 'repos', message: 'Resolving refs and cloning repos' });
       await resolveRepoRefs(manifest.repos, (repo) => resolveGithubToken(manifest, repo));
       checkCancelled();
 
-      const cloneJobs = new Map(); // normalized repo identity → fetch promise
-      for (const repoConfig of manifest.repos) {
-        const identity = normalizeRepo(repoConfig);
-        if (!cloneJobs.has(identity)) {
-          // ensureRepoDir returns `_localDir` for local entries (never fetches).
-          cloneJobs.set(identity,
-            ensureRepoDir(repoConfig, {
-              token: resolveGithubToken(manifest, repoConfig.repo),
-              noFetch,
-              ssh: manifest.github.ssh,
-            })
-          );
-        }
-      }
-      const cloned = new Map();
-      await Promise.all(
-        [...cloneJobs.entries()].map(async ([identity, p]) => {
-          const dir = await p;
-          cloned.set(identity, dir);
-        })
-      );
-      // Map every manifest entry (raw spelling) to its clone dir; duplicate
-      // spellings of the same repo share the clone but each repoKey stays valid.
-      for (const repoConfig of manifest.repos) {
-        repoLocalDirs[repoKey(repoConfig)] = cloned.get(normalizeRepo(repoConfig));
-      }
+      repoLocalDirs = await cloneRepoLocalDirs(manifest, { noFetch });
       checkCancelled();
     }
 
     // ── 3. Deps — resolve + collect .inc ────────────────────────────────────
     emitEvent(EVENTS.STAGE, { stage: 'deps', message: 'Resolving dependencies' });
-    const depsIncludeDirs = await resolveDeps(manifest, repoLocalDirs, noFetch, buildDir);
-    const includeDirs = compilerIncludeDir ? [...depsIncludeDirs, compilerIncludeDir] : depsIncludeDirs;
+    const includeDirs = await resolveBuildIncludeDirs(
+      manifest, repoLocalDirs, { compilerIncludeDir, noFetch, buildDir }
+    );
     checkCancelled();
 
     // ── 4. Collect — repos + local amxmodx + assets ─────────────────────────
@@ -228,4 +265,4 @@ async function runBuild(manifest, options = {}) {
   }
 }
 
-module.exports = { runBuild };
+module.exports = { runBuild, cloneRepoLocalDirs, resolveBuildIncludeDirs };

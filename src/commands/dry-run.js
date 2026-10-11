@@ -2,7 +2,6 @@
 
 const path = require('path');
 const logger = require('../logger');
-const { buildPlanData } = require('../build-plan');
 const { isLocal } = require('../local-sources');
 const { expandNameVersion } = require('../format');
 
@@ -92,4 +91,4 @@ function printDryRun(manifest) {
   logger.info(`\n=== END DRY RUN ===`);
 }
 
-module.exports = { printDryRun, buildPlanData };
+module.exports = { printDryRun };

@@ -5,7 +5,7 @@ const path = require('path');
 
 const logger    = require('../logger');
 const { getCacheInfo, dirSize, fmtSize, parseCacheKey } = require('../cache-info');
-const { getCacheDir } = require('../cache-dir');
+const { cacheSubdir } = require('../cache-dir');
 
 function runCacheInfo(options = {}) {
   const manifestPath = options.manifest ? path.resolve(options.manifest) : undefined;
@@ -57,11 +57,10 @@ function runCacheClean(options) {
     process.exit(1);
   }
 
-  const cacheRoot = getCacheDir();
   const targets = [];
-  if (all || compiler) targets.push({ dir: path.join(cacheRoot, 'amxxpc'),       label: 'compiler' });
-  if (all || repos)    targets.push({ dir: path.join(cacheRoot, 'repos'),         label: 'repos' });
-  if (all || deps)     targets.push({ dir: path.join(cacheRoot, 'release-deps'),  label: 'release deps' });
+  if (all || compiler) targets.push({ dir: cacheSubdir('compiler'),    label: 'compiler' });
+  if (all || repos)    targets.push({ dir: cacheSubdir('repos'),       label: 'repos' });
+  if (all || deps)     targets.push({ dir: cacheSubdir('releaseDeps'), label: 'release deps' });
 
   for (const { dir, label } of targets) {
     if (!fs.existsSync(dir)) {

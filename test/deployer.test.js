@@ -15,7 +15,7 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
-const { deployFile } = require('../src/deployer');
+const { deployFile, gatherPluginNames } = require('../src/deployer');
 
 function makeTmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -102,4 +102,18 @@ test('deployFile rejects amxmodx_path/assets_path escaping the deploy root', () 
   const assetEvil = manifestFor(deployRoot, dir);
   assetEvil.deploy.assets_path = '../../escape';
   assert.throws(() => deployFile(assetEvil, buildDir, 'm/x.mdl', 'assets'), /outside the deploy path/);
+});
+
+test('gatherPluginNames lists top-level .amxx names and ignores non-amxx / subdirs', () => {
+  const buildDir = makeTmpDir('amxb-gpn-');
+  write(buildDir, 'amxmodx/plugins/a.amxx', 'a');
+  write(buildDir, 'amxmodx/plugins/b.inc', 'b');
+  write(buildDir, 'amxmodx/plugins/Sub/c.amxx', 'c');
+
+  assert.deepEqual(gatherPluginNames(buildDir), ['a']);
+});
+
+test('gatherPluginNames returns [] when the plugins dir is absent', () => {
+  const buildDir = makeTmpDir('amxb-gpn-');
+  assert.deepEqual(gatherPluginNames(buildDir), []);
 });

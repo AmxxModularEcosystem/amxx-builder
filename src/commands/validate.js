@@ -1,13 +1,11 @@
 'use strict';
 
-const path = require('path');
-
 const logger = require('../logger');
 const { validateManifestFile } = require('../validate');
 const { resolveManifestPath } = require('./shared');
 
 async function runValidate(options) {
-  const manifestPath = options.manifest ? path.resolve(options.manifest) : resolveManifestPath(undefined);
+  const manifestPath = resolveManifestPath(options.manifest);
   const result = validateManifestFile(manifestPath);
 
   if (options.json) {

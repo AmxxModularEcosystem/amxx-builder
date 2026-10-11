@@ -1,13 +1,11 @@
 'use strict';
 
-const path = require('path');
-
 const logger = require('../logger');
 const { resolveManifest } = require('../manifest');
 const { resolveManifestPath, loadEnv } = require('./shared');
 
 async function runResolveManifest(options) {
-  const manifestPath = options.manifest ? path.resolve(options.manifest) : resolveManifestPath(undefined);
+  const manifestPath = resolveManifestPath(options.manifest);
   loadEnv(manifestPath);
 
   const manifest = resolveManifest(manifestPath, {

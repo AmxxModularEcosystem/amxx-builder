@@ -209,6 +209,14 @@ function isUpToDate(src, dest) {
   return s.size === d.size && s.mtimeMs < d.mtimeMs;
 }
 
+function gatherPluginNames(buildDir) {
+  const pluginsDir = path.join(buildDir, 'amxmodx', 'plugins');
+  if (!fs.existsSync(pluginsDir)) return [];
+  return fs.readdirSync(pluginsDir)
+    .filter(f => f.endsWith('.amxx'))
+    .map(f => f.replace(/\.amxx$/, ''));
+}
+
 function assertDeployPath(manifest) {
   if (!manifest.deploy.path) {
     throw new Error(
@@ -218,4 +226,4 @@ function assertDeployPath(manifest) {
   }
 }
 
-module.exports = { deployBuild, deployPlugin, deployFile, removeDeployedFile };
+module.exports = { deployBuild, deployPlugin, deployFile, removeDeployedFile, gatherPluginNames };

@@ -2,7 +2,7 @@
 
 const fs   = require('fs');
 const path = require('path');
-const { getCacheDir } = require('./cache-dir');
+const { getCacheDir, cacheSubdir } = require('./cache-dir');
 const { formatBytes } = require('./format');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
@@ -43,9 +43,9 @@ function getCacheInfo(manifestPath) {
     cacheDir: cacheRoot,
     totalSize,
     totalSizeHuman: fmtSize(totalSize),
-    compiler: scanCompilerCache(path.join(cacheRoot, 'amxxpc')),
-    repos: scanDirEntries(path.join(cacheRoot, 'repos'), parseCacheKey),
-    releaseDeps: scanDirEntries(path.join(cacheRoot, 'release-deps'), parseCacheKey),
+    compiler: scanCompilerCache(cacheSubdir('compiler')),
+    repos: scanDirEntries(cacheSubdir('repos'), parseCacheKey),
+    releaseDeps: scanDirEntries(cacheSubdir('releaseDeps'), parseCacheKey),
     localAssetCache: null,
   };
 

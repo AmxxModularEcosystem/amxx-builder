@@ -44,7 +44,7 @@ if (process.platform === 'win32') {
   };
 }
 
-const { compilePlugins, compileSingle, compileFile, applyPluginRule } = require('../src/compiler');
+const { compilePlugins, compileSingle, compileFile, applyPluginRule, pluginRuleBase } = require('../src/compiler');
 const { on, off, EVENTS } = require('../src/events');
 
 function makeTmpDir(prefix) {
@@ -140,6 +140,26 @@ test('applyPluginRule: matched rule ini overrides base ini:false', () => {
     applyPluginRule('vip/core.sma', rules, { ini: false, debug: false }),
     { postfix: 'vip', skipIni: false, debug: false }
   );
+});
+
+// ─── pluginRuleBase (pure logic, no compiler needed) ─────────────────────────
+
+test('pluginRuleBase: pluginIni defaults → ini + strict debug', () => {
+  assert.deepEqual(
+    pluginRuleBase({ pluginIni: { defaultIni: 'x', defaultDebug: true } }),
+    { ini: 'x', debug: true }
+  );
+});
+
+test('pluginRuleBase: non-true defaultDebug → debug:false', () => {
+  assert.deepEqual(
+    pluginRuleBase({ pluginIni: { defaultIni: 'x', defaultDebug: 1 } }),
+    { ini: 'x', debug: false }
+  );
+});
+
+test('pluginRuleBase: missing pluginIni → {ini:false, debug:false}', () => {
+  assert.deepEqual(pluginRuleBase({}), { ini: false, debug: false });
 });
 
 // ─── compileSingle (watch-mode single-file compile) ──────────────────────────

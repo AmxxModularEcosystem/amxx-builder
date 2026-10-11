@@ -37,7 +37,7 @@ async function runBuildCLI(options) {
 
   if (options.dryRun) {
     printDryRun(manifest);
-    return;
+    return manifest;
   }
 
   await runBuild(manifest, {
@@ -45,6 +45,7 @@ async function runBuildCLI(options) {
     fetch:    options.fetch,
     archive:  options.archive,
   });
+  return manifest;
 }
 
 module.exports = { runBuild: runBuildCLI };

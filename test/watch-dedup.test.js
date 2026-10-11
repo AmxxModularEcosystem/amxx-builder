@@ -24,8 +24,6 @@ const localSources    = require('../src/local-sources');
 const repoFetcher     = require('../src/repo-fetcher');
 const compilerFetcher = require('../src/compiler-fetcher');
 const depsResolver    = require('../src/deps-resolver');
-const buildCommand    = require('../src/commands/build');
-const watcher         = require('../src/watcher');
 
 const CLONE_DIR = path.join(os.tmpdir(), 'amxb-watch-dedup-clone');
 
@@ -44,6 +42,10 @@ depsResolver.resolveDeps = async (manifest, repoLocalDirs) => {
   return [];
 };
 
+// Requiring build loads src/build-service.js, which captures the collaborators
+// above by destructuring — the stubs must already be installed.
+const buildCommand    = require('../src/commands/build');
+const watcher         = require('../src/watcher');
 buildCommand.runBuild = async () => ({ ok: true });
 watcher.startWatch = () => {};
 

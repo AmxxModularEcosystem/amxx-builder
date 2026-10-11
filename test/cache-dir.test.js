@@ -13,7 +13,7 @@ const assert = require('node:assert/strict');
 const os   = require('os');
 const path = require('path');
 
-const { getCacheDir } = require('../src/cache-dir');
+const { getCacheDir, CACHE_SUBDIRS, cacheSubdir } = require('../src/cache-dir');
 
 const ORIG_PLATFORM = process.platform;
 const ENV_KEYS = ['AMXX_BUILDER_CACHE', 'LOCALAPPDATA', 'XDG_CACHE_HOME'];
@@ -108,6 +108,48 @@ test('getCacheDir: linux without XDG_CACHE_HOME → homedir/.cache/amxx-builder'
   await withEnv('linux', {}, () => {
     assert.equal(getCacheDir(), path.join(os.homedir(), '.cache', 'amxx-builder'));
   });
+});
+
+// ─── CACHE_SUBDIRS / cacheSubdir ─────────────────────────────────────────────
+
+test('CACHE_SUBDIRS: exact reader-side subdirectory map, frozen', () => {
+  assert.deepEqual(CACHE_SUBDIRS, {
+    compiler: 'amxxpc',
+    repos: 'repos',
+    releaseDeps: 'release-deps',
+  });
+  assert.ok(Object.isFrozen(CACHE_SUBDIRS));
+});
+
+test('cacheSubdir: compiler → <getCacheDir()>/amxxpc', async () => {
+  await withEnv('linux', { AMXX_BUILDER_CACHE: '/custom/cache' }, () => {
+    assert.equal(cacheSubdir('compiler'), path.join('/custom/cache', 'amxxpc'));
+  });
+});
+
+test('cacheSubdir: repos → <getCacheDir()>/repos', async () => {
+  await withEnv('linux', { AMXX_BUILDER_CACHE: '/custom/cache' }, () => {
+    assert.equal(cacheSubdir('repos'), path.join('/custom/cache', 'repos'));
+  });
+});
+
+test('cacheSubdir: releaseDeps → <getCacheDir()>/release-deps', async () => {
+  await withEnv('linux', { AMXX_BUILDER_CACHE: '/custom/cache' }, () => {
+    assert.equal(cacheSubdir('releaseDeps'), path.join('/custom/cache', 'release-deps'));
+  });
+});
+
+test('cacheSubdir: tracks getCacheDir() platform branch (win32)', async () => {
+  await withEnv('win32', { LOCALAPPDATA: 'C:\\Users\\Test\\AppData\\Local' }, () => {
+    assert.equal(
+      cacheSubdir('repos'),
+      path.join('C:\\Users\\Test\\AppData\\Local', 'amxx-builder', 'repos')
+    );
+  });
+});
+
+test('cacheSubdir: unknown key throws', () => {
+  assert.throws(() => cacheSubdir('nope'), /Unknown cache subdir: nope/);
 });
 
 // ─── restore guard ──────────────────────────────────────────────────────────

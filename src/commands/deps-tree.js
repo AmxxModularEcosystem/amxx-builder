@@ -1,7 +1,5 @@
 'use strict';
 
-const path = require('path');
-
 const logger = require('../logger');
 const { parseManifest, resolveGithubToken } = require('../manifest');
 const { resolveRepoRefs } = require('../repo-fetcher');
@@ -9,7 +7,7 @@ const { buildDepTree, assembleRootDeps } = require('../deps-tree');
 const { resolveManifestPath, loadEnv } = require('./shared');
 
 async function runDepsTree(options) {
-  const manifestPath = options.manifest ? path.resolve(options.manifest) : resolveManifestPath(undefined);
+  const manifestPath = resolveManifestPath(options.manifest);
   loadEnv(manifestPath);
 
   const noFetch = options.fetch === false;
