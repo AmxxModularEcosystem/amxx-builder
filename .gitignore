@@ -4,3 +4,6 @@ build/
 /.omo
 .env
 .claude
+
+# Local scratch / review artifacts (not committed)
+/.scratch/
