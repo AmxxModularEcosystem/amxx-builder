@@ -5,5 +5,12 @@ build/
 .env
 .claude
 
+# Agent tooling state (generated, not committed)
+/.opencode/node_modules/
+/.opencode/package.json
+/.opencode/package-lock.json
+/.opencode/bun.lock
+/graphify-out/
+
 # Local scratch / review artifacts (not committed)
 /.scratch/
