@@ -24,7 +24,9 @@ const path = require('path');
 const axios = require('axios');
 // Default for API calls; download sites pass their own longer timeout.
 axios.defaults.timeout = 30000;
-const simpleGit = require('simple-git');
+// simple-git v4 dropped the callable default export; use the named export
+// (also present in v3) so the module works on both major versions.
+const { simpleGit } = require('simple-git');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
 const { getRefKind, isValidRepo } = require('./github-api');
