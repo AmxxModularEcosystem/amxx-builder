@@ -4,10 +4,10 @@ const path = require('path');
 const logger = require('../logger');
 const { buildPlanData } = require('../build-plan');
 const { isLocal } = require('../local-sources');
+const { expandNameVersion } = require('../format');
 
 function printDryRun(manifest) {
   const out = manifest.output;
-  const expand = (tpl) => tpl.replaceAll('{name}', manifest.name).replaceAll('{version}', manifest.version);
 
   logger.info(`=== DRY RUN: ${manifest.name} v${manifest.version} ===`);
 
@@ -63,12 +63,12 @@ function printDryRun(manifest) {
 
   logger.info(`\nOutput:`);
   if (out.pack === false) {
-    logger.dim(`  copy → ${path.resolve(out.dir)}/${expand(out.amxmodx_path)}/`);
+    logger.dim(`  copy → ${path.resolve(out.dir)}/${expandNameVersion(manifest, out.amxmodx_path)}/`);
   } else {
-    logger.dim(`  archive → ${path.resolve(out.dir)}/${expand(out.archive_name)}`);
-    logger.dim(`  amxmodx path in archive: ${expand(out.amxmodx_path)}/`);
+    logger.dim(`  archive → ${path.resolve(out.dir)}/${expandNameVersion(manifest, out.archive_name)}`);
+    logger.dim(`  amxmodx path in archive: ${expandNameVersion(manifest, out.amxmodx_path)}/`);
   }
-  if (out.assets_path) logger.dim(`  assets path: ${expand(out.assets_path)}/`);
+  if (out.assets_path) logger.dim(`  assets path: ${expandNameVersion(manifest, out.assets_path)}/`);
 
   if (manifest.pluginIni) {
     const { enabled, defaultIni, defaultDebug, forceDebug } = manifest.pluginIni;

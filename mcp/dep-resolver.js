@@ -10,12 +10,11 @@
 
 const path   = require('path');
 const fs     = require('fs');
-const dotenv = require('dotenv');
 
 const logger   = require('../src/logger');
 const progress = require('../src/progress');
 const { resolveManifestPath } = require('../src/manifest-path');
-const { loadEnv } = require('../src/env');
+const { loadEnv, loadCwdEnv } = require('../src/env');
 const { McpServer } = require('./mcp-server');
 const { listTools, callTool, warmUp } = require('./registry');
 
@@ -66,7 +65,7 @@ function scheduleWarmup() {
 // Load project .env like the CLI does; keep stdout free for JSON-RPC.
 // No override: real process env (client-provided GITHUB_TOKEN etc.) wins.
 function prepareEnvironment() {
-  dotenv.config({ path: path.join(process.cwd(), '.env'), quiet: true });
+  loadCwdEnv({ quiet: true });
 
   // Also honor a .env next to the auto-detected manifest, so AMXB_RPC_* placed
   // beside amxbuild.yml is picked up even when cwd differs. Never break startup.

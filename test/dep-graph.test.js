@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { DepGraph } = require('../src/dep-graph');
+const { DepGraph, parseIncludes, RE_INCLUDE } = require('../src/dep-graph');
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'depgraph-'));
@@ -123,4 +123,51 @@ test('DepGraph.reattachMissingIncludes: unrelated file is not affected', () => {
   const other = path.join(dir, 'zzz.inc');
   fs.writeFileSync(other, '');
   assert.equal(graph.reattachMissingIncludes(other).size, 0, 'no sma waits for zzz.inc');
+});
+
+// ─── parseIncludes: canonical #include parser (Phase C / C18) ───────────────
+
+test('parseIncludes: <angle> vs "quoted", #tryinclude, inline // comments, trim', () => {
+  const content = [
+    '#include <a>',
+    '#include "b/b.inc"',
+    '\t#tryinclude <c>          // optional',
+    '  #tryinclude "d"// optional',
+    '#include <e>// tight',
+    '#include <  spaced  >',
+    '#include <f>   ',
+    'x #include <not_a_directive>',
+    '// #include <commented_out>',
+  ].join('\n');
+
+  assert.deepEqual(parseIncludes(content), [
+    { name: 'a',      isAngle: true  },
+    { name: 'b/b.inc', isAngle: false },
+    { name: 'c',      isAngle: true  },
+    { name: 'd',      isAngle: false },
+    { name: 'e',      isAngle: true  },
+    { name: 'spaced', isAngle: true  },
+    { name: 'f',      isAngle: true  },
+  ]);
+});
+
+test('parseIncludes: stateless across calls (fresh regex per call), empty content → []', () => {
+  const content = '#include <one>\n#include "two"\n';
+
+  const first = parseIncludes(content);
+  assert.deepEqual(parseIncludes(''), [], 'empty content yields no includes');
+  assert.deepEqual(parseIncludes(content), first, 'second call returns the same directives');
+  assert.deepEqual(first, [
+    { name: 'one', isAngle: true  },
+    { name: 'two', isAngle: false },
+  ]);
+});
+
+test('RE_INCLUDE: canonical source and flags are pinned', () => {
+  assert.ok(RE_INCLUDE instanceof RegExp);
+  assert.equal(
+    RE_INCLUDE.source,
+    '^[ \\t]*#(?:try)?include[ \\t]+([<"])([^>"]+)[>"][ \\t]*(?:\\/\\/.*)?$'
+  );
+  assert.equal(RE_INCLUDE.flags, 'gm');
 });

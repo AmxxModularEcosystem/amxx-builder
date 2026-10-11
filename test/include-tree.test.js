@@ -21,7 +21,8 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
-const { buildIncludeTree } = require('../src/include-tree');
+const { buildIncludeTree, IncludeGraph } = require('../src/include-tree');
+const { parseIncludes } = require('../src/dep-graph');
 const repoFetcher = require('../src/repo-fetcher');
 
 const PLATFORM = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : 'linux';
@@ -89,4 +90,36 @@ test('buildIncludeTree: each manifest repo is fetched at most once (DEPS_LIST re
   assert.equal(calls[0].repo, 'Org/One');
   assert.equal(calls[0].noFetch, true);
   assert.ok(result.text.includes('foo.sma'), 'tree renders the repo scripting root');
+});
+
+test('IncludeGraph.parseIncludesFromContent matches dep-graph.parseIncludes (C18 single source)', () => {
+  const sample = [
+    '#include <amxmodx>',
+    '#include "local.inc"',
+    '#tryinclude <optional>',
+    '  #include   "spaced.inc"  // trailing comment',
+    '#include <noext>',
+    '// #include <commented>',
+    '#include <>',
+  ].join('\n');
+
+  assert.deepEqual(IncludeGraph.parseIncludesFromContent(sample), parseIncludes(sample));
+  assert.deepEqual(IncludeGraph.parseIncludesFromContent(sample), [
+    { name: 'amxmodx', isAngle: true },
+    { name: 'local.inc', isAngle: false },
+    { name: 'optional', isAngle: true },
+    { name: 'spaced.inc', isAngle: false },
+    { name: 'noext', isAngle: true },
+  ]);
+});
+
+test('IncludeGraph.readIncludes delegates to dep-graph.parseIncludes (file + missing file)', (t) => {
+  const dir = makeTmpDir('amxb-it-inc-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const content = '#include <amxmodx>\n#include "local.inc"\n';
+  const file = writeFile(dir, 'sample.inc', content);
+
+  assert.deepEqual(IncludeGraph.readIncludes(file), parseIncludes(content));
+  assert.deepEqual(IncludeGraph.readIncludes(path.join(dir, 'missing.inc')), []);
 });

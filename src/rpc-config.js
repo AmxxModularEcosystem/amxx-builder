@@ -24,6 +24,8 @@ const RPC_DEFAULTS = Object.freeze({
   timeoutMs: 15000,
 });
 
+const { parseEnvBool } = require('./env');
+
 /**
  * Parse a boolean-ish env value (trimmed, case-insensitive):
  *
@@ -35,11 +37,7 @@ const RPC_DEFAULTS = Object.freeze({
  * @returns {boolean|null}
  */
 function parseRpcBool(value) {
-  if (value == null) return null;
-  const normalized = String(value).trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return null;
+  return parseEnvBool(value);
 }
 
 function parseRpcPort(raw) {

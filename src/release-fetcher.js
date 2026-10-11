@@ -1,15 +1,11 @@
 const fs   = require('fs');
 const path = require('path');
-const axios = require('axios');
+const { axios, githubHeaders } = require('./http');
 const { withRetry } = require('./retry');
-// Default for API calls; download sites pass their own longer timeout.
-axios.defaults.timeout = 30000;
-const AdmZip = require('adm-zip');
-const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
-const { safeExtractTar, makeSiblingTmpDir, publishDir } = require('./fs-utils');
-const { downloadToFile } = require('./download');
+const { extractArchive, makeSiblingTmpDir, publishDir, writeFileSyncAtomic } = require('./fs-utils');
+const { downloadToFile, downloadProgressLabel } = require('./download');
 const { resolveRefIfLatest } = require('./repo-fetcher');
 
 /**
@@ -44,9 +40,8 @@ async function ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, l
   // assets must not share a cache dir (first-extracted content would win).
   const assetKey = assetSelector == null ? '' : '--' + String(assetSelector).replace(/[^a-zA-Z0-9._-]/g, '_');
   // Lazy require: deps-resolver imports us, so a top-level import would cycle.
-  const { normalize } = require('./deps-resolver');
-  const cacheKey = normalize(repo).replace('/', '__') + '__' +
-    resolvedRef.replace(/[^a-zA-Z0-9._-]/g, '_') + assetKey;
+  const { repoRefKey } = require('./deps-resolver');
+  const cacheKey = repoRefKey(repo, resolvedRef) + assetKey;
   const cacheDir     = path.join(getCacheDir(), 'release-deps', cacheKey);
   const sentinelFile = path.join(cacheDir, '.extracted');
 
@@ -64,7 +59,7 @@ async function ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, l
 
   logger.step(`${label}: ${repo} @ ${resolvedRef}`);
 
-  const headers = buildHeaders(token);
+  const headers = githubHeaders(token);
   const release  = await fetchRelease(repo, resolvedRef, headers);
   const asset    = selectAsset(release.assets, assetSelector, repo);
 
@@ -80,9 +75,7 @@ async function ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, l
     extractArchive(archivePath, tmpDir);
     fs.rmSync(archivePath, { force: true });
     // Sentinel written into tmpDir first: only complete dirs become the cache.
-    const sentinelTmp = path.join(tmpDir, '.extracted.tmp');
-    fs.writeFileSync(sentinelTmp, resolvedRef, 'utf8');
-    fs.renameSync(sentinelTmp, path.join(tmpDir, '.extracted'));
+    writeFileSyncAtomic(path.join(tmpDir, '.extracted'), resolvedRef);
     publishDir(tmpDir, cacheDir, () => fs.existsSync(sentinelFile));
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
@@ -163,40 +156,14 @@ function resolveIncludePath(cacheDir, includePath, repo) {
   return cacheDir;
 }
 
-function buildHeaders(token) {
-  const h = { Accept: 'application/vnd.github+json' };
-  if (token) h['Authorization'] = `Bearer ${token}`;
-  return h;
-}
-
 async function downloadAsset(url, dest, headers) {
   const filename = path.basename(url);
   return downloadToFile(url, dest, {
     // Default to octet-stream but let callers override (API tarball fallback
     // needs application/vnd.github+json).
     headers: { Accept: 'application/octet-stream', ...headers },
-    progressLabel: `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`,
+    progressLabel: downloadProgressLabel(filename),
   });
-}
-
-function extractArchive(archivePath, destDir) {
-  if (archivePath.endsWith('.zip') || hasZipMagic(archivePath)) {
-    new AdmZip(archivePath).extractAllTo(destDir, true);
-  } else {
-    safeExtractTar(archivePath, destDir);
-  }
-}
-
-// ZIP archives start with "PK" — sniff the bytes so an asset named without
-// the .zip extension (redirects, CDNs) is still extracted correctly.
-function hasZipMagic(filePath) {
-  try {
-    const fd  = fs.openSync(filePath, 'r');
-    const buf = Buffer.alloc(2);
-    fs.readSync(fd, buf, 0, 2, 0);
-    fs.closeSync(fd);
-    return buf[0] === 0x50 && buf[1] === 0x4b;
-  } catch { return false; }
 }
 
 module.exports = { fetchReleaseDep, getReleaseCacheDir, downloadAsset };

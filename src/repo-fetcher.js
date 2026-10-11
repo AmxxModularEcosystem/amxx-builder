@@ -21,15 +21,14 @@
 
 const fs   = require('fs');
 const path = require('path');
-const axios = require('axios');
+const { axios, githubHeaders } = require('./http');
 const { withRetry } = require('./retry');
-// Default for API calls; download sites pass their own longer timeout.
-axios.defaults.timeout = 30000;
 // simple-git v4 dropped the callable default export; use the named export
 // (also present in v3) so the module works on both major versions.
 const { simpleGit } = require('simple-git');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
+const { writeFileSyncAtomic, safeExtractTar } = require('./fs-utils');
 const { getRefKind, isValidRepo } = require('./github-api');
 // Top-level is safe: local-sources lazy-requires this module (no cycle).
 const { isLocal } = require('./local-sources');
@@ -39,8 +38,8 @@ function getRepoCacheDir(repo, ref) {
   // (NTFS/APFS) and the repo/ref dedup may not be — normalize to avoid
   // duplicate clones on Linux and dir collisions on Windows/macOS.
   // Lazy require: deps-resolver imports us, so a top-level import would cycle.
-  const { normalize } = require('./deps-resolver');
-  const key = normalize(repo).replace('/', '__') + '__' + String(ref).replace(/[^a-zA-Z0-9._-]/g, '_');
+  const { repoRefKey } = require('./deps-resolver');
+  const key = repoRefKey(repo, ref);
   return path.join(getCacheDir(), 'repos', key);
 }
 
@@ -105,9 +104,7 @@ function readLatestTagIndex() {
 function writeLatestTagIndex(index) {
   try {
     fs.mkdirSync(path.dirname(latestTagIndexPath()), { recursive: true });
-    const tmp = latestTagIndexPath() + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(index));
-    fs.renameSync(tmp, latestTagIndexPath());
+    writeFileSyncAtomic(latestTagIndexPath(), JSON.stringify(index));
   } catch (_) { /* best-effort */ }
 }
 
@@ -122,9 +119,7 @@ function readRefHeadsIndex() {
 function writeRefHeadsIndex(index) {
   try {
     fs.mkdirSync(path.dirname(refHeadsIndexPath()), { recursive: true });
-    const tmp = refHeadsIndexPath() + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(index));
-    fs.renameSync(tmp, refHeadsIndexPath());
+    writeFileSyncAtomic(refHeadsIndexPath(), JSON.stringify(index));
   } catch (_) { /* best-effort */ }
 }
 
@@ -158,7 +153,7 @@ async function resolveRef(repo, ref, token) {
   }
 
   logger.dim(`  ${repo}: resolving latest release tag...`);
-  const headers = token ? { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } : {};
+  const headers = githubHeaders(token);
   try {
     const { data } = await withRetry(
       () => axios.get(`https://api.github.com/repos/${repo}/releases/latest`, { headers }),
@@ -228,12 +223,6 @@ function refHeadKey(repo, ref) {
   return `${normalize(repo)}@${ref || 'HEAD'}`;
 }
 
-function apiHeaders(token) {
-  const headers = { Accept: 'application/vnd.github+json' };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
-}
-
 // Resolve a branch/tag name to the commit SHA its head points at right now.
 // Slashes in the ref (feature/foo) stay path separators; the rest is encoded.
 async function fetchCommitSha(repo, refName, headers) {
@@ -288,7 +277,7 @@ async function detectRefKind(repo, ref, key, cached, token) {
 }
 
 async function resolveRefHeadFromNetwork(repo, ref, key, cached, token) {
-  const headers = apiHeaders(token);
+  const headers = githubHeaders(token);
   const label   = ref || 'HEAD';
   try {
     // SECURITY GUARD — must stay before the first network call: repo and ref
@@ -375,8 +364,8 @@ async function resolveRefHead(repo, ref, token, noFetch, refTtl) {
 // repo whose dir is keyed on a full SHA (any earlier branch state). Mirrors how
 // --no-fetch tolerates a stale cache — the ref simply cannot be re-resolved.
 function findCachedRepoHeadDir(repo, ssh) {
-  const { normalize } = require('./deps-resolver');
-  const prefix = normalize(repo).replace('/', '__') + '__';
+  const { repoSlug } = require('./deps-resolver');
+  const prefix = repoSlug(repo) + '__';
   const reposDir = path.join(getCacheDir(), 'repos');
   if (!fs.existsSync(reposDir)) return null;
 
@@ -548,7 +537,6 @@ async function cloneViaGit(repo, resolvedRef, tmpDir) {
 async function fetchTarball(repo, downloadRef, token, tmpDir) {
   // Lazy require: release-fetcher imports repo-fetcher at top level.
   const { downloadAsset } = require('./release-fetcher');
-  const { safeExtractTar } = require('./fs-utils');
 
   // downloadAsset writes <archivePath>.part — the parent dir must exist.
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -569,9 +557,7 @@ async function fetchTarball(repo, downloadRef, token, tmpDir) {
   fs.rmSync(archivePath, { force: true });
   // Sentinel written inside tmpDir BEFORE the rename: only complete dirs
   // ever become the cache.
-  const sentinelTmp = path.join(tmpDir, '.extracted.tmp');
-  fs.writeFileSync(sentinelTmp, downloadRef, 'utf8');
-  fs.renameSync(sentinelTmp, path.join(tmpDir, '.extracted'));
+  writeFileSyncAtomic(path.join(tmpDir, '.extracted'), downloadRef);
 }
 
 /**

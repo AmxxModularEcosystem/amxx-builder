@@ -17,12 +17,24 @@ const path = require('path');
 
 const { createArchive, copyOutput } = require('../src/archiver');
 const { setEnabled } = require('../src/progress');
+const { on, off, EVENTS } = require('../src/events');
 
 // Progress bars write \r/control chars to stdout — keep test output clean.
 setEnabled(false);
 
 function makeTmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+// Capture `success` log lines emitted through the shared core event bus (the
+// Archive: size line is only observable there — no stdout parsing). Registering
+// on the module-level bus is safe because node:test runs a file's tests serially.
+function captureSuccess(t) {
+  const messages = [];
+  const handler = (e) => { if (e.level === 'success') messages.push(e.message); };
+  on(EVENTS.LOG, handler);
+  t.after(() => off(EVENTS.LOG, handler));
+  return messages;
 }
 
 // Recursively write a flat map of relpath → content under root.
@@ -318,4 +330,50 @@ test('createArchive: empty buildDir still produces a (valid, empty) zip', async 
 
   assert.ok(fs.existsSync(path.join(outDir, 'test.zip')));
   assert.ok(fs.statSync(path.join(outDir, 'test.zip')).size > 0);
+});
+
+// ─── O14: archive size routed through formatBytes(_, { precision: 0 }) ────────
+
+test('createArchive: >= 1 MiB reports MB (O14), not always KB', async (t) => {
+  const tmp = makeTmpDir('amxb-zip-size-');
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  const buildDir = path.join(tmp, 'build');
+  const pluginDir = path.join(buildDir, 'amxmodx', 'plugins');
+  fs.mkdirSync(pluginDir, { recursive: true });
+  // Random bytes are incompressible, so the zip stays >= 1 MiB even at zlib level 9.
+  fs.writeFileSync(path.join(pluginDir, 'big.bin'), require('crypto').randomBytes(2 * 1024 * 1024));
+
+  const manifestPath = path.join(tmp, 'amxbuild.yml');
+  fs.writeFileSync(manifestPath, '');
+  const outDir = path.join(tmp, 'out');
+  const manifest = makeManifest({ manifestPath, outDir });
+
+  const messages = captureSuccess(t);
+  await createArchive(manifest, buildDir);
+
+  const archiveMsg = messages.find((m) => m.startsWith('Archive:'));
+  assert.ok(archiveMsg, 'Archive: success line must be emitted');
+  assert.match(archiveMsg, /\(\d+ MB\)$/, `expected MB tier, got: ${archiveMsg}`);
+});
+
+test('createArchive: < 1 KiB reports bytes (O14), not 0 KB', async (t) => {
+  const tmp = makeTmpDir('amxb-zip-size-');
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  const buildDir = path.join(tmp, 'build');
+  fs.mkdirSync(buildDir, { recursive: true });
+
+  const manifestPath = path.join(tmp, 'amxbuild.yml');
+  fs.writeFileSync(manifestPath, '');
+  const outDir = path.join(tmp, 'out');
+  const manifest = makeManifest({ manifestPath, outDir });
+
+  const messages = captureSuccess(t);
+  await createArchive(manifest, buildDir);
+
+  const archiveMsg = messages.find((m) => m.startsWith('Archive:'));
+  assert.ok(archiveMsg, 'Archive: success line must be emitted');
+  // An empty zip is ~22 bytes (< 1 KiB) → "N B" (previously "0 KB").
+  assert.match(archiveMsg, /\(\d+ B\)$/, `expected B tier, got: ${archiveMsg}`);
 });

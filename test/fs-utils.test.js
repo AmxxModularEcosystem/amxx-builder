@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * Unit tests for src/fs-utils.js — copyDirContents, countFiles, safeExtractTar.
+ * Unit tests for src/fs-utils.js — copyDirContents, countFiles, safeExtractTar,
+ * writeFileSyncAtomic, hasZipMagic, extractArchive, resolveConflict.
  *
  * Offline + deterministic: real temp dirs, real tar binary when available
  * (skipped otherwise), no network.
@@ -14,8 +15,13 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const AdmZip = require('adm-zip');
 
-const { copyDirContents, countFiles, safeExtractTar } = require('../src/fs-utils');
+const logger = require('../src/logger');
+const {
+  copyDirContents, countFiles, safeExtractTar,
+  writeFileSyncAtomic, hasZipMagic, extractArchive, resolveConflict,
+} = require('../src/fs-utils');
 
 function makeTmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -226,4 +232,191 @@ test('safeExtractTar: corrupt archive throws (non-zero tar exit)', (t) => {
     () => safeExtractTar(bad, dest),
     /tar extraction failed/
   );
+});
+
+// ─── writeFileSyncAtomic ─────────────────────────────────────────────────────
+
+test('writeFileSyncAtomic: writes content atomically and leaves no .tmp behind', (t) => {
+  const dir = makeTmpDir('amxb-atomic-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const file = path.join(dir, 'sentinel');
+  writeFileSyncAtomic(file, '1.10.5428');
+
+  assert.equal(fs.readFileSync(file, 'utf8'), '1.10.5428');
+  assert.equal(fs.existsSync(file + '.tmp'), false);
+  assert.deepEqual(fs.readdirSync(dir), ['sentinel']);
+});
+
+test('writeFileSyncAtomic: overwrites an existing file in place', (t) => {
+  const dir = makeTmpDir('amxb-atomic-over-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const file = path.join(dir, 'sentinel');
+  fs.writeFileSync(file, 'old');
+  writeFileSyncAtomic(file, 'new');
+
+  assert.equal(fs.readFileSync(file, 'utf8'), 'new');
+  assert.equal(fs.existsSync(file + '.tmp'), false);
+});
+
+// ─── hasZipMagic ─────────────────────────────────────────────────────────────
+
+test('hasZipMagic: true for a PK-prefixed file', (t) => {
+  const dir = makeTmpDir('amxb-magic-yes-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const file = path.join(dir, 'blob.bin');
+  fs.writeFileSync(file, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]));
+
+  assert.equal(hasZipMagic(file), true);
+});
+
+test('hasZipMagic: false for a non-zip file and for a missing file', (t) => {
+  const dir = makeTmpDir('amxb-magic-no-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const file = path.join(dir, 'plain.txt');
+  fs.writeFileSync(file, 'not a zip');
+
+  assert.equal(hasZipMagic(file), false);
+  assert.equal(hasZipMagic(path.join(dir, 'nope.bin')), false);
+});
+
+// ─── extractArchive ──────────────────────────────────────────────────────────
+
+function makeZip(dir, name, files) {
+  const zip = new AdmZip();
+  for (const [rel, content] of Object.entries(files)) {
+    zip.addFile(rel, Buffer.from(content));
+  }
+  const p = path.join(dir, name);
+  zip.writeZip(p);
+  return p;
+}
+
+test('extractArchive: extracts a .zip via AdmZip and does not delete the archive', (t) => {
+  const dir  = makeTmpDir('amxb-extract-zip-');
+  const dest = path.join(dir, 'out');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const zip = makeZip(dir, 'pack.zip', { 'model.mdl': 'zip payload' });
+
+  extractArchive(zip, dest);
+
+  assert.equal(fs.readFileSync(path.join(dest, 'model.mdl'), 'utf8'), 'zip payload');
+  assert.equal(fs.existsSync(zip), true);
+});
+
+test('extractArchive: a .ZIP-named zip is extracted (case-insensitive .zip test)', (t) => {
+  const dir  = makeTmpDir('amxb-extract-upper-');
+  const dest = path.join(dir, 'out');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const zip = makeZip(dir, 'pack.ZIP', { 'upper.mdl': 'upper payload' });
+
+  extractArchive(zip, dest);
+
+  assert.equal(fs.readFileSync(path.join(dest, 'upper.mdl'), 'utf8'), 'upper payload');
+});
+
+test('extractArchive: a .ZIP-named non-zip is routed to the zip branch, not the tar branch', (t) => {
+  if (!TAR_OK) return t.skip('tar binary not available');
+  const dir  = makeTmpDir('amxb-extract-upperbad-');
+  const dest = path.join(dir, 'out');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  writeFile(dir, 'payload.txt', 'tar under a .ZIP name');
+  const res = makeTar(dir, 'pack.ZIP', ['payload.txt']);
+  assert.equal(res.status, 0, 'test setup: tar creation failed');
+
+  // The case-insensitive extension matches, so AdmZip is attempted and fails:
+  // the tar branch is NOT taken (payload.txt would exist otherwise). This locks
+  // the superset — a revert to case-sensitive .endsWith('.zip') would extract.
+  assert.throws(() => extractArchive(path.join(dir, 'pack.ZIP'), dest));
+  assert.equal(fs.existsSync(path.join(dest, 'payload.txt')), false);
+});
+
+test('extractArchive: extracts a .tar.gz via safeExtractTar and keeps the archive', (t) => {
+  if (!TAR_OK) t.skip('tar binary not available');
+  const dir  = makeTmpDir('amxb-extract-tar-');
+  const dest = path.join(dir, 'out');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  writeFile(dir, 'payload.txt', 'tar payload');
+  const res = makeTar(dir, 'pack.tar.gz', ['payload.txt']);
+  assert.equal(res.status, 0, 'test setup: tar creation failed');
+
+  fs.mkdirSync(dest, { recursive: true });
+  extractArchive(path.join(dir, 'pack.tar.gz'), dest);
+
+  assert.equal(fs.readFileSync(path.join(dest, 'payload.txt'), 'utf8'), 'tar payload');
+  assert.equal(fs.existsSync(path.join(dir, 'pack.tar.gz')), true);
+});
+
+// ─── resolveConflict ─────────────────────────────────────────────────────────
+
+function captureWarn(t) {
+  const original = logger.warn;
+  const messages = [];
+  logger.warn = (msg) => { messages.push(msg); };
+  t.after(() => { logger.warn = original; });
+  return messages;
+}
+
+test('resolveConflict: no prior origin returns write without logging', (t) => {
+  const messages = captureWarn(t);
+
+  const result = resolveConflict(new Map(), 'a.txt', 'repoB', 'error', { errorPrefix: 'File conflict', warnPrefix: 'Conflict' });
+
+  assert.equal(result, 'write');
+  assert.deepEqual(messages, []);
+});
+
+test('resolveConflict: error throws the exact collector message', () => {
+  const origins = new Map([['a.txt', 'repoA']]);
+
+  assert.throws(
+    () => resolveConflict(origins, 'a.txt', 'repoB', 'error', { errorPrefix: 'File conflict', warnPrefix: 'Conflict' }),
+    (err) => err.message === 'File conflict: "a.txt" — provided by both "repoA" and "repoB"'
+  );
+});
+
+test('resolveConflict: error throws the exact asset message', () => {
+  const origins = new Map([['models/x.mdl', 'srcA']]);
+
+  assert.throws(
+    () => resolveConflict(origins, 'models/x.mdl', 'srcB', 'error', { errorPrefix: 'Asset conflict', warnPrefix: 'Asset conflict' }),
+    (err) => err.message === 'Asset conflict: "models/x.mdl" — provided by both "srcA" and "srcB"'
+  );
+});
+
+test('resolveConflict: first_wins warns with the kept message and skips', (t) => {
+  const messages = captureWarn(t);
+  const origins  = new Map([['a.txt', 'repoA']]);
+
+  const result = resolveConflict(origins, 'a.txt', 'repoB', 'first_wins', { errorPrefix: 'File conflict', warnPrefix: 'Conflict' });
+
+  assert.equal(result, 'skip');
+  assert.deepEqual(messages, ['Conflict (kept "repoA"): a.txt']);
+});
+
+test('resolveConflict: last_wins warns with the overwrite message and writes', (t) => {
+  const messages = captureWarn(t);
+  const origins  = new Map([['a.txt', 'repoA']]);
+
+  const result = resolveConflict(origins, 'a.txt', 'repoB', 'last_wins', { errorPrefix: 'File conflict', warnPrefix: 'Conflict' });
+
+  assert.equal(result, 'write');
+  assert.deepEqual(messages, ['Conflict (overwriting "repoA"): a.txt']);
+});
+
+test('resolveConflict: asset first_wins uses the asset wording and skips', (t) => {
+  const messages = captureWarn(t);
+  const origins  = new Map([['models/x.mdl', 'srcA']]);
+
+  const result = resolveConflict(origins, 'models/x.mdl', 'srcB', 'first_wins', { errorPrefix: 'Asset conflict', warnPrefix: 'Asset conflict' });
+
+  assert.equal(result, 'skip');
+  assert.deepEqual(messages, ['Asset conflict (kept "srcA"): models/x.mdl']);
 });

@@ -7,6 +7,7 @@ const { isLocal } = require('./local-sources');
 const { fetchRepo, resolveRefIfLatest, applicableRefTtl } = require('./repo-fetcher');
 const { fetchReleaseDep } = require('./release-fetcher');
 const { fetchFungunDep } = require('./fungun-fetcher');
+const { normalizeRepoName } = require('./strings');
 
 /**
  * Resolves all deps, clones them, copies .inc files to build/_includes/,
@@ -56,7 +57,7 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
 
   const includeDirs = [];
 
-  for (const [k, dep] of merged) {
+  for (const dep of merged.values()) {
     let srcDir;
     if (isLocal(dep)) {
       srcDir = resolveIncludePath(dep._localDir, dep.include_path, dep.repo);
@@ -75,7 +76,7 @@ async function resolveDeps(manifest, repoLocalDirs, noFetch, buildDir) {
       srcDir = resolveIncludePath(depDir, dep.include_path, dep.repo);
     }
 
-    const destDir = path.join(includesRoot, k.replace('/', '__'));
+    const destDir = path.join(includesRoot, repoSlug(dep.repo));
     fs.mkdirSync(destDir, { recursive: true });
 
     const files = await glob('**/*.inc', { cwd: srcDir, dot: false });
@@ -275,9 +276,20 @@ async function collectDepIncludeDirs(manifest, { noFetch = false, ssh = false } 
   return { dirs, errors };
 }
 
-// Single source of truth for repo-name normalization (used for cache keys
-// and dedup by core modules that previously inlined repo.toLowerCase()).
-function normalize(repo) { return repo.toLowerCase(); }
+// Single source of truth for repo-name normalization, re-exported from
+// ./strings (a dependency-free leaf) so that dependency-light modules
+// (local-sources) and every existing `require('./deps-resolver').normalize`
+// caller stay unchanged.
+const normalize = normalizeRepoName;
+
+/** `owner/repo` → filesystem-safe `owner__repo` cache-dir slug. */
+function repoSlug(repo) { return normalize(repo).replace('/', '__'); }
+
+/** Sanitize a ref / asset-selector for a cache-dir path component. */
+function sanitizeRefPart(ref) { return String(ref).replace(/[^a-zA-Z0-9._-]/g, '_'); }
+
+/** `${repoSlug(repo)}__${sanitizeRefPart(ref)}` — shared repo@ref cache key. */
+function repoRefKey(repo, ref) { return `${repoSlug(repo)}__${sanitizeRefPart(ref)}`; }
 
 // Human-readable dep label (fungun deps: no repo@ref — addressed by shop page
 // id; local deps: synthetic local/<name> id, versioned by the working tree).
@@ -315,4 +327,5 @@ function countIncFiles(dir) {
 module.exports = {
   resolveDeps, readDepsListFile, resolveIncludePath, normalize, normalizeRepo, repoKey, fetchDepRoot, depLabel,
   DEP_INCLUDE_CANDIDATES, findDepIncludeDir, fetchDepIncludeDir, collectDepIncludeDirs,
+  repoSlug, sanitizeRefPart, repoRefKey,
 };

@@ -6,16 +6,21 @@ const path = require('path');
 // Matches: #include <file>  #include "file"  #tryinclude variants
 const RE_INCLUDE = /^[ \t]*#(?:try)?include[ \t]+([<"])([^>"]+)[>"][ \t]*(?:\/\/.*)?$/gm;
 
-function extractIncludes(filePath) {
-  let content;
-  try { content = fs.readFileSync(filePath, 'utf8'); } catch { return []; }
+// Fresh regex per call: reusing the /g RE_INCLUDE would leak lastIndex between calls.
+function parseIncludes(content) {
+  const re = new RegExp(RE_INCLUDE.source, 'gm');
   const result = [];
   let m;
-  RE_INCLUDE.lastIndex = 0;
-  while ((m = RE_INCLUDE.exec(content)) !== null) {
+  while ((m = re.exec(content)) !== null) {
     result.push({ name: m[2].trim(), isAngle: m[1] === '<' });
   }
   return result;
+}
+
+function extractIncludes(filePath) {
+  let content;
+  try { content = fs.readFileSync(filePath, 'utf8'); } catch { return []; }
+  return parseIncludes(content);
 }
 
 class DepGraph {
@@ -139,4 +144,4 @@ class DepGraph {
   }
 }
 
-module.exports = { DepGraph };
+module.exports = { DepGraph, parseIncludes, RE_INCLUDE };

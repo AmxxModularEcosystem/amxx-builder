@@ -1,14 +1,11 @@
 const fs   = require('fs');
 const path = require('path');
-const axios = require('axios');
-// Default for API calls; download sites pass their own longer timeout.
-axios.defaults.timeout = 30000;
+const { axios } = require('./http');
 const AdmZip = require('adm-zip');
-const chalk = require('chalk');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
-const { copyDirContents, safeExtractTar, makeSiblingTmpDir } = require('./fs-utils');
-const { downloadToFile } = require('./download');
+const { copyDirContents, safeExtractTar, makeSiblingTmpDir, writeFileSyncAtomic } = require('./fs-utils');
+const { downloadToFile, downloadProgressLabel } = require('./download');
 const { resolveManifestPath } = require('./manifest-path');
 const { loadEnv } = require('./env');
 const { parseManifest } = require('./manifest');
@@ -118,12 +115,6 @@ async function installCompilerCache(cacheDir, { isFinalValid, sentinelName, sent
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     throw err;
   }
-}
-
-function writeFileSyncAtomic(file, content) {
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, content);
-  fs.renameSync(tmp, file);
 }
 
 /**
@@ -538,7 +529,7 @@ function extractWithPrefix(archivePath, destDir, opts) {
 async function downloadFile(url, dest) {
   const filename = path.basename(url);
   return downloadToFile(url, dest, {
-    progressLabel: `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`,
+    progressLabel: downloadProgressLabel(filename),
   });
 }
 

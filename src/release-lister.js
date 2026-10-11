@@ -1,9 +1,7 @@
 'use strict';
 
-const axios = require('axios');
+const { axios, githubHeaders } = require('./http');
 const { withRetry } = require('./retry');
-// Default for API calls; download sites pass their own longer timeout.
-axios.defaults.timeout = 30000;
 
 /**
  * List releases for a GitHub repository.
@@ -17,7 +15,7 @@ axios.defaults.timeout = 30000;
  */
 async function listReleases(repo, options = {}) {
   const { token, limit = 10, includeAssets = false } = options;
-  const headers = buildHeaders(token);
+  const headers = githubHeaders(token);
   const perPage = Math.min(100, Math.max(1, limit)); // GitHub caps per_page at 100
 
   const { data } = await withRetry(
@@ -57,7 +55,7 @@ async function listReleases(repo, options = {}) {
  */
 async function listTags(repo, options = {}) {
   const { token, limit = 10 } = options;
-  const headers = buildHeaders(token);
+  const headers = githubHeaders(token);
   const perPage = Math.min(100, Math.max(1, limit)); // GitHub caps per_page at 100
 
   const { data } = await withRetry(
@@ -69,12 +67,6 @@ async function listTags(repo, options = {}) {
     name: t.name,
     commitSha: t.commit.sha,
   }));
-}
-
-function buildHeaders(token) {
-  const h = { Accept: 'application/vnd.github+json' };
-  if (token) h['Authorization'] = `Bearer ${token}`;
-  return h;
 }
 
 module.exports = { listReleases, listTags };

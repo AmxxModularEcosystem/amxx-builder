@@ -25,21 +25,11 @@ const fs   = require('fs');
 const path = require('path');
 
 const logger = require('./logger');
+const { normalizeRepoName } = require('./strings');
 
 const ENV_VAR        = 'AMXB_LOCAL_SOURCES';
 const STRICT_VAR     = 'AMXB_LOCAL_STRICT';
 const LOCAL_ID_PREFIX = 'local/';
-
-/**
- * Normalize a logical id for map lookups. Local copy of deps-resolver's
- * `normalize` — a top-level require of that module would create a cycle.
- *
- * @param {*} id
- * @returns {string}
- */
-function normalizeId(id) {
-  return String(id).toLowerCase();
-}
 
 /**
  * True when an entry has been resolved to a local directory.
@@ -123,7 +113,7 @@ function parseLocalSourcesEnv(env = process.env) {
           errors.push(`${ENV_VAR}: JSON value must be an object of "id": "path" pairs`);
         } else {
           for (const [key, val] of Object.entries(parsed)) {
-            const id = normalizeId(key).trim();
+            const id = normalizeRepoName(key).trim();
             if (id === '') {
               errors.push(`${ENV_VAR}: entry has an empty id`);
               continue;
@@ -145,7 +135,7 @@ function parseLocalSourcesEnv(env = process.env) {
           errors.push(`${ENV_VAR}: invalid entry "${entry}" (expected id=path)`);
           continue;
         }
-        const id = normalizeId(entry.slice(0, eqIdx)).trim();
+        const id = normalizeRepoName(entry.slice(0, eqIdx)).trim();
         const p  = entry.slice(eqIdx + 1).trim();
         if (id === '' || p === '') {
           errors.push(`${ENV_VAR}: invalid entry "${entry}" (id and path must be non-empty)`);
@@ -236,7 +226,7 @@ function assertUniqueLocalIds(entries) {
   const byId = new Map();
   for (const entry of entries) {
     if (!entry || !entry.repo || !isLocal(entry)) continue;
-    const id = normalizeId(entry.repo);
+    const id = normalizeRepoName(entry.repo);
     if (!byId.has(id)) byId.set(id, []);
     byId.get(id).push(entry);
   }
@@ -281,7 +271,7 @@ function applyLocalOverrides(manifest, env = process.env) {
   // from every repo/dep entry, including deps_override.
   const knownIds = new Set();
   for (const entry of entries) {
-    if (entry && entry.repo) knownIds.add(normalizeId(entry.repo));
+    if (entry && entry.repo) knownIds.add(normalizeRepoName(entry.repo));
   }
   for (const id of map.keys()) {
     if (knownIds.has(id)) continue;
@@ -296,7 +286,7 @@ function applyLocalOverrides(manifest, env = process.env) {
   // Resolve each entry: env redirect (highest precedence) over declared path.
   for (const entry of entries) {
     if (!entry || !entry.repo) continue;
-    const id = normalizeId(entry.repo);
+    const id = normalizeRepoName(entry.repo);
 
     const envPath = map.get(id);
     if (envPath != null) {
@@ -351,7 +341,6 @@ module.exports = {
   ENV_VAR,
   STRICT_VAR,
   LOCAL_ID_PREFIX,
-  normalizeId,
   isLocal,
   localDirOf,
   synthesizeLocalId,

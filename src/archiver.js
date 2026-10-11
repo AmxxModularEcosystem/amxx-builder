@@ -4,6 +4,7 @@ const archiver = require('archiver');
 const logger  = require('./logger');
 const { createBar } = require('./progress');
 const { countFiles, copyDirContents } = require('./fs-utils');
+const { expandNameVersion, formatBytes } = require('./format');
 
 /**
  * Creates the output .zip.
@@ -17,13 +18,9 @@ const { countFiles, copyDirContents } = require('./fs-utils');
 async function createArchive(manifest, buildDir) {
   const out = manifest.output;
 
-  const expand = (tpl) => tpl
-    .replaceAll('{name}',    manifest.name)
-    .replaceAll('{version}', manifest.version);
-
-  const archiveName  = sanitizeArchiveName(expand(out.archive_name));
-  const amxmodxDest  = expand(out.amxmodx_path).replace(/\/?$/, '/');
-  const assetsDest   = expand(out.assets_path);  // '' = root
+  const archiveName  = sanitizeArchiveName(expandNameVersion(manifest, out.archive_name));
+  const amxmodxDest  = expandNameVersion(manifest, out.amxmodx_path).replace(/\/?$/, '/');
+  const assetsDest   = expandNameVersion(manifest, out.assets_path);  // '' = root
 
   fs.mkdirSync(path.resolve(out.dir), { recursive: true });
   const archivePath = path.join(path.resolve(out.dir), archiveName);
@@ -77,8 +74,8 @@ async function createArchive(manifest, buildDir) {
     archive.finalize();
   });
 
-  const sizeKb = Math.round(fs.statSync(archivePath).size / 1024);
-  logger.success(`Archive: ${path.join(out.dir, archiveName)} (${sizeKb} KB)`);
+  const archiveSize = formatBytes(fs.statSync(archivePath).size, { precision: 0 });
+  logger.success(`Archive: ${path.join(out.dir, archiveName)} (${archiveSize})`);
   printFileListing(fileList);
 }
 
@@ -109,14 +106,11 @@ function printFileListing(files) {  const grouped = new Map();
  */
 function copyOutput(manifest, buildDir) {
   const out    = manifest.output;
-  const expand = (tpl) => tpl
-    .replaceAll('{name}',    manifest.name)
-    .replaceAll('{version}', manifest.version);
 
   const outDir     = path.resolve(out.dir);
-  const amxmodxDst = path.join(outDir, expand(out.amxmodx_path));
+  const amxmodxDst = path.join(outDir, expandNameVersion(manifest, out.amxmodx_path));
   const assetsDst  = out.assets_path
-    ? path.join(outDir, expand(out.assets_path))
+    ? path.join(outDir, expandNameVersion(manifest, out.assets_path))
     : outDir;
 
   const amxmodxSrc = path.join(buildDir, 'amxmodx');

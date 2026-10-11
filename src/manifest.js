@@ -3,6 +3,7 @@ const yaml = require('js-yaml');
 const path = require('path');
 
 const { synthesizeLocalId, applyLocalOverrides, resolveLocalEntry } = require('./local-sources');
+const { parseEnvBool } = require('./env');
 
 const DEFAULTS_PATH  = path.join(__dirname, '..', 'defaults', 'amxbuild.defaults.yml');
 
@@ -699,12 +700,7 @@ function emptyPluginSettings() {
  * @returns {boolean|null}
  */
 function parsePluginsDebugEnv(env = process.env) {
-  const raw = env ? env.AMXB_PLUGINS_DEBUG : null;
-  if (raw == null) return null;
-  const value = String(raw).trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(value))   return true;
-  if (['0', 'false', 'no', 'off'].includes(value))  return false;
-  return null;
+  return parseEnvBool(env ? env.AMXB_PLUGINS_DEBUG : null);
 }
 
 function parsePluginSettings(raw) {

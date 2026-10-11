@@ -18,11 +18,8 @@
  *   (see `resolveGithubToken` in src/manifest.js).
  */
 
-const axios = require('axios');
+const { axios, githubHeaders } = require('./http');
 const { withRetry } = require('./retry');
-// Same global default as release-lister; re-setting is idempotent and keeps
-// this module's calls bounded even when loaded without release-lister.
-axios.defaults.timeout = 30000;
 
 /** "owner/repo" — no slashes inside the parts, no whitespace. */
 const REPO_RE = /^[^/\s]+\/[^/\s]+$/;
@@ -79,8 +76,7 @@ function validateRepoStructureOptions({ depth, dirsOnly, ext, maxEntries } = {})
  * @returns {Promise<any>} parsed JSON body
  */
 async function githubGet(url, { token } = {}) {
-  const headers = { Accept: 'application/vnd.github+json' };
-  if (token) headers.Authorization = `Bearer ${token}`;
+  const headers = githubHeaders(token);
 
   try {
     // Retry the raw GET only — the mapped GithubError below exposes just

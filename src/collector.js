@@ -3,6 +3,7 @@ const path = require('path');
 const glob = require('fast-glob');
 const logger = require('./logger');
 const { repoKey, normalizeRepo } = require('./deps-resolver');
+const { resolveConflict } = require('./fs-utils');
 
 /**
  * Copies everything from each repo's amxmodx_dir into build/amxmodx/,
@@ -51,18 +52,7 @@ async function collectAll(manifest, repoLocalDirs, buildDir) {
 
     let copied = 0;
     for (const f of files) {
-      if (origins.has(f)) {
-        const prev = origins.get(f);
-        if (onConflict === 'error') {
-          throw new Error(`File conflict: "${f}" — provided by both "${prev}" and "${repoConfig.repo}"`);
-        }
-        if (onConflict === 'first_wins') {
-          logger.warn(`Conflict (kept "${prev}"): ${f}`);
-          continue;
-        }
-        // last_wins (default)
-        logger.warn(`Conflict (overwriting "${prev}"): ${f}`);
-      }
+      if (resolveConflict(origins, f, repoConfig.repo, onConflict, { errorPrefix: 'File conflict', warnPrefix: 'Conflict' }) === 'skip') continue;
       const dest = path.join(amxmodxBuildDir, f);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(path.join(srcDir, f), dest);

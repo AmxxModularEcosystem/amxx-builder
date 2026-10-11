@@ -31,13 +31,11 @@ const { fetchCompiler, fetchLatestVersion } = require('./compiler-fetcher');
 const repoFetcher = require('./repo-fetcher');
 const { ensureRepoDir } = require('./local-sources');
 const { normalize, normalizeRepo, depLabel, fetchDepIncludeDir, readDepsListFile, collectDepIncludeDirs } = require('./deps-resolver');
+const { parseIncludes }     = require('./dep-graph');
 const { loadEnv }           = require('./env');
 const { resolveManifestPath } = require('./manifest-path');
 
 // ─── Regex ───────────────────────────────────────────────────────────────────
-
-/** Matches #include <file> and #include "file" (and #tryinclude variants). */
-const RE_INCLUDE = /^[ \t]*#(?:try)?include[ \t]+([<"])([^>"]+)[>"][ \t]*(?:\/\/.*)?$/gm;
 
 /** Matches #if defined <GUARD> — the start of an include guard block. */
 const RE_IF_DEFINED = /^[ \t]*#if[ \t]+defined[ \t]+(\w+)/m;
@@ -132,19 +130,12 @@ class IncludeGraph {
 
   /**
    * Extract #include/#tryinclude directives from file content.
+   * Delegates to the canonical parser in ./dep-graph (single source of truth).
    * @param {string} content
    * @returns {{ name: string, isAngle: boolean }[]}
    */
   static parseIncludesFromContent(content) {
-    const result = [];
-
-    // Use a fresh regex instance per call to avoid state leakage
-    const re = new RegExp(RE_INCLUDE.source, 'gm');
-    let m;
-    while ((m = re.exec(content)) !== null) {
-      result.push({ name: m[2].trim(), isAngle: m[1] === '<' });
-    }
-    return result;
+    return parseIncludes(content);
   }
 
   /**
@@ -159,7 +150,7 @@ class IncludeGraph {
     } catch {
       return [];
     }
-    return IncludeGraph.parseIncludesFromContent(content);
+    return parseIncludes(content);
   }
 
   // ── Include resolution ───────────────────────────────────────────────────
@@ -745,8 +736,8 @@ async function buildIncludeTree(manifestPath, targetPath, options = {}) {
  *   <file>, "file", file — directive prefix is optional
  *
  * Extension defaults to .inc if missing.
- * Shared by the MCP resolve_include tool. The IncludeGraph's regex-based
- * parseIncludesFromContent stays the engine for bulk content parsing.
+ * Shared by the MCP resolve_include tool. Bulk content parsing goes through
+ * IncludeGraph.parseIncludesFromContent, backed by dep-graph.parseIncludes.
  */
 function parseIncludeDirective(raw) {
   let input = String(raw || '').trim();

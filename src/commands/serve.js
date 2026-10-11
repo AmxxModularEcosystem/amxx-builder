@@ -45,14 +45,13 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 const glob = require('fast-glob');
-const dotenv = require('dotenv');
 
 const logger   = require('../logger');
 const progress = require('../progress');
 const { JsonRpcServer } = require('../jsonrpc-transport');
 const { on, off, EVENTS } = require('../events');
 
-const { loadEnv } = require('../env');
+const { loadEnv, loadCwdEnv } = require('../env');
 const { resolveManifestPath } = require('../manifest-path');
 const { resolveManifest, parseManifest, resolveGithubToken, depFromParams, parseDepList, parseDocEntries, parseSkillEntries } = require('../manifest');
 const { readDepManifest, collectDepAssets, collectLocalAssets, readFileSafe } = require('../agent-assets');
@@ -932,7 +931,7 @@ function createServeServer() {
   // Load project .env from the workspace root like the CLI does; keep stdout free
   // for JSON-RPC (logs → stderr, progress bars disabled).
   function prepareEnvironment() {
-    dotenv.config({ path: path.join(process.cwd(), '.env'), quiet: true });
+    loadCwdEnv({ quiet: true });
     logger.setStderr(true);
     progress.setEnabled(false);
   }

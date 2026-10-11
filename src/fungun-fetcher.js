@@ -34,6 +34,7 @@ const axios = require('axios');
 const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
 const { withRetry } = require('./retry');
+const { writeFileSyncAtomic } = require('./fs-utils');
 
 const FUNGUN_BASE_URL  = 'https://fungun.net';
 const FUNGUN_SHOW_PATH = '/shop/?p=show&id=';
@@ -315,7 +316,7 @@ async function fetchFungunDep(dep, noFetch = false) {
         fs.rmSync(path.join(cacheDir, existing), { force: true });
       }
     }
-    touchSentinel(sentinelFile, ref.id);
+    writeFileSyncAtomic(sentinelFile, ref.id);
 
     logger.info(`Fungun dep: plugin #${ref.id} ready (${incs.map((f) => f.filename).join(', ')})`);
     return cacheDir;
@@ -326,7 +327,7 @@ async function fetchFungunDep(dep, noFetch = false) {
       // build. A *successful* fetch with no include (FUNGUN_NO_INC) always
       // propagates: silently building against a removed include is worse.
       logger.warn(`Fungun dep: refetch of plugin #${ref.id} failed (${err.message}) — using cached copy`);
-      touchSentinel(sentinelFile, ref.id);
+      writeFileSyncAtomic(sentinelFile, ref.id);
       return cacheDir;
     }
     throw err;
@@ -339,13 +340,6 @@ function isFreshSentinel(sentinelFile) {
   } catch {
     return false;
   }
-}
-
-function touchSentinel(sentinelFile, id) {
-  fs.mkdirSync(path.dirname(sentinelFile), { recursive: true });
-  const sentinelTmp = sentinelFile + '.tmp';
-  fs.writeFileSync(sentinelTmp, id, 'utf8');
-  fs.renameSync(sentinelTmp, sentinelFile);
 }
 
 function safeFileName(filename) {

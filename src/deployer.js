@@ -3,12 +3,7 @@
 const fs   = require('fs');
 const path = require('path');
 const logger = require('./logger');
-
-function expand(manifest, tpl) {
-  return tpl
-    .replaceAll('{name}',    manifest.name)
-    .replaceAll('{version}', manifest.version);
-}
+const { expandNameVersion } = require('./format');
 
 function resolveDeployDirs(manifest) {
   const deploy = manifest.deploy;
@@ -17,14 +12,14 @@ function resolveDeployDirs(manifest) {
   // root, so a relative deploy.path would break path.relative on every dest.
   const deployRoot = path.resolve(deploy.path);
 
-  const amxmodxRel  = expand(manifest, deploy.amxmodx_path);
+  const amxmodxRel  = expandNameVersion(manifest, deploy.amxmodx_path);
   const amxmodxDest = path.join(deployRoot, amxmodxRel);
 
   // Deploy layout is decoupled from the archive layout: assets go to the
   // server root by default (schema: "Defaults to deploy root") so local
   // assets/ models+sound land where the game reads them — unlike
   // output.assets_path ('{name}'), which only shapes the zip.
-  const assetsRel  = deploy.assets_path ? expand(manifest, deploy.assets_path) : '';
+  const assetsRel  = deploy.assets_path ? expandNameVersion(manifest, deploy.assets_path) : '';
   const assetsDest = assetsRel ? path.join(deployRoot, assetsRel) : deployRoot;
 
   // Deploy destinations must stay inside deployRoot: exclusion matching and the

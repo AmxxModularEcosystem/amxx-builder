@@ -4,6 +4,7 @@ const logger = require('../logger');
 const { resolveManifestPath } = require('../manifest-path');
 const { loadEnv } = require('../env');
 const { listReleases, listTags } = require('../release-lister');
+const { formatBytes } = require('../format');
 
 async function runReleases(repo, options) {
   loadEnv(resolveManifestPath().path, { override: false });
@@ -38,7 +39,7 @@ async function runReleases(repo, options) {
 
     if (e.assets && e.assets.length > 0) {
       for (const a of e.assets) {
-        logger.dim(`    └ assets/${a.name}  (${(a.size / 1024).toFixed(0)} KB)`);
+        logger.dim(`    └ assets/${a.name}  (${formatBytes(a.size, { precision: 0 })})`);
       }
     }
   }

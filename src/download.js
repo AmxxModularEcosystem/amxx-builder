@@ -5,6 +5,7 @@ const path = require('path');
 const { Transform, pipeline } = require('stream');
 
 const axios = require('axios');
+const chalk = require('chalk');
 const { createBar } = require('./progress');
 const { withRetry } = require('./retry');
 
@@ -129,4 +130,9 @@ function timeoutError(label, deadlineMs) {
   return err;
 }
 
-module.exports = { downloadToFile, DEFAULT_MAX_BYTES, DEFAULT_DEADLINE_MS, DEFAULT_TIMEOUT_MS };
+/** Shared progress-bar label for download wrappers. */
+function downloadProgressLabel(filename) {
+  return `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`;
+}
+
+module.exports = { downloadToFile, downloadProgressLabel, DEFAULT_MAX_BYTES, DEFAULT_DEADLINE_MS, DEFAULT_TIMEOUT_MS };

@@ -236,3 +236,31 @@ test('fetchAssets: extensionless zip (content-type + PK magic) is extracted into
     'archive file removed after extraction, sentinel in place, no temp dirs'
   );
 });
+
+test('fetchAssets: .ZIP-named archive is extracted (case-insensitive extension) and the download removed', async (t) => {
+  const workDir = makeTmpDir('amxb-af-UZIP-');
+  const buildDir = path.join(workDir, 'build');
+  t.after(() => fs.rmSync(workDir, { recursive: true, force: true }));
+
+  const zip = new AdmZip();
+  zip.addFile('models/weapon.mdl', Buffer.from('MDL-ZIP-BYTES'));
+  const bytes = zip.toBuffer();
+
+  const srv = await startServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length) });
+    res.end(bytes);
+  });
+  t.after(() => srv.close());
+
+  const manifest = makeManifest(workDir, [urlSource(srv.url('/pack.ZIP'))]);
+  await fetchAssets(manifest, buildDir, false);
+
+  assert.equal(fs.readFileSync(path.join(buildDir, 'assets', 'models', 'weapon.mdl'), 'utf8'), 'MDL-ZIP-BYTES');
+  const dlDirs = fs.readdirSync(path.join(buildDir, '_assets_dl'));
+  assert.equal(dlDirs.length, 1, 'cache dir');
+  assert.deepEqual(
+    fs.readdirSync(path.join(buildDir, '_assets_dl', dlDirs[0])).sort(),
+    ['.cached', 'models'],
+    'archive file removed after extraction, sentinel in place'
+  );
+});

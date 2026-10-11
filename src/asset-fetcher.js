@@ -3,11 +3,9 @@
 const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
-const AdmZip = require('adm-zip');
 
-const chalk = require('chalk');
-const { safeExtractTar, makeSiblingTmpDir, publishDir } = require('./fs-utils');
-const { downloadToFile } = require('./download');
+const { makeSiblingTmpDir, publishDir, writeFileSyncAtomic, extractArchive, resolveConflict } = require('./fs-utils');
+const { downloadToFile, downloadProgressLabel } = require('./download');
 const logger = require('./logger');
 const { getCacheDir }        = require('./cache-dir');
 const { getAmxmodxFullDir, getHostPlatform } = require('./compiler-fetcher');
@@ -96,18 +94,20 @@ async function resolveUrlSource(source, manifestDir, buildDir, noFetch) {
   try {
     const downloadPath = path.join(tmpDir, filename);
     const { headers } = await downloadToFile(source.url, downloadPath, {
-      progressLabel: `  ${chalk.cyan('Downloading')} ${(filename || 'file').padEnd(30)}`,
+      progressLabel: downloadProgressLabel(filename),
     });
     const contentType = headers['content-type'] || '';
 
     if (isArchive(filename, contentType)) {
-      extractArchiveFile(downloadPath, tmpDir);
+      extractArchive(downloadPath, tmpDir);
+      fs.rmSync(downloadPath, { force: true });
     }
 
     // Sentinel written into tmpDir first: only complete dirs become the cache.
-    const sentinelTmp = path.join(tmpDir, '.cached.tmp');
-    fs.writeFileSync(sentinelTmp, JSON.stringify({ url: source.url, cached_at: new Date().toISOString() }));
-    fs.renameSync(sentinelTmp, path.join(tmpDir, '.cached'));
+    writeFileSyncAtomic(
+      path.join(tmpDir, '.cached'),
+      JSON.stringify({ url: source.url, cached_at: new Date().toISOString() })
+    );
     publishDir(tmpDir, cacheDir, () => fs.existsSync(sentinel));
     logger.info(`Assets: ${filename} ready`);
     return cacheDir;
@@ -139,28 +139,6 @@ function getFilenameFromUrl(url) {
 function isArchive(filename, contentType) {
   if (/\.(zip|tar\.gz|tgz|tar\.bz2)$/i.test(filename)) return true;
   return /zip|tar|gzip|x-compressed/.test(contentType);
-}
-
-function extractArchiveFile(archivePath, destDir) {
-  const isZip = /\.zip$/i.test(archivePath) || isZipMagicFile(archivePath);
-  if (isZip) {
-    new AdmZip(archivePath).extractAllTo(destDir, true);
-  } else {
-    safeExtractTar(archivePath, destDir);
-  }
-  fs.rmSync(archivePath, { force: true });
-}
-
-// ZIP archives start with "PK" — filename extensions are unreliable for
-// CDN/redirect URLs, so sniff the actual bytes when the name is inconclusive.
-function isZipMagicFile(filePath) {
-  try {
-    const fd  = fs.openSync(filePath, 'r');
-    const buf = Buffer.alloc(2);
-    fs.readSync(fd, buf, 0, 2, 0);
-    fs.closeSync(fd);
-    return buf[0] === 0x50 && buf[1] === 0x4b;
-  } catch { return false; }
 }
 
 // ─── map application ──────────────────────────────────────────────────────────
@@ -211,16 +189,8 @@ function applyMapEntry(baseDir, destBase, { from, to }, label, onConflict, origi
       : destPath; // no trailing slash on to → rename
 
     const relKey = path.relative(destBase, fileDest).replace(/\\/g, '/');
-    if (origins.has(relKey)) {
-      const prev = origins.get(relKey);
-      if (onConflict === 'error') {
-        throw new Error(`Asset conflict: "${relKey}" — provided by both "${prev}" and "${label}"`);
-      }
-      if (onConflict === 'first_wins') {
-        logger.warn(`Asset conflict (kept "${prev}"): ${relKey}`);
-        return;
-      }
-      logger.warn(`Asset conflict (overwriting "${prev}"): ${relKey}`);
+    if (resolveConflict(origins, relKey, label, onConflict, { errorPrefix: 'Asset conflict', warnPrefix: 'Asset conflict' }) === 'skip') {
+      return;
     }
     fs.mkdirSync(path.dirname(fileDest), { recursive: true });
     fs.copyFileSync(fromPath, fileDest);
@@ -240,16 +210,8 @@ function copyDirWithConflict(srcDir, destDir, trackBase, label, onConflict, orig
       copyDirWithConflict(srcPath, destPath, trackBase, label, onConflict, origins);
     } else {
       const relKey = path.relative(trackBase, destPath).replace(/\\/g, '/');
-      if (origins.has(relKey)) {
-        const prev = origins.get(relKey);
-        if (onConflict === 'error') {
-          throw new Error(`Asset conflict: "${relKey}" — provided by both "${prev}" and "${label}"`);
-        }
-        if (onConflict === 'first_wins') {
-          logger.warn(`Asset conflict (kept "${prev}"): ${relKey}`);
-          continue;
-        }
-        logger.warn(`Asset conflict (overwriting "${prev}"): ${relKey}`);
+      if (resolveConflict(origins, relKey, label, onConflict, { errorPrefix: 'Asset conflict', warnPrefix: 'Asset conflict' }) === 'skip') {
+        continue;
       }
       fs.mkdirSync(path.dirname(destPath), { recursive: true });
       fs.copyFileSync(srcPath, destPath);

@@ -22,7 +22,6 @@ const {
   ENV_VAR,
   STRICT_VAR,
   LOCAL_ID_PREFIX,
-  normalizeId,
   isLocal,
   localDirOf,
   synthesizeLocalId,
@@ -117,7 +116,6 @@ test('local-sources: exports the contract constants and helpers', () => {
   assert.equal(LOCAL_ID_PREFIX, 'local/');
 
   for (const fn of [
-    normalizeId,
     isLocal,
     localDirOf,
     synthesizeLocalId,
@@ -129,11 +127,6 @@ test('local-sources: exports the contract constants and helpers', () => {
   ]) {
     assert.equal(typeof fn, 'function');
   }
-});
-
-test('normalizeId: lowercases the logical id', () => {
-  assert.equal(normalizeId('Org/Repo'), 'org/repo');
-  assert.equal(normalizeId('LOCAL/Tool'), 'local/tool');
 });
 
 test('isLocal / localDirOf: keyed on a non-empty _localDir string, not on "source"', () => {
@@ -353,7 +346,7 @@ test('applyLocalOverrides: env redirect wins over a manifest-declared path for t
     globalDeps: [],
   };
 
-  // Lowercase key via normalizeId must still match the mixed-case id.
+  // Lowercase key (normalizeRepoName) must still match the mixed-case id.
   applyLocalOverrides(manifest, { [ENV_VAR]: `Local/Plug=${envDir}` });
 
   assert.equal(manifest.repos[0]._localDir, envDir);

@@ -20,4 +20,9 @@ function formatBytes(bytes, { precision } = {}) {
   return `${(bytes / 1024 ** 3).toFixed(precision == null ? 2 : precision)} GB`;
 }
 
-module.exports = { formatBytes };
+/** Expand the manifest `{name}` / `{version}` tokens in a path template. */
+function expandNameVersion(manifest, tpl) {
+  return String(tpl).replaceAll('{name}', manifest.name).replaceAll('{version}', manifest.version);
+}
+
+module.exports = { formatBytes, expandNameVersion };

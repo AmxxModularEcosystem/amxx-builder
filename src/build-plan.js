@@ -4,6 +4,7 @@ const fs   = require('fs');
 const path = require('path');
 const glob = require('fast-glob');
 const { isLocal } = require('./local-sources');
+const { expandNameVersion } = require('./format');
 
 /**
  * Structured build plan — mirrors what printDryRun shows, but as data.
@@ -23,7 +24,6 @@ function buildPlanData(manifest, options = {}) {
   const detailed  = options.detailedAssets === true;
   const listLocal = options.listLocal !== false;
   const out = manifest.output;
-  const expand = (tpl) => tpl.replaceAll('{name}', manifest.name).replaceAll('{version}', manifest.version);
 
   return {
     name: manifest.name,
@@ -96,10 +96,10 @@ function buildPlanData(manifest, options = {}) {
     output: {
       pack: out.pack,
       target: out.pack === false
-        ? `${path.join(path.resolve(out.dir), expand(out.amxmodx_path))}/`
-        : path.join(path.resolve(out.dir), expand(out.archive_name)),
-      amxmodx_path: expand(out.amxmodx_path) + '/',
-      assets_path: out.assets_path ? expand(out.assets_path) + '/' : null,
+        ? `${path.join(path.resolve(out.dir), expandNameVersion(manifest, out.amxmodx_path))}/`
+        : path.join(path.resolve(out.dir), expandNameVersion(manifest, out.archive_name)),
+      amxmodx_path: expandNameVersion(manifest, out.amxmodx_path) + '/',
+      assets_path: out.assets_path ? expandNameVersion(manifest, out.assets_path) + '/' : null,
       // `pluginIni` is the resolved source of truth; hand-built fixtures
       // (tests, external callers) may not carry it → fall back to the legacy
       // raw output flag.

@@ -3,6 +3,8 @@
 const fs   = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const AdmZip = require('adm-zip');
+const logger = require('./logger');
 
 /**
  * Recursively copy all contents from srcDir to destDir.
@@ -64,6 +66,17 @@ function countFiles(dir) {
 }
 
 /**
+ * Atomically write string `content` to `file` via `<file>.tmp` + rename.
+ * Parent directory must exist (callers own their mkdirSync). String-typed on
+ * purpose — no caller passes a Buffer, and writeFileSync defaults to utf8.
+ */
+function writeFileSyncAtomic(file, content) {
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, content);
+  fs.renameSync(tmp, file);
+}
+
+/**
  * Safe tar extraction — uses spawnSync to avoid shell injection.
  * Supports .tar.gz / .tgz and .tar.bz2 archives.
  * stripComponents > 0 drops that many leading path segments (GitHub tarballs
@@ -82,6 +95,32 @@ function safeExtractTar(archivePath, destDir, { stripComponents = 0 } = {}) {
     const msg = (result.stderr || result.stdout || '').toString().trim();
     throw new Error(`tar extraction failed for ${path.basename(archivePath)}: ${msg || 'unknown error'}`);
   }
+}
+
+/**
+ * Extracts an archive into destDir: a zip (by `.zip` extension — case-insensitive,
+ * the superset of the former call sites — or by PK magic sniff) via AdmZip,
+ * otherwise a `.tar.*` archive via safeExtractTar. Does NOT delete the archive —
+ * callers own cleanup.
+ */
+function extractArchive(archivePath, destDir) {
+  if (/\.zip$/i.test(archivePath) || hasZipMagic(archivePath)) {
+    new AdmZip(archivePath).extractAllTo(destDir, true);
+  } else {
+    safeExtractTar(archivePath, destDir);
+  }
+}
+
+// ZIP archives start with "PK" — sniff the bytes so an asset named without
+// the .zip extension (redirects, CDNs) is still extracted correctly.
+function hasZipMagic(filePath) {
+  try {
+    const fd  = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(2);
+    fs.readSync(fd, buf, 0, 2, 0);
+    fs.closeSync(fd);
+    return buf[0] === 0x50 && buf[1] === 0x4b;
+  } catch { return false; }
 }
 
 /**
@@ -118,4 +157,34 @@ function publishDir(tmpDir, finalDir, isValid) {
   return finalDir;
 }
 
-module.exports = { copyDirContents, countFiles, safeExtractTar, makeSiblingTmpDir, publishDir };
+/**
+ * Resolve a destination-path conflict recorded in `origins` (relPath → origin label).
+ * Returns 'skip' when onConflict==='first_wins' and a prior origin exists; throws when
+ * onConflict==='error' and a prior origin exists; otherwise returns 'write' (emitting the
+ * last_wins overwrite warning). The caller performs the copy + `origins.set` on 'write'.
+ */
+function resolveConflict(origins, relKey, label, onConflict, { errorPrefix, warnPrefix }) {
+  if (!origins.has(relKey)) return 'write';
+  const prev = origins.get(relKey);
+  if (onConflict === 'error') {
+    throw new Error(`${errorPrefix}: "${relKey}" — provided by both "${prev}" and "${label}"`);
+  }
+  if (onConflict === 'first_wins') {
+    logger.warn(`${warnPrefix} (kept "${prev}"): ${relKey}`);
+    return 'skip';
+  }
+  logger.warn(`${warnPrefix} (overwriting "${prev}"): ${relKey}`);
+  return 'write';
+}
+
+module.exports = {
+  copyDirContents,
+  countFiles,
+  safeExtractTar,
+  makeSiblingTmpDir,
+  publishDir,
+  writeFileSyncAtomic,
+  hasZipMagic,
+  extractArchive,
+  resolveConflict,
+};
