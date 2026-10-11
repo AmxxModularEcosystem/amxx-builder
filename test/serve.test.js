@@ -264,3 +264,70 @@ test('A5: custom token_env manifest policy wins over a bare GITHUB_TOKEN', async
   assert.equal(downstream.listReleases.length, 1);
   assert.equal(downstream.listReleases[0].opts.token, null);
 });
+
+// ─── B1: dep include dirs stay BEFORE the stdlib in the emitted arrays ──────
+
+const HOST_PLATFORM = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : 'linux';
+const HOST_BIN = HOST_PLATFORM === 'windows' ? 'amxxpc.exe' : 'amxxpc';
+
+// Offline fixture: a cached compiler (stdlib) + a manifest whose `source: local`
+// dep resolves straight from disk. `noFetch` never touches the network.
+function seedOrderedFixture(t) {
+  const cache = makeTmpDir('amxb-serve-order-cache-');
+  const depDir = makeTmpDir('amxb-serve-order-dep-');
+  const project = makeTmpDir('amxb-serve-order-proj-');
+  process.env.AMXX_BUILDER_CACHE = cache;
+  t.after(() => {
+    for (const dir of [cache, depDir, project]) fs.rmSync(dir, { recursive: true, force: true });
+    if (ORIG_CACHE_ENV === undefined) delete process.env.AMXX_BUILDER_CACHE;
+    else process.env.AMXX_BUILDER_CACHE = ORIG_CACHE_ENV;
+  });
+
+  const stdlibInclude = path.join(cache, 'amxxpc', '1.10.5428', HOST_PLATFORM, 'include');
+  writeFile(cache, `amxxpc/1.10.5428/${HOST_PLATFORM}/${HOST_BIN}`, 'binary');
+  writeFile(cache, `amxxpc/1.10.5428/${HOST_PLATFORM}/include/amxmodx.inc`, '// amxmodx');
+  writeFile(depDir, 'include/dep.inc', '// dep');
+
+  const manifest = writeFile(project, 'amxbuild.yml', [
+    'name: T',
+    'amxmodx:',
+    '  version: "1.10.5428"',
+    'deps:',
+    '  - source: local',
+    `    path: ${JSON.stringify(depDir)}`,
+    '    name: foo',
+    '',
+  ].join('\n'));
+
+  return { manifest, depInclude: path.join(depDir, 'include'), stdlibInclude };
+}
+
+test('include.resolve: dep include dir precedes the AMXX stdlib in `searched` (B1)', async (t) => {
+  const { manifest } = seedOrderedFixture(t);
+
+  const result = await SERVER._requests.get('include.resolve')({
+    manifest,
+    directive: '#include <nope.inc>',
+    noFetch: true,
+  });
+
+  const depIdx = result.searched.findIndex((s) => s.startsWith('local/foo'));
+  const stdlibIdx = result.searched.findIndex((s) => s.includes('stdlib'));
+  assert.ok(depIdx >= 0, `dep dir missing from searched: ${result.searched.join(', ')}`);
+  assert.ok(stdlibIdx >= 0, `stdlib dir missing from searched: ${result.searched.join(', ')}`);
+  assert.ok(depIdx < stdlibIdx, `dep must precede stdlib: ${result.searched.join(', ')}`);
+});
+
+test('dep-graph.get: dep include dir precedes the AMXX stdlib in `include_dirs` (B1)', async (t) => {
+  const { manifest, depInclude, stdlibInclude } = seedOrderedFixture(t);
+  const sma = writeFile(path.dirname(manifest), 'plugin.sma', 'public plugin_init() {}\n');
+
+  const result = await SERVER._requests.get('dep-graph.get')({
+    manifest,
+    sma_file: sma,
+    version: '1.10.5428',
+    noFetch: true,
+  });
+
+  assert.deepEqual(result.include_dirs, [depInclude, stdlibInclude]);
+});

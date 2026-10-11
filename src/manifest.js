@@ -2,7 +2,7 @@ const fs   = require('fs');
 const yaml = require('js-yaml');
 const path = require('path');
 
-const { synthesizeLocalId, applyLocalOverrides } = require('./local-sources');
+const { synthesizeLocalId, applyLocalOverrides, resolveLocalEntry } = require('./local-sources');
 
 const DEFAULTS_PATH  = path.join(__dirname, '..', 'defaults', 'amxbuild.defaults.yml');
 
@@ -511,6 +511,104 @@ function parseDepsLines(lines) {
   return result;
 }
 
+/**
+ * Parse ONE supplied dep — the string shorthand `owner/repo@ref[:include_path]`
+ * or a long-form object — and materialise a declared local path relative to
+ * `baseDir`. Single source of truth for interfaces that receive an ad-hoc dep
+ * (serve `concat`/`resolveLocalEntry`, MCP `parseDep`).
+ *
+ * @param {string|object} raw
+ * @param {{baseDir?: string}} [opts]
+ * @returns {object} parsed dep (`_localDir`/`_resolvedRef` set for local sources)
+ */
+function parseDepInput(raw, { baseDir = process.cwd() } = {}) {
+  if (raw && typeof raw === 'object') return resolveLocalEntry(parseDepObject(raw), baseDir);
+  if (typeof raw === 'string')        return resolveLocalEntry(parseDepString(raw), baseDir);
+  throw new Error('Dep must be a string or an object');
+}
+
+/**
+ * Canonical request-bag → dep mapper, shared by serve and MCP.
+ *
+ *   1. `input.dep` (string/object) is authoritative; combining it with the
+ *      explicit `source`/`include_path`/`asset` fields is an error.
+ *   2. Otherwise a whole dep-object arg bag (`source`/`path`/`id`/`url`, R3) is
+ *      parsed as-is — `parseDepObject` routes `source: 'local'`/`'fungun'` to
+ *      their branches, so `{source:'local', path}` and `{source:'fungun', id}`
+ *      keep working.
+ *   3. Otherwise the explicit `repo` fields build the dep: `source` defaults to
+ *      `git`, `ref` to `null` (or `'latest'` for `source: 'release'`), and a
+ *      supplied `ref_ttl` is honoured.
+ *   4. A bag with neither `dep` nor `repo` (and no dep-object shape) is an error.
+ *
+ * Core never assigns an interface error code — callers map a throw to their own
+ * convention (serve `-32602`, MCP `errorResult`).
+ *
+ * @param {object} input
+ * @param {{baseDir?: string}} [opts]
+ * @returns {object} parsed dep (`_localDir`/`_resolvedRef` set for local sources)
+ */
+function depFromParams(input, { baseDir = process.cwd() } = {}) {
+  let dep;
+  if (input?.dep) {
+    if (input.source != null || input.include_path != null || input.asset != null) {
+      throw new Error('Provide either "dep" or the explicit source/include_path/asset fields, not both');
+    }
+    dep = typeof input.dep === 'string' ? parseDepString(input.dep) : parseDepObject(input.dep);
+  } else if (!input?.repo && input &&
+             (input.source != null || input.path != null || input.id != null || input.url != null)) {
+    // R3 — a whole dep object used as the arg bag (MCP get_dep_interface /
+    // list_dep_incs historically call parseDep(args?.dep || args)). parseDepObject
+    // routes source:'local'→parseLocalDepObject (path) and source:'fungun'→
+    // parseFungunDepObject (id|url), so { source:'local', path } and
+    // { source:'fungun', id } keep working. Harmlessly widens serve the same way.
+    dep = parseDepObject(input);
+  } else {
+    if (!input?.repo) throw new Error('Provide either "dep" or "repo"');
+    const source = input.source || 'git';
+    const ref = input.ref || (source === 'release' ? 'latest' : null);
+    dep = {
+      repo: input.repo, ref, source,
+      include_path: input.include_path || null,
+      asset: input.asset ?? null,
+      ...(input.ref_ttl != null ? { ref_ttl: parseRefTtl(input.ref_ttl, `deps entry ${input.repo}`) } : {}),
+    };
+  }
+  return resolveLocalEntry(dep, baseDir);
+}
+
+/**
+ * Map a deps.tree `deps[]` array to parsed dep entries (lenient object form,
+ * preserving the serve+MCP union: `source` defaults to `git`, `ref` stays
+ * `null`, `ref_ttl` parsed, and a pre-resolved `_localDir` preserved).
+ *
+ * R4 note — the output is **functionally**, not byte-, identical to the two
+ * previous per-interface mappings: string entries go through `parseDepString`
+ * (which always carries a `ref_ttl: undefined` key) and `_localDir` is set only
+ * when present. `walkDep` reads `dep._localDir || null` (src/deps-tree.js), so
+ * the shape difference is inert.
+ *
+ * @param {Array<string|object>} entries
+ * @param {{baseDir?: string}} [opts] — accepted for interface-parity; object
+ *   entries already carry a resolved `_localDir`
+ * @returns {object[]}
+ */
+function parseDepList(entries, { baseDir = process.cwd() } = {}) {
+  void baseDir;
+  return (entries || []).map((entry) => {
+    if (typeof entry === 'string') return parseDepString(entry);
+    if (!entry || typeof entry !== 'object') throw new Error('Dep must be a string or an object');
+    const dep = {
+      repo: entry.repo, ref: entry.ref, source: entry.source || 'git',
+      include_path: entry.include_path || null,
+      asset: entry.asset != null ? entry.asset : null,
+      ...(entry.ref_ttl != null ? { ref_ttl: parseRefTtl(entry.ref_ttl, `deps entry ${entry.repo}`) } : {}),
+    };
+    if (entry._localDir) { dep._localDir = entry._localDir; dep._resolvedRef = 'local'; }
+    return dep;
+  });
+}
+
 function parsePlatform(val) {
   const valid = ['linux', 'windows', 'mac'];
   if (val == null) return null; // null = auto-detect host at runtime
@@ -813,4 +911,4 @@ function resolveManifest(manifestPath, options = {}) {
   return manifest;
 }
 
-module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, parseRefTtl, parseDocEntries, parseSkillEntries, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge, normalizeIni, finalizePluginConfig, parsePluginsDebugEnv };
+module.exports = { parseManifest, parseDepsLines, parseDepString, parseDepObject, parseDepInput, depFromParams, parseDepList, parseRefTtl, parseDocEntries, parseSkillEntries, applyOverrides, parseOverrideValue, resolveManifest, resolveGithubToken, loadDefaultsRaw, deepMerge, normalizeIni, finalizePluginConfig, parsePluginsDebugEnv };

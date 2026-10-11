@@ -30,7 +30,7 @@ const { parseManifest, resolveGithubToken } = require('./manifest');
 const { fetchCompiler, fetchLatestVersion } = require('./compiler-fetcher');
 const repoFetcher = require('./repo-fetcher');
 const { ensureRepoDir } = require('./local-sources');
-const { normalize, normalizeRepo, depLabel, fetchDepIncludeDir, readDepsListFile } = require('./deps-resolver');
+const { normalize, normalizeRepo, depLabel, fetchDepIncludeDir, readDepsListFile, collectDepIncludeDirs } = require('./deps-resolver');
 const { loadEnv }           = require('./env');
 const { resolveManifestPath } = require('./manifest-path');
 
@@ -804,6 +804,51 @@ async function collectIncFiles(srcDir) {
   return entries.map((rel) => ({ rel, abs: path.join(srcDir, rel) }));
 }
 
+/**
+ * Build the ordered include-search dirs for an interface: dependency include dirs
+ * first (matching the real build order — deps before stdlib), then the AMXX stdlib
+ * bundle, then caller-supplied extra dirs.
+ *
+ * Pure assembler: it takes an already-resolved `stdlib` ({includeDir, version})
+ * so it works for both search sites (stdlib via resolveStdlibState) and compile
+ * sites (stdlib via fetchCompiler), without coupling to the network. It does no
+ * manifest discovery/parse — that stays at the call site.
+ *
+ * The caller prepends any directive-local dir (quoted "..." → the .sma's own
+ * directory) before calling, so it stays ahead of the dep entries.
+ *
+ * @param {object} [opts]
+ * @param {object|null} [opts.manifest=null]  parsed manifest (null → no deps)
+ * @param {{includeDir: string|null, version: string|null}|null} [opts.stdlib=null]
+ * @param {boolean} [opts.noFetch=false]
+ * @param {boolean|null} [opts.ssh=null]       defaults to manifest?.github.ssh
+ * @param {string[]} [opts.extraDirs=[]]       caller include_dirs, appended resolved
+ * @returns {Promise<{ entries: {path: string, label: string}[], errors: string[] }>}
+ */
+async function buildIncludeSearchDirs({ manifest = null, stdlib = null, noFetch = false, ssh = null, extraDirs = [] } = {}) {
+  const entries = [];
+  const errors = [];
+
+  if (manifest) {
+    const { dirs, errors: depErrs } = await collectDepIncludeDirs(manifest, {
+      noFetch,
+      ssh: ssh == null ? manifest.github.ssh : ssh,
+    });
+    manifest.globalDeps.forEach((dep, i) => {
+      if (dirs[i]) entries.push({ path: dirs[i], label: depLabel(dep) });
+      else if (depErrs[i]) errors.push(`${depLabel(dep)}: ${depErrs[i]}`);
+    });
+  }
+
+  if (stdlib && stdlib.includeDir) {
+    entries.push({ path: stdlib.includeDir, label: `AMXX stdlib ${stdlib.version}` });
+  }
+
+  for (const d of extraDirs || []) entries.push({ path: path.resolve(d), label: d });
+
+  return { entries, errors };
+}
+
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 // fetchDepIncludeDir is owned by deps-resolver (single source for the
@@ -816,4 +861,5 @@ module.exports = {
   parseIncludeDirective,
   searchIncludeFile,
   collectIncFiles,
+  buildIncludeSearchDirs,
 };

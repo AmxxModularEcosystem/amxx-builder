@@ -54,13 +54,12 @@ const { on, off, EVENTS } = require('../events');
 
 const { loadEnv } = require('../env');
 const { resolveManifestPath } = require('../manifest-path');
-const { resolveManifest, parseManifest, resolveGithubToken, parseDepString, parseDepObject, parseRefTtl, parseDocEntries, parseSkillEntries } = require('../manifest');
-const { resolveLocalEntry } = require('../local-sources');
-const { readDepManifest, collectDepAssets, collectLocalAssets } = require('../agent-assets');
+const { resolveManifest, parseManifest, resolveGithubToken, depFromParams, parseDepList, parseDocEntries, parseSkillEntries } = require('../manifest');
+const { readDepManifest, collectDepAssets, collectLocalAssets, readFileSafe } = require('../agent-assets');
 const { validateManifestFile } = require('../validate');
-const { collectIncFiles, parseIncludeDirective, searchIncludeFile } = require('../include-tree');
-const { depLabel, collectDepIncludeDirs } = require('../deps-resolver');
-const { fetchCompiler, resolveAmxmodxVersion, getCompilerInfo, getHostPlatform, resolveStdlibVersion } = require('../compiler-fetcher');
+const { collectIncFiles, parseIncludeDirective, searchIncludeFile, buildIncludeSearchDirs } = require('../include-tree');
+const { collectDepIncludeDirs } = require('../deps-resolver');
+const { fetchCompiler, resolveAmxmodxVersion, resolveStdlibState } = require('../compiler-fetcher');
 const { buildDepTree, assembleRootDeps } = require('../deps-tree');
 const { listReleases, listTags } = require('../release-lister');
 const {
@@ -78,15 +77,6 @@ const { startWatch } = require('../watcher');
 const pkg = require('../../package.json');
 
 // ─── Small interface helpers (no domain logic) ────────────────────────────────
-
-function readFileSafe(absPath) {
-  try {
-    const text = fs.readFileSync(absPath, 'utf8');
-    return text;
-  } catch (err) {
-    return `[error reading file: ${err.message}]`;
-  }
-}
 
 // JSON-RPC params spell no-fetch either `noFetch` (serve convention) or
 // `no_fetch` (snake_case convention) — normalize once here.
@@ -132,42 +122,21 @@ async function resolveVersionFromParams(params) {
   }
 }
 
-// Informational stdlib lookup for manifest-less / offline clients. Never
-// downloads when noFetch; if latest cannot be resolved offline, degrades to
-// the newest cached compiler instead of failing (degraded: true). Nothing
-// cached at all → graceful empty state (version: null), not an error.
-// Version-priority + offline degradation live in core
-// (compiler-fetcher.resolveStdlibVersion); this wrapper only does arg/manifest
-// discovery, the INVALID→-32602 remap and getCompilerInfo state shaping.
-async function resolveStdlibState(params) {
-  const noFetch = noFetchParam(params);
-  let manifest = null;
-  if (!params?.version) {
-    const manifestPath = manifestPathFor(params);
-    if (fs.existsSync(manifestPath)) {
-      loadEnvQuiet(manifestPath);
-      try {
-        manifest = parseManifest(manifestPath);
-      } catch (err) {
-        logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
-        manifest = null;
-      }
-    }
+// Informational stdlib lookup for manifest-less / offline clients: delegates to
+// core resolveStdlibState (version priority + offline degradation + state
+// shaping), owning only the JSON-RPC error convention
+// (INVALID_AMXMODX_VERSION → -32602).
+async function stdlibState(params) {
+  try {
+    return await resolveStdlibState({
+      version: params?.version,
+      manifestPath: manifestPathFor(params),
+      noFetch: noFetchParam(params),
+    });
+  } catch (err) {
+    if (err && err.code === 'INVALID_AMXMODX_VERSION') err.code = -32602;
+    throw err;
   }
-  const { version, degraded, error } = await resolveStdlibVersion({
-    version: params?.version,
-    manifest,
-    noFetch,
-  });
-  if (error) {
-    if (error.code === 'INVALID_AMXMODX_VERSION') error.code = -32602;
-    throw error;
-  }
-  if (version === null) {
-    return { version: null, degraded: false, platform: getHostPlatform(), compilerPath: null, includeDir: null, cached: false };
-  }
-  const info = await getCompilerInfo(version, { noFetch });
-  return { version: info.version, degraded, platform: info.platform, compilerPath: info.compilerPath, includeDir: info.includeDir, cached: info.cached };
 }
 
 function manifestPathFor(params) {
@@ -195,29 +164,13 @@ function resolveGithubTokenFor(params, repo) {
   return params?.token || process.env.GITHUB_TOKEN || null;
 }
 
-// Build a parsed dep object from params: either a full `dep` string/object or
-// explicit { repo, ref?, source?, include_path?, asset? } fields. A supplied
-// `dep` is authoritative — the explicit fields are an *alternative* to it
-// (docs/serve/INDEX.md), so combining both is a param error, not a silent
-// post-validation override of the parsed dep.
-function depFromParams(params) {
+// Build a parsed dep object from params through core depFromParams, owning only
+// the JSON-RPC error convention: a bad dep is a param error (-32602).
+function depForParams(params) {
   try {
-    let dep;
-    if (params?.dep) {
-      if (params.source != null || params.include_path != null || params.asset != null) {
-        throw new Error('Provide either "dep" or the explicit source/include_path/asset fields, not both');
-      }
-      dep = typeof params.dep === 'string' ? parseDepString(params.dep) : parseDepObject(params.dep);
-    } else {
-      if (!params?.repo) throw new Error('Provide either "dep" or "repo"');
-      const source = params.source || 'git';
-      const ref = params.ref || (source === 'release' ? 'latest' : null);
-      dep = { repo: params.repo, ref, source, include_path: params.include_path || null, asset: params.asset ?? null };
-    }
-    return resolveLocalEntry(
-      dep,
-      params?.manifest ? path.dirname(path.resolve(params.manifest)) : process.cwd()
-    );
+    return depFromParams(params, {
+      baseDir: params?.manifest ? path.dirname(path.resolve(params.manifest)) : process.cwd(),
+    });
   } catch (err) {
     err.code = -32602;
     throw err;
@@ -229,7 +182,7 @@ function depFromParams(params) {
 async function collectAgentAssets(params) {
   const noFetch = noFetchParam(params);
   if (params?.dep || params?.repo) {
-    const dep = depFromParams(params);
+    const dep = depForParams(params);
     const token = resolveGithubTokenFor(params, dep.repo);
     return collectDepAssets(dep, { token, noFetch });
   }
@@ -318,13 +271,7 @@ function createServeServer() {
   // ─── Dependency manifest + agent assets ──────────────────────────────────
 
   server.onRequest('manifest.dep', async (params) => {
-    let dep;
-    try {
-      dep = depFromParams(params);
-    } catch (err) {
-      err.code = -32602;
-      throw err;
-    }
+    const dep = depForParams(params);
     const token = resolveGithubTokenFor(params, dep.repo);
     const m = await readDepManifest(dep, { token, noFetch: noFetchParam(params) });
 
@@ -409,20 +356,7 @@ function createServeServer() {
       throw err;
     }
     const { filename, localFirst } = parsed;
-    const searchPaths = [];
 
-    if (localFirst) {
-      const smaDir = params?.sma_file
-        ? path.dirname(path.resolve(params.sma_file))
-        : process.cwd();
-      searchPaths.push({
-        path: smaDir,
-        label: params?.sma_file ? `local (${path.basename(params.sma_file)})` : 'local (current directory)',
-      });
-    }
-
-    // Dep includes come BEFORE the stdlib — matching the real build's search
-    // order (deps first, then the compiler bundle).
     const errors = [];
     let manifest = null;
     const manifestPath = manifestPathFor(params);
@@ -434,19 +368,29 @@ function createServeServer() {
         errors.push(`manifest ${manifestPath}: ${err.message}`);
       }
     }
-    if (manifest) {
-      const { dirs, errors: depErrors } = await collectDepIncludeDirs(manifest, {
-        noFetch: noFetchParam(params),
-        ssh: manifest.github.ssh,
-      });
-      manifest.globalDeps.forEach((dep, i) => {
-        if (dirs[i]) searchPaths.push({ path: dirs[i], label: depLabel(dep) });
-        else if (depErrors[i]) errors.push(`${depLabel(dep)}: ${depErrors[i]}`);
+
+    // Dep includes come BEFORE the stdlib — matching the real build's search
+    // order (deps first, then the compiler bundle).
+    const stdlib = await stdlibState(params);
+    const { entries: searchPaths, errors: depErrors } = await buildIncludeSearchDirs({
+      manifest,
+      stdlib,
+      noFetch: noFetchParam(params),
+      ssh: manifest?.github.ssh,
+    });
+    errors.push(...depErrors);
+
+    // A directive-local dir (quoted "..." → the .sma's own directory) is
+    // searched before the manifest deps.
+    if (localFirst) {
+      const smaDir = params?.sma_file
+        ? path.dirname(path.resolve(params.sma_file))
+        : process.cwd();
+      searchPaths.unshift({
+        path: smaDir,
+        label: params?.sma_file ? `local (${path.basename(params.sma_file)})` : 'local (current directory)',
       });
     }
-
-    const stdlib = await resolveStdlibState(params);
-    if (stdlib.includeDir) searchPaths.push({ path: stdlib.includeDir, label: `AMXX stdlib ${stdlib.version}` });
 
     const result = searchIncludeFile(searchPaths, filename);
     if (!result) {
@@ -511,7 +455,7 @@ function createServeServer() {
   // ─── AMXX standard includes ──────────────────────────────────────────────
 
   server.onRequest('amxmodx.includes.list', async (params) => {
-    const state = await resolveStdlibState(params);
+    const state = await stdlibState(params);
     const pattern = params?.pattern || '*.inc';
 
     if (!state.includeDir) {
@@ -528,7 +472,7 @@ function createServeServer() {
   });
 
   server.onRequest('amxmodx.include.get', async (params) => {
-    const state = await resolveStdlibState(params);
+    const state = await stdlibState(params);
     const pattern = params?.file || params?.pattern || '*.inc';
 
     if (!state.includeDir) {
@@ -556,20 +500,7 @@ function createServeServer() {
     const noFetch = noFetchParam(params);
 
     if (params?.deps) {
-      const rootDeps = params.deps.map((entry) => {
-        if (typeof entry === 'string') {
-          const parsed = parseDepString(entry);
-          return { repo: parsed.repo, ref: parsed.ref, source: parsed.source, include_path: parsed.include_path, asset: parsed.asset };
-        }
-        return {
-          repo: entry.repo,
-          ref: entry.ref,
-          source: entry.source || 'git',
-          include_path: entry.include_path || null,
-          asset: entry.asset != null ? entry.asset : null,
-          ...(entry.ref_ttl != null ? { ref_ttl: parseRefTtl(entry.ref_ttl, `deps entry ${entry.repo}`) } : {}),
-        };
-      });
+      const rootDeps = parseDepList(params.deps);
       return buildDepTree(rootDeps, { token: params?.token, noFetch, depth, from: 'user' });
     }
 
@@ -620,13 +551,14 @@ function createServeServer() {
     const { includeDir } = await fetchCompiler(version);
 
     // Dep includes come BEFORE the stdlib — matching the real build's search order.
-    const includeDirs = [];
-    if (manifest) {
-      const { dirs } = await collectDepIncludeDirs(manifest, { noFetch, ssh: manifest.github.ssh });
-      for (const dir of dirs) if (dir) includeDirs.push(dir);
-    }
-    if (includeDir) includeDirs.push(includeDir);
-    for (const d of (params?.include_dirs || [])) includeDirs.push(path.resolve(d));
+    const { entries } = await buildIncludeSearchDirs({
+      manifest,
+      stdlib: { includeDir, version },
+      noFetch,
+      ssh: manifest?.github.ssh,
+      extraDirs: params?.include_dirs,
+    });
+    const includeDirs = entries.map((e) => e.path);
 
     const graph = new DepGraph(includeDirs);
     graph.parseFile(smaPath);
@@ -730,7 +662,7 @@ function createServeServer() {
   });
 
   server.onRequest('compiler.info', async (params) => {
-    const state = await resolveStdlibState(params);
+    const state = await stdlibState(params);
     const result = { version: state.version, platform: state.platform, compilerPath: state.compilerPath, includeDir: state.includeDir, cached: state.cached };
     if (state.degraded) result.degraded = true;
     return result;
@@ -917,19 +849,14 @@ function createServeServer() {
     const { compilerPath, includeDir } = await fetchCompiler(version);
 
     // Dep includes come BEFORE the stdlib — matching the real build order.
-    const depDirs = [];
-    const depErrors = [];
-    if (manifest) {
-      const { dirs, errors } = await collectDepIncludeDirs(manifest, { noFetch, ssh: manifest.github.ssh });
-      manifest.globalDeps.forEach((dep, i) => {
-        if (dirs[i]) depDirs.push(dirs[i]);
-        else if (errors[i]) depErrors.push(`${depLabel(dep)}: ${errors[i]}`);
-      });
-    }
-
-    const includeDirs = [...depDirs];
-    if (includeDir) includeDirs.push(includeDir);
-    for (const d of (params?.include_dirs || [])) includeDirs.push(path.resolve(d));
+    const { entries, errors: depErrors } = await buildIncludeSearchDirs({
+      manifest,
+      stdlib: { includeDir, version },
+      noFetch,
+      ssh: manifest?.github.ssh,
+      extraDirs: params?.include_dirs,
+    });
+    const includeDirs = entries.map((e) => e.path);
 
     // Unique per-call build dir + event tag: the transport dispatches requests
     // concurrently, so two compile.single calls for same-named plugins must not

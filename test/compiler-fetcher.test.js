@@ -21,7 +21,7 @@ const { spawnSync } = require('child_process');
 const axios = require('axios');
 const AdmZip = require('adm-zip');
 
-const { resolveAmxmodxVersion, findNewestCachedCompiler, fetchCompiler, getAmxmodxFullDir, resolveStdlibVersion } = require('../src/compiler-fetcher');
+const { resolveAmxmodxVersion, findNewestCachedCompiler, fetchCompiler, getAmxmodxFullDir, resolveStdlibVersion, resolveStdlibState } = require('../src/compiler-fetcher');
 const { setEnabled } = require('../src/progress');
 
 setEnabled(false); // keep test output clean — no \r progress bars
@@ -121,6 +121,44 @@ test('resolveStdlibVersion: invalid explicit version → error carrying INVALID_
   assert.equal(result.degraded, false);
   assert.ok(result.error instanceof Error);
   assert.equal(result.error.code, 'INVALID_AMXMODX_VERSION');
+});
+
+// ─── resolveStdlibState: manifest discovery + shaping ───────────────────────
+
+function writeTempManifest(t, version) {
+  const dir = makeTmpDir('amxb-rsstate-m-');
+  const p = writeFile(dir, 'amxbuild.yml', `name: Test\nversion: "1.0.0"\namxmodx:\n  version: "${version}"\n`);
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return p;
+}
+
+test('resolveStdlibState: version:"" still discovers the manifest and returns its pinned version (R1)', async (t) => {
+  useTempCache(t, 'amxb-rsstate-a-');
+  const manifestPath = writeTempManifest(t, '1.9.0');
+
+  const state = await resolveStdlibState({ version: '', manifestPath, noFetch: true });
+  assert.equal(state.version, '1.9.0');
+  assert.equal(state.degraded, false);
+  assert.equal(state.cached, false);
+  assert.equal(state.compilerPath, null);
+  assert.equal(typeof state.platform, 'string');
+});
+
+test('resolveStdlibState: an explicit version wins over the manifest', async (t) => {
+  useTempCache(t, 'amxb-rsstate-b-');
+  const manifestPath = writeTempManifest(t, '1.9.0');
+
+  const state = await resolveStdlibState({ version: '1.10.9999', manifestPath, noFetch: true });
+  assert.equal(state.version, '1.10.9999');
+});
+
+test('resolveStdlibState: no version discovers the manifest and returns its pinned version', async (t) => {
+  useTempCache(t, 'amxb-rsstate-c-');
+  const manifestPath = writeTempManifest(t, '1.9.0');
+
+  const state = await resolveStdlibState({ manifestPath, noFetch: true });
+  assert.equal(state.version, '1.9.0');
+  assert.equal(state.degraded, false);
 });
 
 // ─── resolveAmxmodxVersion: explicit version option ─────────────────────────

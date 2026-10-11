@@ -20,6 +20,8 @@ const {
   readDepManifest,
   collectDepAssets,
   collectLocalAssets,
+  readFileSafe,
+  safeResolve,
 } = require('../src/agent-assets');
 const { findManifestInDir } = require('../src/manifest-path');
 
@@ -133,6 +135,68 @@ test('resolveAssets: skill dir traversal escape throws', (t) => {
     () => resolveAssets({ skills: [{ dir: '../evil', file: null, name: 'x', description: null }] }, root),
     /escapes the repo root/
   );
+});
+
+// ─── readFileSafe (core export) ──────────────────────────────────────────────
+
+test('readFileSafe: is exported and returns text file content', (t) => {
+  const root = makeTmpDir('amxb-readsafe-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const abs = write(root, 'docs/API.md', 'hello world');
+
+  assert.equal(typeof readFileSafe, 'function');
+  assert.equal(readFileSafe(abs), 'hello world');
+});
+
+test('readFileSafe: NUL-byte file becomes binary placeholder with byte size', (t) => {
+  const root = makeTmpDir('amxb-readsafe-bin-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const abs = write(root, 'docs/blob.dat', Buffer.from([0x00, 0x61, 0x62, 0x00]));
+
+  assert.equal(readFileSafe(abs), '[binary file, 4 bytes]');
+});
+
+test('readFileSafe: missing file becomes error placeholder, never throws', (t) => {
+  const root = makeTmpDir('amxb-readsafe-missing-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const abs = path.join(root, 'docs', 'NOPE.md');
+
+  assert.match(readFileSafe(abs), /^\[error reading file: .+\]$/);
+});
+
+// ─── safeResolve (core export) ───────────────────────────────────────────────
+
+test('safeResolve: is exported and resolves a repo-relative path', (t) => {
+  const root = makeTmpDir('amxb-saferesolve-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  assert.equal(typeof safeResolve, 'function');
+  assert.equal(safeResolve(root, 'docs/API.md'), path.join(root, 'docs', 'API.md'));
+});
+
+test('safeResolve: root itself is allowed', (t) => {
+  const root = makeTmpDir('amxb-saferesolve-root-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  assert.equal(safeResolve(root, '.'), root);
+});
+
+test('safeResolve: relative traversal escape throws', (t) => {
+  const root = makeTmpDir('amxb-saferesolve-esc-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  assert.throws(() => safeResolve(root, '../evil.md'), /escapes the repo root/);
+});
+
+test('safeResolve: absolute path outside the root throws', (t) => {
+  const root = makeTmpDir('amxb-saferesolve-abs-');
+  const other = makeTmpDir('amxb-saferesolve-other-');
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
+  });
+
+  assert.throws(() => safeResolve(root, path.join(other, 'evil.md')), /escapes the repo root/);
 });
 
 // ─── readAssets ──────────────────────────────────────────────────────────────

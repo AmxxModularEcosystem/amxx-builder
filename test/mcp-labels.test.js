@@ -129,3 +129,59 @@ test('list_releases: manifest github.tokens policy wins over GITHUB_TOKEN', asyn
   assert.equal(result.isError, undefined);
   assert.equal(capturedReleaseToken, 'sentinel-acme-token');
 });
+
+test('get_dep_interface: a whole dep-object arg bag ({source:local,path}) resolves (R3)', async (t) => {
+  useTempCache(t, 'amxb-mcp-labels-r3a-cache-');
+  const root = useTmpDir(t, 'amxb-mcp-labels-r3a-');
+  write(root, 'scripting/include/api.inc', 'api');
+
+  const result = await HANDLERS.get_dep_interface(
+    { source: 'local', path: root, name: 'bag', no_fetch: true },
+    null,
+    true
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.match(result.content[0].text, /local\/bag \(local\)/);
+});
+
+test('list_dep_incs: a whole dep-object arg bag ({source:local,path}) resolves (R3)', async (t) => {
+  useTempCache(t, 'amxb-mcp-labels-r3b-cache-');
+  const root = useTmpDir(t, 'amxb-mcp-labels-r3b-');
+  write(root, 'scripting/include/api.inc', 'api');
+
+  const result = await HANDLERS.list_dep_incs(
+    { source: 'local', path: root, name: 'bag', no_fetch: true },
+    null,
+    true
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.match(result.content[0].text, /local\/bag/);
+  assert.match(result.content[0].text, /api\.inc/);
+});
+
+test('get_dep_interface: mixing "dep" with a top-level source field rejects with -32602 (Q4)', async (t) => {
+  useTempCache(t, 'amxb-mcp-labels-q4a-cache-');
+  const result = await HANDLERS.get_dep_interface(
+    { dep: 'acme/tool@v1', source: 'local' },
+    null,
+    true
+  );
+
+  assert.equal(result.isError, true);
+  assert.equal(result._meta.code, -32602);
+  assert.match(result.content[0].text, /either "dep" or the explicit/);
+});
+
+test('list_dep_incs: mixing "dep" with a top-level include_path field rejects with -32602 (Q4)', async (t) => {
+  useTempCache(t, 'amxb-mcp-labels-q4b-cache-');
+  const result = await HANDLERS.list_dep_incs(
+    { dep: 'acme/tool@v1', include_path: 'scripting/include' },
+    null,
+    true
+  );
+
+  assert.equal(result.isError, true);
+  assert.equal(result._meta.code, -32602);
+});

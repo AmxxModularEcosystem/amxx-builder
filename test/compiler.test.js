@@ -44,7 +44,7 @@ if (process.platform === 'win32') {
   };
 }
 
-const { compilePlugins, compileSingle, applyPluginRule } = require('../src/compiler');
+const { compilePlugins, compileSingle, compileFile, applyPluginRule } = require('../src/compiler');
 const { on, off, EVENTS } = require('../src/events');
 
 function makeTmpDir(prefix) {
@@ -206,6 +206,81 @@ test('compileSingle: missing compiler binary → null', async () => {
   const manifest = makeManifest(dir);
   const outName = await compileSingle(manifest, sma, path.join(dir, 'nope-amxxpc'), [], buildDir, scripting);
   assert.equal(outName, null);
+});
+
+// ─── compileFile (pure primitive; no events) ─────────────────────────────────
+
+test('compileFile: returns {status, output}, no EVENTS.COMPILED, correct -i order', async () => {
+  const dir = makeTmpDir('amxb-cf-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const scripting = path.join(dir, 'scripting');
+  fs.mkdirSync(path.join(scripting, 'include'), { recursive: true });
+  fs.writeFileSync(path.join(scripting, 'include', 'my.inc'), '');
+  const sma = path.join(scripting, 'hello.sma');
+  fs.writeFileSync(sma, '#include <amxmodx>\n');
+
+  const collectedIncDir = path.join(dir, 'build', 'amxmodx', 'scripting', 'include');
+  fs.mkdirSync(collectedIncDir, { recursive: true });
+  const extra = path.join(dir, 'extra-inc');
+
+  const outPath = path.join(dir, 'out', 'hello.amxx');
+  const manifest = makeManifest(dir, { amxmodx: { dir: 'amxmodx', defines: ['DEBUG'] } });
+
+  const events = [];
+  const handler = (e) => events.push(e);
+  on(EVENTS.COMPILED, handler);
+  let result;
+  try {
+    result = await compileFile(manifest, sma, compilerPath, [extra], outPath, { collectedIncDir });
+  } finally {
+    off(EVENTS.COMPILED, handler);
+  }
+
+  assert.deepEqual(Object.keys(result).sort(), ['output', 'status']);
+  assert.equal(result.status, 0);
+  assert.equal(typeof result.output, 'string');
+  assert.equal(events.length, 0, 'compileFile must not emit EVENTS.COMPILED');
+  assert.ok(fs.existsSync(outPath));
+
+  // argv order: -i<scriptingDir>, local include/, collected include/, extra dirs; then defines
+  const recorded = JSON.parse(fs.readFileSync(`${outPath}.args.json`, 'utf8'));
+  assert.equal(recorded.source, sma);
+  assert.deepEqual(recorded.includes, [
+    scripting,
+    path.join(scripting, 'include'),
+    collectedIncDir,
+    extra,
+  ]);
+  assert.deepEqual(recorded.defines, ['DEBUG=1']);
+});
+
+test('compileFile: non-zero compiler status passed through as {status, output}', async () => {
+  const dir = makeTmpDir('amxb-cf-err-');
+  const { compilerPath } = makeMockCompiler(dir);
+
+  const scripting = path.join(dir, 'scripting');
+  fs.mkdirSync(scripting, { recursive: true });
+  const sma = path.join(scripting, 'bad.sma');
+  fs.writeFileSync(sma, '#error broken\n');
+
+  const outPath = path.join(dir, 'out', 'bad.amxx');
+  const manifest = makeManifest(dir);
+
+  const events = [];
+  const handler = (e) => events.push(e);
+  on(EVENTS.COMPILED, handler);
+  let result;
+  try {
+    result = await compileFile(manifest, sma, compilerPath, [], outPath);
+  } finally {
+    off(EVENTS.COMPILED, handler);
+  }
+
+  assert.equal(result.status, 1);
+  assert.match(result.output, /error 001: broken/);
+  assert.equal(events.length, 0);
+  assert.ok(!fs.existsSync(outPath));
 });
 
 // ─── compilePlugins (full build) ─────────────────────────────────────────────

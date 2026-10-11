@@ -12,12 +12,16 @@ const TOOLS = [
           name: 'get_dep_interface',
           title: 'Get dependency public interface',
           description:
-            'Download (if not cached) an AMXX dependency from a deps entry and return the ' +
-            'full contents of all its .inc files. Use this to understand the public API, ' +
-            'functions, constants, and defines that a dependency exposes.\n\n' +
-            'Supports:\n' +
-            '  - git deps: "owner/repo@ref" or "owner/repo@ref:include_path"\n' +
-            '  - release deps: { repo, ref, source: "release", include_path?, asset? }\n\n' +
+            'Download (if not cached) an AMXX dependency and return the full contents of ' +
+            'all its .inc files. Use this to understand the public API, functions, ' +
+            'constants, and defines that a dependency exposes.\n\n' +
+            'Input modes — alternatives, not additive (pick one):\n' +
+            '  - `dep`: "owner/repo@ref" or "owner/repo@ref:include_path"\n' +
+            '  - explicit fields: `repo` (+ optional `ref`) with source/include_path/asset/ref_ttl\n' +
+            '  - a full dep-object arg bag: { source: "local", path } or { source: "fungun", id | url }\n\n' +
+            'Passing `dep` together with any of source/include_path/asset is a -32602 ' +
+            '(invalid params) error, not an additive override; dep parse/validation ' +
+            'failures also return -32602.\n\n' +
             'Results are cached in the same cache directory as amxb build (~/.cache/amxx-builder/).',
           inputSchema: {
             type: 'object',
@@ -26,27 +30,69 @@ const TOOLS = [
                 type: 'string',
                 description:
                   'Dependency string in format "owner/repo@ref" or "owner/repo@ref:include_path". ' +
+                  'Alternative to the explicit `repo`/source/include_path/asset fields and to a ' +
+                  'full dep-object arg bag — provide one input mode, not both. `dep` together with ' +
+                  'source/include_path/asset is an error (-32602).\n' +
                   'Examples:\n' +
                   '  "AmxxModularEcosystem/ParamsController@1.4.0"\n' +
                   '  "Next21Team/AmxxEasyHttp@1.4.0:amxx/scripting/include"\n' +
                   '  "rehlds/ReAPI@5.29.0.358"',
               },
+              repo: {
+                type: 'string',
+                description:
+                  'Alternative to `dep`: repository "owner/repo" (ref optional — default branch; ' +
+                  '"latest" when source=release). Not additive with `dep`.',
+              },
+              ref: {
+                type: 'string',
+                description: 'Ref (tag/branch/commit) when using `repo`. Default: default branch.',
+              },
               source: {
                 type: 'string',
-                description: 'Fetch method: "git" (clone repo) or "release" (download release asset)',
+                description:
+                  'Fetch method: "git" (clone repo) or "release" (download release asset) with `repo`; ' +
+                  'a full dep-object arg bag may use "local" (with `path`) or "fungun" (with `id`/`url`). ' +
+                  'Not additive with `dep` — combining with it is an error (-32602).',
                 default: 'git',
-                enum: ['git', 'release'],
+                enum: ['git', 'release', 'local', 'fungun'],
+              },
+              path: {
+                type: 'string',
+                description:
+                  'For an arg-bag dep with source="local": directory with the .inc files, relative to ' +
+                  'the manifest/cwd or absolute.',
+              },
+              id: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'For an arg-bag dep with source="fungun": plugin index on fungun.net (e.g. 106). ' +
+                  'Alternative to `url`.',
+              },
+              url: {
+                type: 'string',
+                description:
+                  'For an arg-bag dep with source="fungun": full plugin page URL instead of `id`.',
               },
               include_path: {
                 type: 'string',
                 description:
-                  'Override the path inside the repo/asset where .inc files are located. ' +
-                  'Auto-detected from the repo layout when omitted (same candidates as amxb build).',
+                  'Explicit-fields mode only (alternative to `dep` — combining with `dep` is an ' +
+                  'error, -32602). Override the path inside the repo/asset where .inc files are ' +
+                  'located. Auto-detected from the repo layout when omitted (same candidates as amxb build).',
               },
               asset: {
                 description:
-                  'For source=release: which release asset to download. ' +
+                  'Explicit-fields mode only (alternative to `dep` — combining with `dep` is an ' +
+                  'error, -32602). For source=release: which release asset to download. ' +
                   'Can be a glob pattern like "*-include*.zip" or an index number.',
+              },
+              ref_ttl: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'Explicit-fields mode only (`dep` input mode does not apply it): TTL of the cached ' +
+                  'ref→SHA resolution for git deps — "never", a duration like "30m"/"1h"/"7d", or an ' +
+                  'integer number of seconds. Default: tags cached forever, branches 1h.',
               },
               token: {
                 type: 'string',
@@ -81,7 +127,6 @@ const TOOLS = [
                 default: 0,
               },
             },
-            required: ['dep'],
           },
         },
         {
@@ -90,28 +135,78 @@ const TOOLS = [
           description:
             'Download (if not cached) an AMXX dependency and list available .inc files ' +
             'without reading their contents. Faster than get_dep_interface when you only ' +
-            'need to know what files exist.',
+            'need to know what files exist.\n\n' +
+            'Input modes — alternatives, not additive (pick one):\n' +
+            '  - `dep`: "owner/repo@ref" or "owner/repo@ref:include_path"\n' +
+            '  - explicit fields: `repo` (+ optional `ref`) with source/include_path/asset/ref_ttl\n' +
+            '  - a full dep-object arg bag: { source: "local", path } or { source: "fungun", id | url }\n\n' +
+            'Passing `dep` together with any of source/include_path/asset is a -32602 ' +
+            '(invalid params) error, not an additive override; dep parse/validation ' +
+            'failures also return -32602.',
           inputSchema: {
             type: 'object',
             properties: {
               dep: {
                 type: 'string',
                 description:
-                  'Dependency string in format "owner/repo@ref" or "owner/repo@ref:include_path".',
+                  'Dependency string in format "owner/repo@ref" or "owner/repo@ref:include_path". ' +
+                  'Alternative to the explicit `repo`/source/include_path/asset fields and to a ' +
+                  'full dep-object arg bag — provide one input mode, not both. `dep` together with ' +
+                  'source/include_path/asset is an error (-32602).',
+              },
+              repo: {
+                type: 'string',
+                description:
+                  'Alternative to `dep`: repository "owner/repo" (ref optional — default branch; ' +
+                  '"latest" when source=release). Not additive with `dep`.',
+              },
+              ref: {
+                type: 'string',
+                description: 'Ref (tag/branch/commit) when using `repo`. Default: default branch.',
               },
               source: {
                 type: 'string',
-                description: 'Fetch method: "git" or "release"',
+                description:
+                  'Fetch method: "git" (clone repo) or "release" (download release asset) with `repo`; ' +
+                  'a full dep-object arg bag may use "local" (with `path`) or "fungun" (with `id`/`url`). ' +
+                  'Not additive with `dep` — combining with it is an error (-32602).',
                 default: 'git',
-                enum: ['git', 'release'],
+                enum: ['git', 'release', 'local', 'fungun'],
+              },
+              path: {
+                type: 'string',
+                description:
+                  'For an arg-bag dep with source="local": directory with the .inc files, relative to ' +
+                  'the manifest/cwd or absolute.',
+              },
+              id: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'For an arg-bag dep with source="fungun": plugin index on fungun.net (e.g. 106). ' +
+                  'Alternative to `url`.',
+              },
+              url: {
+                type: 'string',
+                description:
+                  'For an arg-bag dep with source="fungun": full plugin page URL instead of `id`.',
               },
               include_path: {
                 type: 'string',
-                description: 'Override include path inside the repo/asset.',
+                description:
+                  'Explicit-fields mode only (alternative to `dep` — combining with `dep` is an ' +
+                  'error, -32602). Override include path inside the repo/asset.',
               },
               asset: {
                 description:
-                  'For source=release: asset selector (glob pattern or index).',
+                  'Explicit-fields mode only (alternative to `dep` — combining with `dep` is an ' +
+                  'error, -32602). For source=release: asset selector (glob pattern or index).',
+              },
+              ref_ttl: {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+                description:
+                  'Explicit-fields mode only (`dep` input mode does not apply it): TTL of the cached ' +
+                  'ref→SHA resolution for git deps — "never", a duration like "30m"/"1h"/"7d", or an ' +
+                  'integer number of seconds. Default: tags cached forever, branches 1h.',
               },
               token: {
                 type: 'string',
@@ -123,7 +218,6 @@ const TOOLS = [
                 default: false,
               },
             },
-            required: ['dep'],
           },
         },
         {

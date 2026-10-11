@@ -9,6 +9,9 @@ const logger = require('./logger');
 const { getCacheDir } = require('./cache-dir');
 const { copyDirContents, safeExtractTar, makeSiblingTmpDir } = require('./fs-utils');
 const { downloadToFile } = require('./download');
+const { resolveManifestPath } = require('./manifest-path');
+const { loadEnv } = require('./env');
+const { parseManifest } = require('./manifest');
 
 const AMXX_DROP = 'https://www.amxmodx.org/amxxdrop/';
 
@@ -341,6 +344,52 @@ async function resolveStdlibVersion({ version = null, manifest = null, noFetch =
   return { version: resolved, degraded, error: null };
 }
 
+/**
+ * Resolve the informational stdlib state for an interface: discover the manifest
+ * (unless an explicit version is given), load its .env, parse it (warning on
+ * failure, falling back to latest — Phase A semantics), then resolve the version
+ * and shape the compiler info. Never discovers a manifest when `version` is set.
+ *
+ * The discovery guard is a falsy `!version` (matching the previous serve/MCP
+ * wrappers): an explicit empty-string version still reads the manifest's pinned
+ * `amxmodx.version`.
+ *
+ * @param {object} [opts]
+ * @param {string|null} [opts.version=null]      - explicit version (skips manifest discovery)
+ * @param {string|null} [opts.manifestPath=null] - explicit path; else cwd auto-detection
+ * @param {boolean} [opts.noFetch=false]
+ * @returns {Promise<{version: string|null, degraded: boolean, platform: string,
+ *                    compilerPath: string|null, includeDir: string|null, cached: boolean}>}
+ * @throws {Error} INVALID_AMXMODX_VERSION for a malformed explicit version (raw code —
+ *   interfaces map it to their own error convention)
+ */
+async function resolveStdlibState({ version = null, manifestPath = null, noFetch = false } = {}) {
+  let manifest = null;
+  if (!version) {
+    manifestPath = manifestPath || resolveManifestPath().path;
+    if (fs.existsSync(manifestPath)) {
+      loadEnv(manifestPath, { quiet: true });
+      try {
+        manifest = parseManifest(manifestPath);
+      } catch (err) {
+        logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
+        manifest = null;
+      }
+    }
+  }
+  const { version: resolved, degraded, error } = await resolveStdlibVersion({
+    version,
+    manifest,
+    noFetch,
+  });
+  if (error) throw error;
+  if (resolved === null) {
+    return { version: null, degraded: false, platform: getHostPlatform(), compilerPath: null, includeDir: null, cached: false };
+  }
+  const info = await getCompilerInfo(resolved, { noFetch });
+  return { version: info.version, degraded, platform: info.platform, compilerPath: info.compilerPath, includeDir: info.includeDir, cached: info.cached };
+}
+
 function getPlatform() {
   return getHostPlatform();
 }
@@ -512,4 +561,4 @@ function findDir(root, name) {
   return null;
 }
 
-module.exports = { fetchCompiler, getCompilerInfo, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion, findNewestCachedCompiler, resolveAmxmodxVersion, resolveStdlibVersion };
+module.exports = { fetchCompiler, getCompilerInfo, getAmxmodxFullDir, getHostPlatform, fetchLatestVersion, findNewestCachedCompiler, resolveAmxmodxVersion, resolveStdlibVersion, resolveStdlibState };

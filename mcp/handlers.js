@@ -6,23 +6,21 @@ const path = require('path');
 const glob = require('fast-glob');
 
 const { fetchDepRoot, collectDepIncludeDirs, depLabel } = require('../src/deps-resolver');
-const { resolveAssets, readAssets, readDepManifest, collectDepAssets, collectLocalAssets } = require('../src/agent-assets');
-const { getCompilerInfo, resolveStdlibVersion } = require('../src/compiler-fetcher');
-const { resolveManifest, resolveGithubToken, parseDepString, parseDepObject, parseRefTtl, parseDocEntries, parseSkillEntries } = require('../src/manifest');
+const { resolveAssets, readAssets, readDepManifest, collectDepAssets, collectLocalAssets, readFileSafe, safeResolve } = require('../src/agent-assets');
+const { resolveStdlibState } = require('../src/compiler-fetcher');
+const { resolveManifest, resolveGithubToken, depFromParams, parseDepInput, parseDepList, parseDocEntries, parseSkillEntries } = require('../src/manifest');
 const { parseManifest }         = require('../src/manifest');
 const { validateManifestFile }  = require('../src/validate');
 const { getManifestSchema }     = require('../src/schema');
 const { getCacheInfo }          = require('../src/cache-info');
 const { buildDepTree, assembleRootDeps } = require('../src/deps-tree');
-const { resolveLocalEntry } = require('../src/local-sources');
-const { buildIncludeTree, fetchDepIncludeDir, parseIncludeDirective, searchIncludeFile, collectIncFiles } = require('../src/include-tree');
+const { buildIncludeTree, fetchDepIncludeDir, parseIncludeDirective, searchIncludeFile, collectIncFiles, buildIncludeSearchDirs } = require('../src/include-tree');
 const { listReleases, listTags } = require('../src/release-lister');
 const { buildPlanData }         = require('../src/build-plan');
-const { spawnCompiler, buildIncludeArgs, buildDefineArgs } = require('../src/compile-utils');
+const { compileFile }           = require('../src/compiler');
 const { buildIndex, searchIndex } = require('./symbol-index');
 const { loadEnv }               = require('../src/env');
 const { resolveManifestPath }   = require('../src/manifest-path');
-const logger                    = require('../src/logger');
 const { textResult, errorResult, applyOutputLimit, limitFiles } = require('./tool-result');
 const { RPC_HANDLERS }          = require('./rpc-tools');
 
@@ -35,39 +33,10 @@ function fallbackToken(token) {
 
 // ─── Dep parsing helpers ───────────────────────────────────────────────────────
 
-function parseDep(raw) {
-  if (typeof raw === 'string') return parseDepString(raw);
-  if (raw && typeof raw === 'object') return parseDepObject(raw);
-  throw new Error('Dep must be a string or an object');
-}
-
 // A local dep's declared `path` is relative to the manifest dir when one is in
 // scope, else the process cwd.
 function depBaseDir(args) {
   return args?.manifest ? path.dirname(path.resolve(args.manifest)) : process.cwd();
-}
-
-// Materialize a user-supplied `source: local` dep (parsed to `_localPathRaw`)
-// into an absolute `_localDir` via the core helper — no path logic in adapters.
-function resolveUserDep(dep, args) {
-  return resolveLocalEntry(dep, depBaseDir(args));
-}
-
-function readFileSafe(absPath) {
-  try {
-    const buf = fs.readFileSync(absPath);
-    try {
-      const text = buf.toString('utf8');
-      if (text.includes('\u0000')) {
-        return `[binary file, ${buf.length} bytes]`;
-      }
-      return text;
-    } catch (_) {
-      return `[binary file, ${buf.length} bytes]`;
-    }
-  } catch (err) {
-    return `[error reading file: ${err.message}]`;
-  }
 }
 
 /**
@@ -123,13 +92,10 @@ async function handleGetDepInterface(args, token, noFetch) {
   token = fallbackToken(token);
   let dep;
   try {
-    dep = resolveUserDep(parseDep(args?.dep || args), args);
+    dep = depFromParams(args, { baseDir: depBaseDir(args) });
   } catch (parseErr) {
-    return errorResult(parseErr.message);
+    return errorResult(parseErr.message, -32602);
   }
-  if (args?.source)         dep.source = args.source;
-  if (args?.include_path)   dep.include_path = args.include_path;
-  if (args?.asset != null)  dep.asset = args.asset;
 
   const srcDir      = await fetchDepIncludeDir(dep, token, noFetch);
   const incFiles    = await collectIncFiles(srcDir);
@@ -167,13 +133,10 @@ async function handleListDepIncs(args, token, noFetch) {
   token = fallbackToken(token);
   let dep;
   try {
-    dep = resolveUserDep(parseDep(args?.dep || args), args);
+    dep = depFromParams(args, { baseDir: depBaseDir(args) });
   } catch (parseErr) {
-    return errorResult(parseErr.message);
+    return errorResult(parseErr.message, -32602);
   }
-  if (args?.source)         dep.source = args.source;
-  if (args?.include_path)   dep.include_path = args.include_path;
-  if (args?.asset != null)  dep.asset = args.asset;
 
   const srcDir      = await fetchDepIncludeDir(dep, token, noFetch);
   const incFiles    = await collectIncFiles(srcDir);
@@ -206,21 +169,7 @@ async function handleGetDepTree(args, token, noFetch) {
     rootDeps = assembled.rootDeps;
     getDepsOverride = assembled.getDepsOverride;
   } else if (args?.deps) {
-    rootDeps = args.deps.map((entry) => {
-      if (typeof entry === 'string') {
-        const parsed = parseDep(entry);
-        return { repo: parsed.repo, ref: parsed.ref, source: parsed.source, include_path: parsed.include_path, asset: parsed.asset };
-      }
-      return {
-        repo: entry.repo,
-        ref: entry.ref,
-        source: entry.source || 'git',
-        include_path: entry.include_path || null,
-        asset: entry.asset != null ? entry.asset : null,
-        _localDir: entry._localDir || null,
-        ...(entry.ref_ttl != null ? { ref_ttl: parseRefTtl(entry.ref_ttl, `deps entry ${entry.repo}`) } : {}),
-      };
-    });
+    rootDeps = parseDepList(args.deps, { baseDir: depBaseDir(args) });
   } else {
     return errorResult('Provide either "manifest" or "deps"', -32602);
   }
@@ -308,44 +257,8 @@ async function handleBuildIncludeTree(args, token, noFetch) {
 
 // ─── AMXX standard include helpers ────────────────────────────────────────────
 
-/**
- * Resolve the AMX Mod X stdlib state for the informational stdlib tools.
- * Version priority (explicit `version` arg → manifest `amxmodx.version` →
- * latest) AND the graceful offline degradation live in core
- * (compiler-fetcher.resolveStdlibVersion); this wrapper only does arg/manifest
- * discovery and shapes the compiler info. Offline no_fetch stdlib calls get the
- * same graceful empty/degraded behavior as the serve interface: nothing cached
- * → { version: null } (no throw), a cached compiler → newest cached +
- * degraded: true.
- */
-async function resolveStdlibState(args, noFetch) {
-  let manifest = null;
-  if (!args?.version) {
-    const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
-    if (fs.existsSync(manifestPath)) {
-      loadEnv(manifestPath, { quiet: true });
-      try {
-        manifest = parseManifest(manifestPath);
-      } catch (err) {
-        logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
-      }
-    }
-  }
-  const { version, degraded, error } = await resolveStdlibVersion({
-    version: args?.version,
-    manifest,
-    noFetch,
-  });
-  if (error) throw error;
-  if (version === null) {
-    return { version: null, degraded: false, compilerPath: null, includeDir: null, cached: false };
-  }
-  const info = await getCompilerInfo(version, { noFetch });
-  return { version: info.version, degraded, compilerPath: info.compilerPath, includeDir: info.includeDir, cached: info.cached };
-}
-
 async function handleListAmxmodxIncs(args, token, noFetch) {
-  const state = await resolveStdlibState(args, noFetch);
+  const state = await resolveStdlibState({ version: args?.version, manifestPath: resolveManifestPath(args?.manifest || undefined).path, noFetch });
   const pattern = args?.pattern || '*.inc';
 
   if (!state.includeDir) {
@@ -376,7 +289,7 @@ async function handleListAmxmodxIncs(args, token, noFetch) {
 }
 
 async function handleGetAmxmodxInclude(args, token, noFetch) {
-  const state = await resolveStdlibState(args, noFetch);
+  const state = await resolveStdlibState({ version: args?.version, manifestPath: resolveManifestPath(args?.manifest || undefined).path, noFetch });
   const pattern = args?.file || args?.pattern || '*.inc';
   const grep    = args?.grep;
   const before  = args?.before || 0;
@@ -430,8 +343,32 @@ async function handleResolveInclude(args, token, noFetch) {
   }
 
   const { filename, localFirst } = parsed;
-  const searchPaths = [];
 
+  const state = await resolveStdlibState({ version: args?.version, manifestPath: resolveManifestPath(args?.manifest || undefined).path, noFetch });
+
+  // Dep includes come BEFORE the stdlib — matching the real build's search
+  // order (deps first, then the compiler bundle).
+  const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
+  const depErrors = [];
+  let manifest = null;
+  if (fs.existsSync(manifestPath)) {
+    loadEnv(manifestPath, { quiet: true });
+    try {
+      manifest = parseManifest(manifestPath);
+    } catch (err) {
+      depErrors.push(`manifest ${manifestPath}: ${err.message}`);
+    }
+  }
+
+  const { entries, errors: buildErrors } = await buildIncludeSearchDirs({
+    manifest,
+    stdlib: state,
+    noFetch,
+    ssh: manifest?.github.ssh,
+  });
+  depErrors.push(...buildErrors);
+
+  const searchPaths = entries;
   if (localFirst) {
     const smaDir = args?.sma_file
       ? path.dirname(path.resolve(args.sma_file))
@@ -439,36 +376,7 @@ async function handleResolveInclude(args, token, noFetch) {
     const label = args?.sma_file
       ? `local (${path.basename(args.sma_file)})`
       : 'local (current directory)';
-    searchPaths.push({ path: smaDir, label });
-  }
-
-  // Dep includes come BEFORE the stdlib — matching the real build's search
-  // order (deps first, then the compiler bundle).
-  const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
-  const depErrors = [];
-  if (fs.existsSync(manifestPath)) {
-    loadEnv(manifestPath, { quiet: true });
-    let manifest = null;
-    try {
-      manifest = parseManifest(manifestPath);
-    } catch (err) {
-      depErrors.push(`manifest ${manifestPath}: ${err.message}`);
-    }
-    if (manifest) {
-      const { dirs, errors: depErrs } = await collectDepIncludeDirs(manifest, {
-        noFetch,
-        ssh: manifest.github.ssh,
-      });
-      manifest.globalDeps.forEach((dep, i) => {
-        if (dirs[i]) searchPaths.push({ path: dirs[i], label: depLabel(dep) });
-        else if (depErrs[i]) depErrors.push(`${depLabel(dep)}: ${depErrs[i]}`);
-      });
-    }
-  }
-
-  const state = await resolveStdlibState(args, noFetch);
-  if (state.includeDir) {
-    searchPaths.push({ path: state.includeDir, label: `AMXX stdlib ${state.version}` });
+    searchPaths.unshift({ path: smaDir, label });
   }
 
   const result = searchIncludeFile(searchPaths, filename);
@@ -521,40 +429,11 @@ async function handleBuildPlan(args) {
 
 // ─── Repo file access ──────────────────────────────────────────────────────────
 
-/**
- * Build a parsed dep object from MCP tool args: either a full `dep` string/object
- * or explicit { repo, ref?, source?, include_path?, asset?, ref_ttl? } fields.
- * Preserves the arg-shape handling of the former inline fetchDepRoot.
- */
-function depFromArgs(args) {
-  let dep;
-  if (args?.dep) {
-    dep = parseDep(args.dep);
-  } else {
-    if (!args?.repo) throw new Error('Provide either "dep" or "repo"');
-    const source = args.source || 'git';
-    // Release deps need a ref — default to 'latest' when omitted.
-    const ref = args.ref || (source === 'release' ? 'latest' : null);
-    dep = {
-      repo: args.repo,
-      ref,
-      source,
-      include_path: args.include_path || null,
-      asset: args.asset ?? null,
-      ...(args.ref_ttl != null ? { ref_ttl: parseRefTtl(args.ref_ttl, `deps entry ${args.repo}`) } : {}),
-    };
-  }
-  if (args?.source)        dep.source = args.source;
-  if (args?.include_path)  dep.include_path = args.include_path;
-  if (args?.asset != null) dep.asset = args.asset;
-  return resolveUserDep(dep, args);
-}
-
 async function handleListRepoFiles(args, token, noFetch) {
   let root;
   try {
     token = fallbackToken(token);
-    const dep = depFromArgs(args);
+    const dep = depFromParams(args, { baseDir: depBaseDir(args) });
     root = await fetchDepRoot(dep, { token, noFetch });
   } catch (err) {
     return errorResult(err.message);
@@ -590,14 +469,16 @@ async function handleReadRepoFile(args, token, noFetch) {
   let root;
   try {
     token = fallbackToken(token);
-    const dep = depFromArgs(args);
+    const dep = depFromParams(args, { baseDir: depBaseDir(args) });
     root = await fetchDepRoot(dep, { token, noFetch });
   } catch (err) {
     return errorResult(err.message);
   }
 
-  const target = path.resolve(root.rootDir, args.file);
-  if (target !== root.rootDir && !target.startsWith(root.rootDir + path.sep)) {
+  let target;
+  try {
+    target = safeResolve(root.rootDir, args.file);
+  } catch {
     return errorResult(`Path escapes the repo root: "${args.file}"`);
   }
   if (!fs.existsSync(target) || fs.statSync(target).isDirectory()) {
@@ -661,7 +542,7 @@ async function handleGetDepManifest(args, token, noFetch) {
   token = fallbackToken(token);
   let dep;
   try {
-    dep = depFromArgs(args);
+    dep = depFromParams(args, { baseDir: depBaseDir(args) });
   } catch (err) {
     return errorResult(err.message);
   }
@@ -710,7 +591,7 @@ async function handleListAgentDocs(args, token, noFetch) {
   let result;
   try {
     result = isDepMode(args)
-      ? await collectDepAssets(depFromArgs(args), { token, noFetch })
+      ? await collectDepAssets(depFromParams(args, { baseDir: depBaseDir(args) }), { token, noFetch })
       : resolveLocalAssets(args);
   } catch (err) {
     return errorResult(err.message);
@@ -736,7 +617,7 @@ async function handleGetAgentDocs(args, token, noFetch) {
   let result;
   try {
     result = isDepMode(args)
-      ? await collectDepAssets(depFromArgs(args), { token, noFetch })
+      ? await collectDepAssets(depFromParams(args, { baseDir: depBaseDir(args) }), { token, noFetch })
       : resolveLocalAssets(args);
   } catch (err) {
     return errorResult(err.message);
@@ -781,7 +662,7 @@ async function handleListAgentSkills(args, token, noFetch) {
   let result;
   try {
     result = isDepMode(args)
-      ? await collectDepAssets(depFromArgs(args), { token, noFetch })
+      ? await collectDepAssets(depFromParams(args, { baseDir: depBaseDir(args) }), { token, noFetch })
       : resolveLocalAssets(args);
   } catch (err) {
     return errorResult(err.message);
@@ -812,7 +693,7 @@ async function handleGetAgentSkills(args, token, noFetch) {
   let result;
   try {
     result = isDepMode(args)
-      ? await collectDepAssets(depFromArgs(args), { token, noFetch })
+      ? await collectDepAssets(depFromParams(args, { baseDir: depBaseDir(args) }), { token, noFetch })
       : resolveLocalAssets(args);
   } catch (err) {
     return errorResult(err.message);
@@ -855,16 +736,12 @@ async function handleGetAgentSkills(args, token, noFetch) {
 
 // ─── Single-file compilation ───────────────────────────────────────────────────
 
-async function runCompiler(cmd, args) {
-  return spawnCompiler(cmd, args);
-}
-
 async function handleCompileSma(args, token, noFetch) {
   if (!args?.sma_file) return errorResult('Missing required "sma_file" parameter', -32602);
   const smaPath = path.resolve(args.sma_file);
   if (!fs.existsSync(smaPath)) return errorResult(`File not found: ${smaPath}`);
 
-  const state = await resolveStdlibState(args, noFetch);
+  const state = await resolveStdlibState({ version: args?.version, manifestPath: resolveManifestPath(args?.manifest || undefined).path, noFetch });
   if (!state.compilerPath) {
     return errorResult(
       'No amxxpc compiler is available (nothing cached and no-fetch is set).\n' +
@@ -872,44 +749,31 @@ async function handleCompileSma(args, token, noFetch) {
     );
   }
   const version = state.version;
-  const { compilerPath, includeDir } = state;
+  const { compilerPath } = state;
 
-  const depDirs = [];
   const depErrors = [];
   const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
+  let manifest = null;
   if (fs.existsSync(manifestPath)) {
     loadEnv(manifestPath, { quiet: true });
-    let manifest = null;
     try {
       manifest = parseManifest(manifestPath);
     } catch (err) {
       depErrors.push(`manifest ${manifestPath}: ${err.message}`);
     }
-    if (manifest) {
-      const { dirs, errors: depErrs } = await collectDepIncludeDirs(manifest, {
-        noFetch,
-        ssh: manifest.github.ssh,
-      });
-      manifest.globalDeps.forEach((dep, i) => {
-        if (dirs[i]) depDirs.push(dirs[i]);
-        else if (depErrs[i]) depErrors.push(`${depLabel(dep)}: ${depErrs[i]}`);
-      });
-    }
   }
 
   // Dep includes come BEFORE the stdlib — matching the real build's search
   // order (deps first, then the compiler bundle).
-  const includeDirs = [...depDirs];
-  if (includeDir) includeDirs.push(includeDir);
-  for (const d of args?.include_dirs || []) includeDirs.push(path.resolve(d));
-
-  const includes = buildIncludeArgs({
-    scriptingDir: path.dirname(smaPath),
-    localIncDir: path.join(path.dirname(smaPath), 'include'),
-    collectedIncDir: undefined,
-    includeDirs,
+  const { entries, errors: buildErrors } = await buildIncludeSearchDirs({
+    manifest,
+    stdlib: state,
+    noFetch,
+    ssh: manifest?.github.ssh,
+    extraDirs: args?.include_dirs,
   });
-  const defines = buildDefineArgs(args?.define);
+  depErrors.push(...buildErrors);
+  const includeDirs = entries.map((e) => e.path);
 
   const outDir = path.join(os.tmpdir(), 'amxb-mcp-compile');
   fs.mkdirSync(outDir, { recursive: true });
@@ -917,7 +781,8 @@ async function handleCompileSma(args, token, noFetch) {
   // so two compile_sma calls for the same file must not share an output path.
   const outPath = path.join(outDir, `${path.basename(smaPath, '.sma')}_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}.amxx`);
 
-  const { status, output } = await runCompiler(compilerPath, [smaPath, `-o${outPath}`, ...includes, ...defines]);
+  const compileManifest = { amxmodx: { defines: args?.define || [] } };
+  const { status, output } = await compileFile(compileManifest, smaPath, compilerPath, includeDirs, outPath);
 
   let msg = status === 0
     ? `Compiled OK (amxxpc ${version}): ${path.basename(smaPath)}`
@@ -1017,7 +882,7 @@ async function handleSearchSymbol(args, token, noFetch) {
   if (scope === 'all' || scope === 'stdlib') {
     jobs.push((async () => {
       try {
-        const state = await resolveStdlibState(args, noFetch);
+        const state = await resolveStdlibState({ version: args?.version, manifestPath: resolveManifestPath(args?.manifest || undefined).path, noFetch });
         if (state.includeDir) await addSource(`stdlib ${state.version}`, [state.includeDir], '**/*.inc');
       } catch (err) {
         errors.push(`stdlib: ${err.message}`);
@@ -1032,7 +897,7 @@ async function handleSearchSymbol(args, token, noFetch) {
   const manifestDeps = manifest?.globalDeps?.length ? manifest.globalDeps : [];
   const userDeps = manifest?.globalDeps?.length
     ? []
-    : (args?.deps || []).map((entry) => resolveUserDep(parseDep(entry), args));
+    : (args?.deps || []).map((entry) => parseDepInput(entry, { baseDir: depBaseDir(args) }));
   if (scope === 'all' || scope === 'deps') {
     const ssh = manifest?.github?.ssh === true;
     if (manifestDeps.length) {

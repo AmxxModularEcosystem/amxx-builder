@@ -227,6 +227,34 @@ async function findExcluded(dir, patterns) {
 }
 
 /**
+ * Pure single-file compile primitive: assemble the `-i`/define args from
+ * `manifest` + `includeDirs`, then spawn the compiler writing to `outPath`.
+ * No events, no output-path computation, never rejects (spawnCompiler always
+ * resolves). Shared by `compileSingle` (watch/serve) and the MCP compile tool,
+ * which must stay side-effect-free.
+ *
+ * @param {object} manifest     - resolved manifest (only `amxmodx.defines` is read)
+ * @param {string} smaPath      - absolute .sma path
+ * @param {string} compilerPath - amxxpc binary
+ * @param {string[]} includeDirs - extra `-i` dirs, after scripting/local/collected
+ * @param {string} outPath      - target .amxx path
+ * @param {{scriptingRootDir?: string|null, collectedIncDir?: string|null}} [opts]
+ * @returns {Promise<{ status: number, output: string }>}
+ */
+async function compileFile(manifest, smaPath, compilerPath, includeDirs, outPath,
+                           { scriptingRootDir = null, collectedIncDir = null } = {}) {
+  const scriptingDir = scriptingRootDir || path.dirname(smaPath);
+  const localIncDir  = path.join(scriptingDir, 'include');
+  const includes = buildIncludeArgs({ scriptingDir, localIncDir, collectedIncDir, includeDirs });
+
+  const defines = buildDefineArgs(manifest.amxmodx.defines);
+
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+
+  return spawnCompiler(compilerPath, [smaPath, `-o${outPath}`, ...includes, ...defines]);
+}
+
+/**
  * Compiles a single .sma file. Used by watch mode.
  * Returns the .amxx filename on success, null on failure.
  *
@@ -245,15 +273,10 @@ async function compileSingle(manifest, smaPath, compilerPath, includeDirs, build
   const outName  = rel.replace(/\.sma$/, '.amxx').split(path.sep).join('/');
   const outPath  = path.join(pluginsDir, ...outName.split('/'));
 
-  const scriptingDir = scriptingRootDir || path.dirname(smaPath);
-  const localIncDir  = path.join(scriptingDir, 'include');
-  const includes = buildIncludeArgs({ scriptingDir, localIncDir, collectedIncDir, includeDirs });
-
-  const defines = buildDefineArgs(manifest.amxmodx.defines);
-
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
-
-  const { status, output } = await spawnCompiler(compilerPath, [smaPath, `-o${outPath}`, ...includes, ...defines]);
+  const { status, output } = await compileFile(manifest, smaPath, compilerPath, includeDirs, outPath, {
+    scriptingRootDir,
+    collectedIncDir,
+  });
 
   if (status !== 0) {
     emit(EVENTS.COMPILED, { baseName, ok: false, output, amxxName: null, repo: null, ref: null, outName, tag: eventTag });
@@ -264,4 +287,4 @@ async function compileSingle(manifest, smaPath, compilerPath, includeDirs, build
   return outName;
 }
 
-module.exports = { compilePlugins, compileSingle, applyPluginRule };
+module.exports = { compilePlugins, compileSingle, compileFile, applyPluginRule };

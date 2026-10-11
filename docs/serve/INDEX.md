@@ -96,7 +96,7 @@ child.stdin.write(JSON.stringify({
 |---|---|---|
 | `-32700` | Parse error | Строка не является валидным JSON (сервер пытается извлечь `id` из строки) |
 | `-32601` | Method not found | Неизвестный метод |
-| `-32602` | Invalid params | Отсутствует/невалиден обязательный параметр (см. методы ниже) |
+| `-32602` | Invalid params | Отсутствует/невалиден параметр (см. методы ниже), включая ошибки разбора `dep`-параметров (`manifest.dep`, `docs.*`, `skills.*`) |
 | `-32603` | Internal error | Ошибка внутри core-логики. Для GitHub-ошибок (`repos.*`, `releases.list`) содержит структурированные детали в `error.data = { "status", "repo", "message" }` |
 | `-32000` | Server error | Конфликт состояния: `build.start` при уже идущей сборке, `watch.start` при уже активном watcher'е |
 
@@ -152,8 +152,11 @@ child.stdin.write(JSON.stringify({
 | `source` | string | `"git"` (по умолчанию) или `"release"` |
 | `include_path` | string | Считать этот путь внутри репо корнем при поиске манифеста |
 | `asset` | string \| number | Для `source: release` — селектор ассета (glob или индекс) |
+| `ref_ttl` | string \| number | Режим явных полей: TTL кэша резолва `ref → SHA` для git-dep — `"never"`, длительность (`30m`/`1h`/`7d`) или целое число секунд (как в `deps.tree`) |
 | `token` | string | GitHub PAT (фолбек, если токена нет в манифесте) |
 | `noFetch` | boolean | Только кэш |
+
+`dep` и явные поля — взаимоисключающие режимы ввода, а не аддитивные: указать `dep` вместе с `source`/`include_path`/`asset` — ошибка `-32602`. Явные поля (`source`/`include_path`/`asset`/`ref_ttl`) действуют только в режиме `repo`; `ref_ttl` обрабатывается общим маппером депов — так же, как в `deps.tree`.
 
 Ответ:
 
@@ -181,7 +184,7 @@ child.stdin.write(JSON.stringify({
 | Параметр | Тип | Описание |
 |---|---|---|
 | `dep` | string | Зависимость `owner/repo@ref` (или `owner/repo@ref:include_path`) |
-| `repo` / `ref` / `source` / `include_path` / `asset` | — | Альтернатива `dep`: репозиторий и опции напрямую |
+| `repo` / `ref` / `source` / `include_path` / `asset` / `ref_ttl` | — | Альтернатива `dep`: репозиторий и опции напрямую (`ref_ttl` — TTL кэша резолва `ref → SHA`, как в `deps.tree`). Режимы не комбинируются: `dep` вместе с `source`/`include_path`/`asset` — ошибка `-32602` |
 | `manifest` | string | Локальный режим: путь к `amxbuild.yml` (по умолчанию автоопределение в cwd) |
 | `token` | string | GitHub PAT |
 | `noFetch` | boolean | Только кэш |
@@ -209,7 +212,7 @@ child.stdin.write(JSON.stringify({
 
 | Параметр | Тип | Описание |
 |---|---|---|
-| `dep` / `repo` / `ref` / `source` / `include_path` / `asset` | — | Как в `docs.list`; без `dep`/`repo` — локальный проект |
+| `dep` / `repo` / `ref` / `source` / `include_path` / `asset` / `ref_ttl` | — | Как в `docs.list`; без `dep`/`repo` — локальный проект (`ref_ttl` — TTL кэша резолва `ref → SHA`, как в `deps.tree`) |
 | `manifest` | string | Локальный режим: путь к `amxbuild.yml` |
 | `token` | string | GitHub PAT |
 | `noFetch` | boolean | Только кэш |
@@ -337,7 +340,7 @@ child.stdin.write(JSON.stringify({
 | Параметр | Тип | Описание |
 |---|---|---|
 | `manifest` | string | Построить дерево из манифеста (repos + globalDeps, учитывая `deps_override`) |
-| `deps` | array | Вместо манифеста: массив строк (`"owner/repo@ref"`) или объектов `{repo, ref, source?, include_path?, asset?, ref_ttl?}`. Для git-объекта `ref_ttl` задаёт TTL кэша резолва `ref → SHA` (`never`, длительность вида `30m`/`1h`/`7d` или целое число секунд; по умолчанию тег — вечно, ветка — 1ч) |
+| `deps` | array | Вместо манифеста: массив строк (`"owner/repo@ref"`) или объектов `{repo, ref, source?, include_path?, asset?, ref_ttl?}`. Для git-объекта `ref_ttl` задаёт TTL кэша резолва `ref → SHA` (`never`, длительность вида `30m`/`1h`/`7d` или целое число секунд; по умолчанию тег — вечно, ветка — 1ч). Те же правила `ref_ttl` применяют dep-методы `manifest.dep`, `docs.*`, `skills.*` — через общий маппер депов |
 | `depth` | number | Макс. глубина (0 = без ограничений) |
 | `token` | string | GitHub PAT |
 | `noFetch` | boolean | Только кэш |

@@ -13,7 +13,7 @@ const { findManifestInDir } = require('./manifest-path');
  * @param {string} abs - absolute file path
  * @returns {string}
  */
-function safeRead(abs) {
+function readFileSafe(abs) {
   try {
     const buf = fs.readFileSync(abs);
     const text = buf.toString('utf8');
@@ -114,12 +114,12 @@ function resolveAssets({ docs, skills }, rootDir) {
  */
 function readAssets(resolved) {
   return {
-    docs: resolved.docs.map((d) => ({ ...d, content: safeRead(d.abs) })),
+    docs: resolved.docs.map((d) => ({ ...d, content: readFileSafe(d.abs) })),
     skills: resolved.skills.map((s) => {
       if (s.kind === 'dir') {
-        return { ...s, files: s.files.map((f) => ({ rel: f.rel, content: safeRead(f.abs) })) };
+        return { ...s, files: s.files.map((f) => ({ rel: f.rel, content: readFileSafe(f.abs) })) };
       }
-      return { ...s, content: safeRead(s.abs) };
+      return { ...s, content: readFileSafe(s.abs) };
     }),
     missing: resolved.missing,
   };
@@ -198,6 +198,8 @@ function collectLocalAssets(manifest) {
 }
 
 module.exports = {
+  readFileSafe,
+  safeResolve,
   resolveAssets,
   readAssets,
   readDepManifest,
