@@ -48,6 +48,15 @@ function withRoutes(r, fn) {
   return fn().finally(() => { routes = null; });
 }
 
+// Replaces global.setTimeout with an immediate-fire recorder (same pattern as
+// test/retry.test.js): retry backoff is captured, never actually slept.
+function stubTimers() {
+  const captured = [];
+  const orig = global.setTimeout;
+  global.setTimeout = (fn, ms) => { captured.push(ms); fn(); return 0; };
+  return { captured, restore() { global.setTimeout = orig; } };
+}
+
 const isRepo = (repo) => (u) => u.endsWith(`/repos/${repo}`);
 const isTree = () => (u) => u.includes('/git/trees/');
 const isBranches = (repo) => (u) => u.includes(`/repos/${repo}/branches`);
@@ -158,12 +167,57 @@ test('getRepoInfo: non-404 errors throw GithubError with status', async () => {
 });
 
 test('getRepoInfo: network errors throw GithubError with status null', async () => {
-  await withRoutes([[(u) => true, () => { throw new Error('timeout'); }]], async () => {
-    await assert.rejects(
-      () => getRepoInfo('o/r', {}),
-      (err) => err instanceof GithubError && err.status === null
-    );
-  });
+  const timers = stubTimers();
+  let calls = 0;
+  try {
+    await withRoutes([[(u) => true, () => { calls++; throw new Error('timeout'); }]], async () => {
+      await assert.rejects(
+        () => getRepoInfo('o/r', {}),
+        (err) => err instanceof GithubError && err.status === null
+      );
+    });
+  } finally {
+    timers.restore();
+  }
+  assert.equal(calls, 3, 'no-response network error is transient → retried up to attempts');
+  assert.equal(timers.captured.length, 2);
+});
+
+// ─── withRetry around the raw axios.get ──────────────────────────────────────
+
+test('getRepoInfo: transient 500 is retried then succeeds', async () => {
+  const timers = stubTimers();
+  let calls = 0;
+  try {
+    await withRoutes([[isRepo('o/r'), () => {
+      calls++;
+      if (calls === 1) throw axiosError(500);
+      return { private: false, archived: false, disabled: false, default_branch: 'main', description: null, pushed_at: null };
+    }]], async () => {
+      const info = await getRepoInfo('o/r', {});
+      assert.equal(info.exists, true);
+      assert.equal(info.defaultBranch, 'main');
+    });
+  } finally {
+    timers.restore();
+  }
+  assert.equal(calls, 2);
+  assert.equal(timers.captured.length, 1);
+});
+
+test('getRepoInfo: permanent 404 is not retried', async () => {
+  const timers = stubTimers();
+  let calls = 0;
+  try {
+    await withRoutes([[isRepo('gone/r'), () => { calls++; throw axiosError(404); }]], async () => {
+      const info = await getRepoInfo('gone/r', {});
+      assert.deepEqual(info, { repo: 'gone/r', exists: false, reason: 'not_found_or_no_access' });
+    });
+  } finally {
+    timers.restore();
+  }
+  assert.equal(calls, 1, '404 is permanent — axios.get must be called exactly once');
+  assert.equal(timers.captured.length, 0);
 });
 
 // ─── getRefKind ───────────────────────────────────────────────────────────────

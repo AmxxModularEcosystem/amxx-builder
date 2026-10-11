@@ -1,10 +1,12 @@
 'use strict';
 
 const logger = require('../logger');
+const { resolveManifestPath } = require('../manifest-path');
+const { loadEnv } = require('../env');
 const { listReleases, listTags } = require('../release-lister');
 
 async function runReleases(repo, options) {
-  require('dotenv').config({ override: true });
+  loadEnv(resolveManifestPath().path, { override: false });
   const token = process.env.GITHUB_TOKEN || null;
   const limit = options.limit || 10;
   const asJson = options.json || false;

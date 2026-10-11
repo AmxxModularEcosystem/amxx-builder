@@ -31,7 +31,7 @@ const { spawnSync } = require('node:child_process');
 const zlib = require('node:zlib');
 
 const axios = require('axios');
-const { fetchRepo, getRepoCacheDir } = require('../src/repo-fetcher');
+const { fetchRepo, resolveRef, getRepoCacheDir } = require('../src/repo-fetcher');
 const logger = require('../src/logger');
 const { setEnabled } = require('../src/progress');
 
@@ -178,6 +178,15 @@ function makeState() {
   return { defaultBranch: 'main', commits: {}, tarballs: {}, failApi: null };
 }
 
+// Replaces global.setTimeout with an immediate-fire recorder (same pattern as
+// test/retry.test.js): retry backoff is captured, never actually slept.
+function stubTimers() {
+  const captured = [];
+  const orig = global.setTimeout;
+  global.setTimeout = (fn, ms) => { captured.push(ms); fn(); return 0; };
+  return { captured, restore() { global.setTimeout = orig; } };
+}
+
 const apiCalls = (calls) => calls.filter((c) => c.url.startsWith('https://api.github.com/'));
 const dlCalls  = (calls) => calls.filter((c) => c.url.startsWith('https://codeload.github.com/'));
 
@@ -237,7 +246,13 @@ test('branch moved upstream: new SHA downloads into a new dir, old dir untouched
   state.tarballs[shaB1] = tarGz('beta-' + shaB1, 'hello.txt', 'old head');
   state.tarballs[shaB2] = tarGz('beta-' + shaB2, 'hello.txt', 'new head');
 
-  const dir1 = await fetchRepo(repoB, 'dev', null, false);
+  const timers = stubTimers();
+  let dir1;
+  try {
+    dir1 = await fetchRepo(repoB, 'dev', null, false);
+  } finally {
+    timers.restore();
+  }
   assert.equal(dir1, getRepoCacheDir(repoB, shaB1));
   assert.equal(fs.readFileSync(path.join(dir1, 'hello.txt'), 'utf8'), 'old head');
 
@@ -279,7 +294,13 @@ test('TTL-expired resolution returning the same SHA: reuse dir, extend entry, no
   state.commits.dev = shaC;
   state.tarballs[shaC] = tarGz('gamma-' + shaC, 'hello.txt', 'stable');
 
-  const first = await fetchRepo(repoC, 'dev', null, false);
+  const timers = stubTimers();
+  let first;
+  try {
+    first = await fetchRepo(repoC, 'dev', null, false);
+  } finally {
+    timers.restore();
+  }
   assert.equal(first, getRepoCacheDir(repoC, shaC));
 
   const aged = Date.now() - 2 * 3600 * 1000;
@@ -355,7 +376,13 @@ test('offline head re-resolution (API 500) with cached SHA + dir: warn and reuse
   const dir = seedCloneDir(repoE, shaE, 'last known good');
   state.failApi = 500;
 
-  const result = await fetchRepo(repoE, 'dev', null, false);
+  const timers = stubTimers();
+  let result;
+  try {
+    result = await fetchRepo(repoE, 'dev', null, false);
+  } finally {
+    timers.restore();
+  }
 
   assert.equal(result, dir, 'fell back to the stale cached head');
   assert.equal(fs.readFileSync(path.join(result, 'hello.txt'), 'utf8'), 'last known good');
@@ -368,10 +395,15 @@ test('offline head resolution (API 500) with empty cache throws the resolve hint
   useTempCache(t);
   state.failApi = 500;
 
-  await assert.rejects(
-    fetchRepo('org/epsilon2', 'dev', null, false),
-    /Failed to resolve ref dev of org\/epsilon2/
-  );
+  const timers = stubTimers();
+  try {
+    await assert.rejects(
+      fetchRepo('org/epsilon2', 'dev', null, false),
+      /Failed to resolve ref dev of org\/epsilon2/
+    );
+  } finally {
+    timers.restore();
+  }
 });
 
 // ─── (f) explicit tag ref: stable across runs ───────────────────────────────
@@ -387,7 +419,13 @@ test('explicit tag ref fetches correctly and stays stable across runs (TTL exten
   state.commits['v1.2.3'] = shaF;
   state.tarballs[shaF] = tarGz('zeta-' + shaF, 'hello.txt', 'tagged release');
 
-  const first = await fetchRepo(repoF, 'v1.2.3', null, false);
+  const timers = stubTimers();
+  let first;
+  try {
+    first = await fetchRepo(repoF, 'v1.2.3', null, false);
+  } finally {
+    timers.restore();
+  }
   assert.equal(first, getRepoCacheDir(repoF, shaF));
 
   calls.length = 0;
@@ -539,10 +577,12 @@ test('ref kind probe failure warns, keeps the branch TTL and never fails the fet
   const warnings = [];
   const origWarn = logger.warn;
   logger.warn = (msg) => warnings.push(msg);
+  const timers = stubTimers();
   let dir;
   try {
     dir = await fetchRepo(repo, 'dev', null, false);
   } finally {
+    timers.restore();
     logger.warn = origWarn;
   }
 
@@ -581,4 +621,51 @@ test('a known kind survives a TTL-forced re-resolution without a new probe', asy
   ], 'kind is already known — no git/ref probe on re-resolution');
   assert.equal(dlCalls(calls).length, 0);
   assert.equal(readRefHeads(cacheRoot)[`org/ttl-preserve@v3`].kind, 'tag');
+});
+
+// ─── resolveRef (latest): retry around the raw axios.get ─────────────────────
+
+test('resolveRef: transient 500 is retried then resolves the tag', async (t) => {
+  useTempCache(t);
+
+  let calls = 0;
+  const orig = axios.get;
+  axios.get = async () => {
+    calls++;
+    if (calls === 1) throw makeAxiosError('boom', 500);
+    return { data: { tag_name: 'v1.2.3' } };
+  };
+  t.after(() => { axios.get = orig; });
+
+  const timers = stubTimers();
+  let tag;
+  try {
+    tag = await resolveRef('org/latest-retry', 'latest', null);
+  } finally {
+    timers.restore();
+  }
+  assert.equal(tag, 'v1.2.3');
+  assert.equal(calls, 2);
+  assert.equal(timers.captured.length, 1);
+});
+
+test('resolveRef: permanent 404 is not retried', async (t) => {
+  useTempCache(t);
+
+  let calls = 0;
+  const orig = axios.get;
+  axios.get = async () => { calls++; throw makeAxiosError('gone', 404); };
+  t.after(() => { axios.get = orig; });
+
+  const timers = stubTimers();
+  try {
+    await assert.rejects(
+      () => resolveRef('org/latest-gone', 'latest', null),
+      /Failed to resolve latest release for org\/latest-gone/
+    );
+  } finally {
+    timers.restore();
+  }
+  assert.equal(calls, 1, '404 is permanent — axios.get must be called once');
+  assert.equal(timers.captured.length, 0);
 });

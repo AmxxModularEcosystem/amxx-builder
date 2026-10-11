@@ -13,7 +13,7 @@ const { DepGraph }           = require('../dep-graph');
 const { startWatch }         = require('../watcher');
 const { resolveRepoRefs } = require('../repo-fetcher');
 const { ensureRepoDir }   = require('../local-sources');
-const { resolveDeps, repoKey } = require('../deps-resolver');
+const { resolveDeps, repoKey, normalizeRepo } = require('../deps-resolver');
 const { resolveManifestPath, loadEnv } = require('./shared');
 const { runBuild } = require('./build');
 const { subscribeCompiledRendering } = require('./compile-renderer');
@@ -56,13 +56,16 @@ async function runWatch(options) {
     const repoLocalDirs = {};
     if (manifest.repos.length > 0) {
       await resolveRepoRefs(manifest.repos, (repo) => resolveGithubToken(manifest, repo));
+      // Dedup by the case-insensitive normalizeRepo identity (two spellings of
+      // the same repo are one clone job), then map every manifest entry's raw
+      // repoKey to the shared dir — mirroring src/build-service.js.
       const cloneJobs = new Map();
       for (const repoConfig of manifest.repos) {
-        const key = repoKey(repoConfig);
-        if (!cloneJobs.has(key)) {
+        const identity = normalizeRepo(repoConfig);
+        if (!cloneJobs.has(identity)) {
           // Cache-only, like before; ensureRepoDir returns `_localDir` for
           // local entries (no network, no noFetch check).
-          cloneJobs.set(key,
+          cloneJobs.set(identity,
             ensureRepoDir(repoConfig, {
               token: resolveGithubToken(manifest, repoConfig.repo),
               noFetch: true,
@@ -71,10 +74,10 @@ async function runWatch(options) {
           );
         }
       }
-      const cloned = await Promise.all(
-        [...cloneJobs.entries()].map(async ([key, p]) => ({ key, dir: await p }))
-      );
-      for (const { key, dir } of cloned) repoLocalDirs[key] = dir;
+      await Promise.all(cloneJobs.values());
+      for (const repoConfig of manifest.repos) {
+        repoLocalDirs[repoKey(repoConfig)] = await cloneJobs.get(normalizeRepo(repoConfig));
+      }
     }
 
     const depsIncludeDirs = await resolveDeps(manifest, repoLocalDirs, true, buildDir);

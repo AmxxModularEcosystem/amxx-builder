@@ -76,6 +76,21 @@ function releaseCacheDirFor(repo, ref) {
   return path.join(process.env.AMXX_BUILDER_CACHE, 'release-deps', key);
 }
 
+function httpError(status) {
+  const err = new Error(`Request failed with status code ${status}`);
+  err.response = { status, data: {} };
+  return err;
+}
+
+// Replaces global.setTimeout with an immediate-fire recorder (same pattern as
+// test/retry.test.js): retry backoff is captured, never actually slept.
+function stubTimers() {
+  const captured = [];
+  const orig = global.setTimeout;
+  global.setTimeout = (fn, ms) => { captured.push(ms); fn(); return 0; };
+  return { captured, restore() { global.setTimeout = orig; } };
+}
+
 // ─── downloadAsset: header handling ─────────────────────────────────────────
 
 function stubAxiosGet(capture) {
@@ -207,4 +222,62 @@ test('fetchReleaseDep: repopulates a marker-less partial cache and ignores a lef
   assert.equal(fs.existsSync(`${cacheDir}.tmp-999-deadbeef`), true, 'other process temp dir left alone');
   const leftovers = fs.readdirSync(cacheDir).filter((f) => f.endsWith('.part'));
   assert.deepEqual(leftovers, [], 'no .part files left in the cache dir');
+});
+
+// ─── fetchRelease: retry around the raw release API axios.get ────────────────
+
+test('fetchReleaseDep: transient 500 on the release API is retried', async (t) => {
+  useTempCache(t);
+
+  let apiCalls = 0;
+  const orig = axios.get;
+  axios.get = async (url) => {
+    if (url.startsWith('https://api.github.com/')) {
+      apiCalls++;
+      if (apiCalls === 1) throw httpError(500);
+      return { data: { assets: [{ name: 'pack.zip', browser_download_url: 'https://example.com/pack.zip' }] }, headers: {} };
+    }
+    const buf = makeZipBuffer();
+    return {
+      data: stubStreamBody(buf),
+      headers: { 'content-type': 'application/zip', 'content-length': String(buf.length) },
+    };
+  };
+  t.after(() => { axios.get = orig; });
+
+  const timers = stubTimers();
+  try {
+    const dir = await fetchReleaseDep({ repo: 'org/retry-pack', ref: 'v1.0.0' }, null, false);
+    assert.ok(dir.endsWith(path.join('addons', 'amxmodx', 'scripting', 'include')), 'auto-detected include path');
+  } finally {
+    timers.restore();
+  }
+  assert.equal(apiCalls, 2);
+  // The download path also schedules a 30-min deadline; the sub-minute value is
+  // the retry backoff jitter, proving a retry wait was scheduled (not slept).
+  assert.ok(timers.captured.some((ms) => ms < 60000), 'a retry backoff was scheduled');
+});
+
+test('fetchReleaseDep: permanent 404 on the release API is not retried', async (t) => {
+  useTempCache(t);
+
+  let apiCalls = 0;
+  const orig = axios.get;
+  axios.get = async (url) => {
+    if (url.startsWith('https://api.github.com/')) { apiCalls++; throw httpError(404); }
+    throw new Error('unexpected download URL: ' + url);
+  };
+  t.after(() => { axios.get = orig; });
+
+  const timers = stubTimers();
+  try {
+    await assert.rejects(
+      () => fetchReleaseDep({ repo: 'org/missing-pack', ref: 'v9.9.9' }, null, false),
+      /Failed to fetch release/
+    );
+  } finally {
+    timers.restore();
+  }
+  assert.equal(apiCalls, 1, '404 is permanent — the release API must be called once');
+  assert.equal(timers.captured.length, 0);
 });

@@ -14,7 +14,7 @@ async function runDoctor(options) {
   const note = [];
 
   const nodeMajor = parseInt(process.version.slice(1).split('.')[0], 10);
-  (nodeMajor >= 16 ? ok : warn).push(`Node.js: ${process.version.slice(1)}${nodeMajor >= 16 ? '' : ' (minimum 16 required)'}`);
+  (nodeMajor >= 18 ? ok : warn).push(`Node.js: ${process.version.slice(1)}${nodeMajor >= 18 ? '' : ' (minimum 18 required)'}`);
 
   try {
     const gitVer = execSync('git --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
@@ -42,11 +42,8 @@ async function runDoctor(options) {
     warn.push('GitHub API: unreachable (check internet)');
   }
 
-  const manifestPath = options.manifest
-    ? path.resolve(options.manifest)
-    : fs.existsSync('./amxbuild.yml') ? './amxbuild.yml'
-    : fs.existsSync('./amxbuild.yaml') ? './amxbuild.yaml'
-    : null;
+  const { resolveManifestPath } = require('./shared');
+  const manifestPath = resolveManifestPath(options.manifest);
 
   if (manifestPath && fs.existsSync(manifestPath)) {
     try {

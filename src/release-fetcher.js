@@ -1,6 +1,7 @@
 const fs   = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { withRetry } = require('./retry');
 // Default for API calls; download sites pass their own longer timeout.
 axios.defaults.timeout = 30000;
 const AdmZip = require('adm-zip');
@@ -94,9 +95,9 @@ async function ensureReleaseCacheDir(repo, ref, assetSelector, token, noFetch, l
 
 async function fetchRelease(repo, tag, headers) {
   try {
-    const { data } = await axios.get(
-      `https://api.github.com/repos/${repo}/releases/tags/${tag}`,
-      { headers }
+    const { data } = await withRetry(
+      () => axios.get(`https://api.github.com/repos/${repo}/releases/tags/${tag}`, { headers }),
+      { label: `release ${repo}@${tag}` }
     );
     return data;
   } catch (err) {

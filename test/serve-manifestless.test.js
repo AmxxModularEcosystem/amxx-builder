@@ -24,7 +24,20 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
+// The A3 cases below drive resolveVersionFromParams (via dep-graph.get /
+// compile.single) with no explicit version, which would otherwise require a
+// network-backed latest-version lookup and a real compiler spawn. Pin the
+// version and stub the spawn so every manifest-parse site is asserted offline.
+// These replace the module exports serve destructures at require time;
+// resolveStdlibVersion keeps its own internal reference, so the stdlib cases
+// above are unaffected.
+const compilerFetcher = require('../src/compiler-fetcher');
+const compilerModule  = require('../src/compiler');
+compilerFetcher.resolveAmxmodxVersion = async () => '1.10.5428';
+compilerModule.compileSingle = async () => 'stub.amxx';
+
 const { createServeServer } = require('../src/commands/serve');
+const { on, off, EVENTS } = require('../src/events');
 
 const PLATFORM = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : 'linux';
 const BIN      = PLATFORM === 'windows' ? 'amxxpc.exe' : 'amxxpc';
@@ -191,4 +204,87 @@ test('compiler.info: latest known but not downloaded + noFetch → truthful not-
   assert.equal(result.degraded, undefined); // strict: do NOT silently serve the older cached stdlib
   assert.equal(result.cached, false);
   assert.equal(result.includeDir, null);
+});
+
+// ─── A3: manifest parse failures warn on all four serve sites ───────────────
+
+const logger = require('../src/logger');
+logger.setStderr(true); // keep test stdout clean; production serve does the same
+
+const INVALID_YAML = 'name: T\nbroken: [1, 2\n'; // unclosed flow → parse error
+
+function captureWarnings() {
+  const warnings = [];
+  const listener = (entry) => { if (entry && entry.level === 'warn') warnings.push(entry.message); };
+  on(EVENTS.LOG, listener);
+  return { warnings, stop: () => off(EVENTS.LOG, listener) };
+}
+
+function invalidManifestIn(prefix) {
+  const project = makeTmpDir(prefix);
+  return { project, manifest: writeFile(project, 'amxbuild.yml', INVALID_YAML) };
+}
+
+test('A3 site 2 (compiler.info): invalid manifest → warn + graceful state', async (t) => {
+  useTempCache(t, 'amxb-a3-s2-');
+  const { manifest } = invalidManifestIn('amxb-a3-s2-proj-');
+
+  const cap = captureWarnings();
+  let result;
+  try {
+    result = await call('compiler.info')({ manifest, noFetch: true });
+  } finally {
+    cap.stop();
+  }
+  assert.ok(result);
+  assert.ok(cap.warnings.some((m) => /Manifest parse failed/.test(m)), 'expected a parse-failure warning');
+});
+
+test('A3 (include.resolve): invalid manifest → warn + graceful not-found', async (t) => {
+  useTempCache(t, 'amxb-a3-ir-');
+  const { manifest } = invalidManifestIn('amxb-a3-ir-proj-');
+
+  const cap = captureWarnings();
+  let result;
+  try {
+    result = await call('include.resolve')({ manifest, directive: '#include <nope.inc>', noFetch: true });
+  } finally {
+    cap.stop();
+  }
+  assert.equal(result.found, false);
+  assert.ok(cap.warnings.some((m) => /Manifest parse failed/.test(m)), 'expected a parse-failure warning');
+});
+
+test('A3 sites 1+3 (dep-graph.get): invalid manifest → warn + graceful graph', async (t) => {
+  const cache = useTempCache(t, 'amxb-a3-dg-');
+  seedCompiler(cache, '1.10.5428', { withInclude: true });
+  const { project, manifest } = invalidManifestIn('amxb-a3-dg-proj-');
+  const sma = writeFile(project, 'plugin.sma', 'public plugin_init() {}\n');
+
+  const cap = captureWarnings();
+  let result;
+  try {
+    result = await call('dep-graph.get')({ manifest, sma_file: sma, noFetch: true });
+  } finally {
+    cap.stop();
+  }
+  assert.equal(result.sma_file, sma);
+  assert.ok(cap.warnings.some((m) => /Manifest parse failed/.test(m)), 'expected a parse-failure warning');
+});
+
+test('A3 sites 1+4 (compile.single): invalid manifest → warn + graceful compile', async (t) => {
+  const cache = useTempCache(t, 'amxb-a3-cs-');
+  seedCompiler(cache, '1.10.5428', { withInclude: true });
+  const { project, manifest } = invalidManifestIn('amxb-a3-cs-proj-');
+  const sma = writeFile(project, 'plugin.sma', 'public plugin_init() {}\n');
+
+  const cap = captureWarnings();
+  let result;
+  try {
+    result = await call('compile.single')({ manifest, sma_file: sma, noFetch: true });
+  } finally {
+    cap.stop();
+  }
+  assert.equal(result.ok, true);
+  assert.ok(cap.warnings.some((m) => /Manifest parse failed/.test(m)), 'expected a parse-failure warning');
 });

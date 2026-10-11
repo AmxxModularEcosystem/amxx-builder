@@ -22,6 +22,7 @@
 const fs   = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { withRetry } = require('./retry');
 // Default for API calls; download sites pass their own longer timeout.
 axios.defaults.timeout = 30000;
 // simple-git v4 dropped the callable default export; use the named export
@@ -159,9 +160,9 @@ async function resolveRef(repo, ref, token) {
   logger.dim(`  ${repo}: resolving latest release tag...`);
   const headers = token ? { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } : {};
   try {
-    const { data } = await axios.get(
-      `https://api.github.com/repos/${repo}/releases/latest`,
-      { headers }
+    const { data } = await withRetry(
+      () => axios.get(`https://api.github.com/repos/${repo}/releases/latest`, { headers }),
+      { label: `latest ${repo}` }
     );
     logger.dim(`  ${repo}: latest = ${data.tag_name}`);
     logger.verbose(`  ${repo}: resolved via GET /repos/${repo}/releases/latest`);
@@ -237,9 +238,9 @@ function apiHeaders(token) {
 // Slashes in the ref (feature/foo) stay path separators; the rest is encoded.
 async function fetchCommitSha(repo, refName, headers) {
   const encoded = refName.split('/').map(encodeURIComponent).join('/');
-  const { data } = await axios.get(
-    `https://api.github.com/repos/${repo}/commits/${encoded}`,
-    { headers }
+  const { data } = await withRetry(
+    () => axios.get(`https://api.github.com/repos/${repo}/commits/${encoded}`, { headers }),
+    { label: `commit ${repo}@${refName}` }
   );
   return data.sha;
 }
@@ -248,7 +249,10 @@ async function fetchCommitSha(repo, refName, headers) {
 // costs one API call; only a fresh repo pays an extra call to learn it.
 async function resolveDefaultBranch(repo, cachedBranch, headers) {
   if (cachedBranch) return cachedBranch;
-  const { data } = await axios.get(`https://api.github.com/repos/${repo}`, { headers });
+  const { data } = await withRetry(
+    () => axios.get(`https://api.github.com/repos/${repo}`, { headers }),
+    { label: `repo ${repo}` }
+  );
   if (!data || !data.default_branch) throw new Error('repo metadata has no default_branch');
   return data.default_branch;
 }

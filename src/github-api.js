@@ -19,6 +19,7 @@
  */
 
 const axios = require('axios');
+const { withRetry } = require('./retry');
 // Same global default as release-lister; re-setting is idempotent and keeps
 // this module's calls bounded even when loaded without release-lister.
 axios.defaults.timeout = 30000;
@@ -82,7 +83,9 @@ async function githubGet(url, { token } = {}) {
   if (token) headers.Authorization = `Bearer ${token}`;
 
   try {
-    const { data } = await axios.get(url, { headers });
+    // Retry the raw GET only — the mapped GithubError below exposes just
+    // `.status`, so wrapping it would make isTransient misread 4xx as transient.
+    const { data } = await withRetry(() => axios.get(url, { headers }), { label: 'github api' });
     return data;
   } catch (err) {
     if (err.response) {

@@ -114,7 +114,13 @@ async function resolveVersionFromParams(params) {
       : resolveManifestPath().path;
     let manifest = null;
     if (fs.existsSync(manifestPath)) {
-      try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
+      loadEnvQuiet(manifestPath);
+      try {
+        manifest = parseManifest(manifestPath);
+      } catch (err) {
+        logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
+        manifest = null;
+      }
     }
     return await resolveAmxmodxVersion(manifest, { noFetch: noFetchParam(params) });
   } catch (err) {
@@ -139,7 +145,13 @@ async function resolveStdlibState(params) {
   if (!params?.version) {
     const manifestPath = manifestPathFor(params);
     if (fs.existsSync(manifestPath)) {
-      try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
+      loadEnvQuiet(manifestPath);
+      try {
+        manifest = parseManifest(manifestPath);
+      } catch (err) {
+        logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
+        manifest = null;
+      }
     }
   }
   const { version, degraded, error } = await resolveStdlibVersion({
@@ -174,33 +186,42 @@ function resolveGithubTokenFor(params, repo) {
     loadEnvQuiet(manifestPath);
     try {
       const fromManifest = resolveGithubToken(parseManifest(manifestPath), repo);
-      if (fromManifest) return fromManifest;
-    } catch { /* unparseable manifest — fall back to explicit/env token */ }
+      // Manifest in scope → its token policy wins (tokens[owner] → token_env → GITHUB_TOKEN).
+      // When it yields nothing, only an explicit param may override; never read GITHUB_TOKEN
+      // behind a configured token_env.
+      return fromManifest || params?.token || null;
+    } catch { /* unparseable manifest — fall through to param/env */ }
   }
   return params?.token || process.env.GITHUB_TOKEN || null;
 }
 
 // Build a parsed dep object from params: either a full `dep` string/object or
-// explicit { repo, ref?, source?, include_path?, asset? } fields.
+// explicit { repo, ref?, source?, include_path?, asset? } fields. A supplied
+// `dep` is authoritative — the explicit fields are an *alternative* to it
+// (docs/serve/INDEX.md), so combining both is a param error, not a silent
+// post-validation override of the parsed dep.
 function depFromParams(params) {
-  let dep;
-  if (params?.dep) {
-    if (typeof params.dep === 'string') dep = parseDepString(params.dep);
-    else if (params.dep.source === 'local') dep = parseDepObject(params.dep);
-    else dep = { ...params.dep };
-  } else {
-    if (!params?.repo) throw new Error('Provide either "dep" or "repo"');
-    const source = params.source || 'git';
-    const ref = params.ref || (source === 'release' ? 'latest' : null);
-    dep = { repo: params.repo, ref, source, include_path: params.include_path || null, asset: params.asset ?? null };
+  try {
+    let dep;
+    if (params?.dep) {
+      if (params.source != null || params.include_path != null || params.asset != null) {
+        throw new Error('Provide either "dep" or the explicit source/include_path/asset fields, not both');
+      }
+      dep = typeof params.dep === 'string' ? parseDepString(params.dep) : parseDepObject(params.dep);
+    } else {
+      if (!params?.repo) throw new Error('Provide either "dep" or "repo"');
+      const source = params.source || 'git';
+      const ref = params.ref || (source === 'release' ? 'latest' : null);
+      dep = { repo: params.repo, ref, source, include_path: params.include_path || null, asset: params.asset ?? null };
+    }
+    return resolveLocalEntry(
+      dep,
+      params?.manifest ? path.dirname(path.resolve(params.manifest)) : process.cwd()
+    );
+  } catch (err) {
+    err.code = -32602;
+    throw err;
   }
-  if (params?.source) dep.source = params.source;
-  if (params?.include_path) dep.include_path = params.include_path;
-  if (params?.asset != null) dep.asset = params.asset;
-  return resolveLocalEntry(
-    dep,
-    params?.manifest ? path.dirname(path.resolve(params.manifest)) : process.cwd()
-  );
 }
 
 // Agent docs/skills: dep mode when dep/repo is present, otherwise the local
@@ -587,7 +608,12 @@ function createServeServer() {
     let manifest = null;
     if (fs.existsSync(manifestPath)) {
       loadEnvQuiet(manifestPath);
-      try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
+      try {
+        manifest = parseManifest(manifestPath);
+      } catch (err) {
+        logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
+        manifest = null;
+      }
     }
 
     const version = await resolveVersionFromParams(params);
@@ -879,7 +905,12 @@ function createServeServer() {
     let manifest = null;
     if (fs.existsSync(manifestPath)) {
       loadEnvQuiet(manifestPath);
-      try { manifest = parseManifest(manifestPath); } catch { manifest = null; }
+      try {
+        manifest = parseManifest(manifestPath);
+      } catch (err) {
+        logger.warn(`Manifest parse failed (${manifestPath}), falling back to latest: ${err.message}`);
+        manifest = null;
+      }
     }
 
     const version = await resolveVersionFromParams(params);

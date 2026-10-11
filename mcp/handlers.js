@@ -5,8 +5,7 @@ const os   = require('os');
 const path = require('path');
 const glob = require('fast-glob');
 
-const { resolveRefIfLatest }   = require('../src/repo-fetcher');
-const { fetchDepRoot, collectDepIncludeDirs } = require('../src/deps-resolver');
+const { fetchDepRoot, collectDepIncludeDirs, depLabel } = require('../src/deps-resolver');
 const { resolveAssets, readAssets, readDepManifest, collectDepAssets, collectLocalAssets } = require('../src/agent-assets');
 const { getCompilerInfo, resolveStdlibVersion } = require('../src/compiler-fetcher');
 const { resolveManifest, resolveGithubToken, parseDepString, parseDepObject, parseRefTtl, parseDocEntries, parseSkillEntries } = require('../src/manifest');
@@ -15,7 +14,7 @@ const { validateManifestFile }  = require('../src/validate');
 const { getManifestSchema }     = require('../src/schema');
 const { getCacheInfo }          = require('../src/cache-info');
 const { buildDepTree, assembleRootDeps } = require('../src/deps-tree');
-const { isLocal, resolveLocalEntry } = require('../src/local-sources');
+const { resolveLocalEntry } = require('../src/local-sources');
 const { buildIncludeTree, fetchDepIncludeDir, parseIncludeDirective, searchIncludeFile, collectIncFiles } = require('../src/include-tree');
 const { listReleases, listTags } = require('../src/release-lister');
 const { buildPlanData }         = require('../src/build-plan');
@@ -52,19 +51,6 @@ function depBaseDir(args) {
 // into an absolute `_localDir` via the core helper — no path logic in adapters.
 function resolveUserDep(dep, args) {
   return resolveLocalEntry(dep, depBaseDir(args));
-}
-
-function resolveDepRef(dep, token) {
-  // Local sources have no remote ref to resolve — never touch the network.
-  if (isLocal(dep)) return 'local';
-  return resolveRefIfLatest(dep.ref, dep.repo, token);
-}
-
-// Fungun deps have a synthetic repo and no GitHub ref — label as plugin #id.
-function depRefLabel(dep, resolvedRef) {
-  return dep.source === 'fungun'
-    ? `fungun.net plugin #${dep.id}`
-    : `${dep.repo}@${resolvedRef || dep.ref}`;
 }
 
 function readFileSafe(absPath) {
@@ -145,13 +131,12 @@ async function handleGetDepInterface(args, token, noFetch) {
   if (args?.include_path)   dep.include_path = args.include_path;
   if (args?.asset != null)  dep.asset = args.asset;
 
-  const resolvedRef = await resolveDepRef(dep, token);
   const srcDir      = await fetchDepIncludeDir(dep, token, noFetch);
   const incFiles    = await collectIncFiles(srcDir);
 
   if (incFiles.length === 0) {
     return textResult(
-      `Dependency ${depRefLabel(dep, resolvedRef)} has no .inc files in its include path.`
+      `Dependency ${depLabel(dep)} has no .inc files in its include path.`
     );
   }
 
@@ -167,7 +152,7 @@ async function handleGetDepInterface(args, token, noFetch) {
   const shown    = limitFiles(files, args);
   const skipped  = files.length - shown.length;
   let out =
-    `Found ${files.length} .inc file(s) in ${depRefLabel(dep, resolvedRef)}:\n\n` +
+    `Found ${files.length} .inc file(s) in ${depLabel(dep)}:\n\n` +
     shown
       .map(
         (f) =>
@@ -190,20 +175,19 @@ async function handleListDepIncs(args, token, noFetch) {
   if (args?.include_path)   dep.include_path = args.include_path;
   if (args?.asset != null)  dep.asset = args.asset;
 
-  const resolvedRef = await resolveDepRef(dep, token);
   const srcDir      = await fetchDepIncludeDir(dep, token, noFetch);
   const incFiles    = await collectIncFiles(srcDir);
 
   if (incFiles.length === 0) {
     return textResult(
-      `Dependency ${depRefLabel(dep, resolvedRef)} has no .inc files in its include path.`
+      `Dependency ${depLabel(dep)} has no .inc files in its include path.`
     );
   }
 
   const listing = incFiles.map((f) => `  ${f.rel}`).join('\n');
 
   return textResult(
-    applyOutputLimit(`Dependency ${depRefLabel(dep, resolvedRef)} — ${incFiles.length} .inc file(s):\n\n${listing}`, args)
+    applyOutputLimit(`Dependency ${depLabel(dep)} — ${incFiles.length} .inc file(s):\n\n${listing}`, args)
   );
 }
 
@@ -281,6 +265,14 @@ async function handleGetCacheInfo(args) {
 async function handleListReleasesTool(args, token) {
   if (!args?.repo) return errorResult('Missing required "repo" field', -32602);
   const limit = args?.limit || 10;
+  // Manifest-aware like serve's releases.list; ambient cwd manifest (same as
+  // search_symbol / the stdlib wrappers). No new tool param.
+  const manifestPath = resolveManifestPath(args?.manifest || undefined).path;
+  if (fs.existsSync(manifestPath)) {
+    loadEnv(manifestPath, { quiet: true });
+    try { token = resolveGithubToken(parseManifest(manifestPath), args.repo) || token; }
+    catch { /* unparseable manifest — keep the passed/fallback token */ }
+  }
   token = fallbackToken(token);
 
   let entries;
@@ -468,8 +460,8 @@ async function handleResolveInclude(args, token, noFetch) {
         ssh: manifest.github.ssh,
       });
       manifest.globalDeps.forEach((dep, i) => {
-        if (dirs[i]) searchPaths.push({ path: dirs[i], label: `${dep.repo}@${dep.ref}` });
-        else if (depErrs[i]) depErrors.push(`${dep.repo}@${dep.ref}: ${depErrs[i]}`);
+        if (dirs[i]) searchPaths.push({ path: dirs[i], label: depLabel(dep) });
+        else if (depErrs[i]) depErrors.push(`${depLabel(dep)}: ${depErrs[i]}`);
       });
     }
   }
@@ -900,7 +892,7 @@ async function handleCompileSma(args, token, noFetch) {
       });
       manifest.globalDeps.forEach((dep, i) => {
         if (dirs[i]) depDirs.push(dirs[i]);
-        else if (depErrs[i]) depErrors.push(`${dep.repo}@${dep.ref}: ${depErrs[i]}`);
+        else if (depErrs[i]) depErrors.push(`${depLabel(dep)}: ${depErrs[i]}`);
       });
     }
   }
@@ -1048,8 +1040,8 @@ async function handleSearchSymbol(args, token, noFetch) {
         const { dirs, errors: depErrs } = await collectDepIncludeDirs(manifest, { noFetch, ssh });
         for (let i = 0; i < manifestDeps.length; i++) {
           const dep = manifestDeps[i];
-          if (dirs[i]) await addSource(`${dep.repo}@${dep.ref}`, [dirs[i]], '**/*.inc');
-          else errors.push(`${dep.repo}@${dep.ref}: ${depErrs[i]}`);
+          if (dirs[i]) await addSource(depLabel(dep), [dirs[i]], '**/*.inc');
+          else errors.push(`${depLabel(dep)}: ${depErrs[i]}`);
         }
       })());
     }
@@ -1057,9 +1049,9 @@ async function handleSearchSymbol(args, token, noFetch) {
       jobs.push((async () => {
         try {
           const dir = await fetchDepIncludeDir(dep, tokenFor(dep.repo), noFetch, ssh);
-          await addSource(`${dep.repo}@${dep.ref}`, [dir], '**/*.inc');
+          await addSource(depLabel(dep), [dir], '**/*.inc');
         } catch (err) {
-          errors.push(`${dep.repo}@${dep.ref}: ${err.message}`);
+          errors.push(`${depLabel(dep)}: ${err.message}`);
         }
       })());
     }
