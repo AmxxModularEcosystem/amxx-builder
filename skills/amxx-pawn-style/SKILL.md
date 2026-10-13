@@ -453,10 +453,11 @@ touches that topic.
 
 ## Not yet covered (extend here)
 
-Module layout, `#include` ordering, and the remaining statement formatting are
-not specified yet. Plugin lifecycle *architecture* (`plugin_precache` as the
-boot hook, custom-forward orchestration) is intentionally out of scope: it is
-architecture, not style, and belongs in a separate skill. Resource cleanup is
-the one lifecycle-adjacent rule this guide owns (see
-`references/resource-cleanup.md`). Rarely-needed construct-specific depth now
-lives in the `references/` files listed above.
+`#include` ordering and the remaining statement formatting are not specified
+yet. Module layout and plugin lifecycle *architecture* (`plugin_precache` as the
+boot hook, custom-forward orchestration, registration and init contracts) are
+intentionally out of scope here: that is architecture, not style, and now lives
+in the separate `amxx-plugin-architecture` skill. Resource cleanup is the one
+lifecycle-adjacent rule this guide owns (see `references/resource-cleanup.md`).
+Rarely-needed construct-specific depth lives in the `references/` files listed
+above.
