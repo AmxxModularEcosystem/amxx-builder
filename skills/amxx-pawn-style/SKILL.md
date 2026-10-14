@@ -95,13 +95,30 @@ A plugin's own functions carry no `stock` (rule 12).
 
 ### 4. Constants
 
-Compile-time constants use `UPPER_SNAKE_CASE` in a `new const` declaration.
-String constants follow exactly this form:
+Scalar constants use a bare `const` (no `new`), which makes them compile-time
+constants — usable as an array size (`new buf[MAX_PLAYERS]`) and as a `case`
+label:
+
+```pawn
+const MAX_RETRIES = 3;
+const Float:MOVE_INTERVAL = 0.5;
+```
+
+String and array constants use `new const NAME[] = ...` (or `stock const` in a
+shared `.inc`). An array constant needs a storage qualifier: a bare `const`
+cannot declare an array (`const NAME[] = "..."` fails with `error 001: expected
+token: "=", but found "["`), and the size is inferred from the initializer:
 
 ```pawn
 new const PLUGIN_NAME[] = "My Plugin";
-new const MAX_RETRIES = 3;
+new const WEAPON_IDS[] = {1, 2, 3};
 ```
+
+A scalar written as `new const MAX_RETRIES = 3;` is a read-only variable, not a
+compile-time constant: used as an array size it breaks the compiler, and as a
+`case` label it fails with `error 008: must be a constant expression`. Use
+`new const` for a scalar only when the value is computed at runtime and merely
+needs to be read-only (`new const playerCount = get_playersnum();`).
 
 Inside an include (`.inc`) whose constants may not all be used, use
 `stock const` to avoid "symbol is never used" warnings:
@@ -110,11 +127,11 @@ Inside an include (`.inc`) whose constants may not all be used, use
 stock const API_VERSION[] = "1.2.0";
 ```
 
-Prefer `new const` over `#define` for typed constants; reserve `#define` for
-conditional compilation and macros. A `#define` still uses `UPPER_SNAKE_CASE`
-strictly, like any constant: a version define is `STYLE_EXAMPLE_VERSION`,
-never `StyleExample_VERSION`. The plugin version string is a deliberate
-exception to the `new const` preference (see `references/metadata.md`).
+Prefer `const` (scalar) and `new const` (array) over `#define` for typed
+constants; reserve `#define` for conditional compilation and macros. A `#define`
+still uses `UPPER_SNAKE_CASE` strictly, like any constant: a version define is
+`STYLE_EXAMPLE_VERSION`, never `StyleExample_VERSION`. The plugin version string
+is a deliberate exception to this preference (see `references/metadata.md`).
 
 ### 5. The player index is `playerIndex`
 
@@ -362,6 +379,12 @@ public client_command(playerIndex)
   A `stock` function that is never called has its body dropped before `const`
   checking, so a bug there can hide until the function is used — do not rely
   on an uncalled function to prove a `const` body is legal.
+- **Scalar constants are `const`, arrays are `new const`.** `const MAX = 3;` is
+  a compile-time constant and works as an array size and a `case` label;
+  `new const MAX = 3;` is a read-only variable and fails in those positions, so
+  use it for a scalar only when the value is runtime-computed
+  (`new const count = get_playersnum();`). Arrays are the reverse:
+  `new const NAME[] = ...` parses, but a bare `const NAME[]` does not.
 - **`MAX_PLAYERS` is 32, indices include 32.** Size per-player arrays
   `MAX_PLAYERS + 1`.
 - **`id` is also the argument name in the AMXX includes.** Rename only your
@@ -382,7 +405,8 @@ public client_command(playerIndex)
 - Name command handlers `@Cmd_*` and hook handlers `@On*`; omit unused handler
   params.
 - Index command and native arguments through a named enum, not literals.
-- Use `UPPER_SNAKE_CASE` for `new const` / `stock const` / `#define` constants.
+- Use `UPPER_SNAKE_CASE` for scalar `const` / array `new const` / `stock const` /
+  `#define` constants.
 - Name player indices `playerIndex` and guard them with
   `is_user_alive`/`is_user_connected` instead of a manual range check.
 - Mark every non-mutated parameter `const` (scalars included).
@@ -400,6 +424,9 @@ public client_command(playerIndex)
 - Do not name a player index `id`.
 - Do not name functions `camelCase`.
 - Do not use untagged `0`/`1` for a boolean.
+- Do not declare a compile-time scalar constant as `new const NAME = value;` —
+  use `const NAME = value;` (`new const` stays valid for a runtime-initialized
+  read-only scalar; arrays keep `new const NAME[]`).
 - Do not size player-indexed arrays `MAX_PLAYERS`.
 - Do not encode type in the name — put it in the tag.
 - Do not cast a tag away with `_:` to silence a mismatch — fix the tag instead.
@@ -423,8 +450,8 @@ public client_command(playerIndex)
 - [ ] No `_:` cast silently strips a tag from a value or return.
 - [ ] Command/native arguments use an `Arg_*` enum declared in the handler body,
   not literals.
-- [ ] Constants `UPPER_SNAKE_CASE` in `new const` / `stock const`, and every
-  `#define` is `UPPER_SNAKE_CASE` too.
+- [ ] Constants are `UPPER_SNAKE_CASE`: scalar constants use bare `const`, array
+  constants use `new const` / `stock const`, and every `#define` is too.
 - [ ] Player index named `playerIndex`, guarded with `is_user_alive` /
   `is_user_connected` and no manual range check.
 - [ ] Every non-mutated parameter is `const`.
