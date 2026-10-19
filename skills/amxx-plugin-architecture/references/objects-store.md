@@ -58,8 +58,8 @@ value's storage role, not the names.
 ## Struct fields
 
 When an entity has several fields, declare a struct enum and store it in an
-`Array:`. The `_:` on the enum is mandatory, or the compiler complains when the
-int-typed members are used as plain cells:
+`Array:`. Use `enum _:S_SomeObject`: the `_:` strips the enum's own tag so the
+int-typed members can be used as plain cells, and it is not a silencing cast:
 
 ```pawn
 enum _:S_SomeObject
@@ -70,7 +70,8 @@ enum _:S_SomeObject
 ```
 
 Names follow `amxx-pawn-style` (struct role `S_`, member prefix); this example
-shows only the storage shape.
+shows only the storage shape. A `Float:` member stays a `Float:`; the `_:` on
+the enum does not touch member tags.
 
 ## Storage
 
@@ -90,6 +91,11 @@ new T_SomeObject:handler = T_SomeObject:ArrayPushArray(SomeObjects, entityData);
 The handler is the pushed element's position, cast to the tag, so a handler
 round-trips back to its entity by indexing the array.
 
+The `static` requirement applies to the entity store this reference describes:
+the `Array` of entity data indexed by handler and the `Trie` of keys to
+handlers. Other uses of `Array` / `Trie` (config caches, lookup tables,
+transient buffers) are outside this pattern and do not inherit the rule.
+
 ## Key lookup
 
 When entities must be found by key, keep a nearby `Trie:` whose key is the
@@ -108,6 +114,10 @@ if (TrieGetCell(SomeObjectByKey, key, handler)) {
     // SomeObjects[handler] is the entity
 }
 ```
+
+A bare `Float:` value is passed through `TrieSetCell` / `TrieGetCell` directly:
+their `any:` parameters accept the `Float:` tag, so no `_:` bit-punning is
+needed.
 
 ## Initialization
 
@@ -158,9 +168,10 @@ SomeObject_Init() {
 
 ## Encapsulation
 
-The `Array` and `Trie` MUST be `static` in these files. Every interaction with
-entities through their handlers, even from elsewhere in the plugin, goes through
-functions defined in this file:
+The entity store's `Array` and `Trie` MUST be `static` in these files. Every
+interaction with entities through their handlers, even from elsewhere in the
+plugin, goes through functions defined in this file. This rule is scoped to the
+entity store; it does not apply to every `Array` / `Trie` in the plugin.
 
 ```pawn
 static Array:SomeObjects;
@@ -189,12 +200,17 @@ do not duplicate them here. Explicitly include that file instead:
 
 ## Gotchas
 
-- **`_:` on the struct enum is mandatory.** Without it, the int-typed members
-  trigger a tag mismatch when used as plain cells.
+- **`_:` on the struct enum is the declaration form.** It strips the enum's own
+  tag so int-typed members can be used as plain cells; it is not a silencing
+  cast. A `Float:` member keeps its tag.
+- **Float in a Trie is not a `_:` case.** `TrieSetCell` / `TrieGetCell` take
+  `any:`, so pass the `Float:` variable directly.
 - **`INVALID_HANDLE` is `-1`.** Use it as the sentinel only when `-1` cannot be a
   valid handler; otherwise use `0`.
-- **The store stays `static`.** A non-static `Array` / `Trie` lets another file
-  read or mutate the store directly and breaks the encapsulation.
+- **The entity store stays `static`.** A non-static `Array` / `Trie` lets
+  another file read or mutate the entity store directly and breaks the
+  encapsulation. This rule is scoped to the entity store; other `Array` / `Trie`
+  uses are out of scope.
 - **Prerequisites are re-initialized, not assumed.** A component's `_Init` calls
   the external API's init even if it looks already done; initialization is
   idempotent, so the extra call is safe.
@@ -207,10 +223,13 @@ do not duplicate them here. Explicitly include that file instead:
 - [ ] Each handler tag is an enum with an `Invalid_*` sentinel
       (`INVALID_HANDLE`, or `0` when `-1` does not fit).
 - [ ] Multi-field entities use `enum _:S_<Name>` stored in an `Array:`.
+- [ ] A `Float:` member needs no cast; a bare Float in a Trie cell is passed
+      directly through the `any:` parameter.
 - [ ] The `Array:` index is the handler cast to the tag; key lookups use a
       `Trie:`.
 - [ ] The store is created in `<object type>_Init()` called from the `.sma`.
 - [ ] The component's own external prerequisites are initialized in `_Init`.
-- [ ] `Array` / `Trie` are `static`; all handler access goes through functions.
+- [ ] The entity store's `Array` / `Trie` are `static`; all handler access goes
+      through functions. Other `Array` / `Trie` uses are out of scope.
 - [ ] A shared include provides the tag and struct; it is included, not
       duplicated.

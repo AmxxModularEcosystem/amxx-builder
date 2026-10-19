@@ -37,8 +37,7 @@ A local helper that builds a string works when it fills and returns its own
 buffer:
 
 ```pawn
-BuildLabel(const value)
-{
+BuildLabel(const value) {
     new label[32];
     formatex(label, charsmax(label), "value %d", value);
     return label;

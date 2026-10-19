@@ -19,7 +19,7 @@ Field names live in the global symbol namespace, so keep them distinct from
 your global variable names.
 
 ```pawn
-enum S_PlayerStats
+enum _:S_PlayerStats
 {
     PS_Kills,
     PS_Deaths,
@@ -29,6 +29,12 @@ enum S_PlayerStats
 new PlayerStats[MAX_PLAYERS + 1][S_PlayerStats];
 PlayerStats[playerIndex][PS_Kills] = 0;
 ```
+
+The `_:` strips the enum's own tag so its members can be used as plain cells
+(array indexes, `Array:` payloads) without `warning 213: tag mismatch`. It does
+not strip a member's tag: `Float:PS_PlayTime` stays a Float. If the struct's tag
+is meaningful and every use is typed, plain `enum S_PlayerStats` is also valid;
+the common storage pattern uses `_:`.
 
 **Enumeration → `E_`.** A list of symbolic integer values. Strip the tag the
 enum creates with `enum _:` so members can be assigned to plain cells without
@@ -103,7 +109,11 @@ not `<Prefix>_...`.
 
 - **`enum Name` creates a tag.** Assigning a member to a plain variable warns
   `warning 213: tag mismatch`. Use `enum _:E_Name` for enums consumed as plain
-  integers, or type the variable with the tag (`T_Name:x`).
+  integers, or type the variable with the tag (`T_Name:x`). `enum _:S_Name` is
+  the same declaration form for a struct consumed as plain cells; it is not a
+  silencing cast.
+- **`_:` on a struct does not touch member tags.** A `Float:` member stays a
+  `Float:`; the cast would only affect the enum's own tag.
 - **Enum members share the global namespace.** A member named
   `PlayerStatKills` still lives alongside your globals, so choose a prefix that
   does not clash with them; `new PlayerDeaths[]` and a member `PlayerDeaths`
@@ -116,6 +126,8 @@ not `<Prefix>_...`.
 
 - [ ] Every `enum` is prefixed by role: `S_` struct, `E_` enumeration
   (`enum _:`), `T_` tag.
+- [ ] A struct stored or consumed as plain cells uses `enum _:S_<Name>`; the
+  `S_` role prefix stays.
 - [ ] Every enum member carries a prefix naming its enum, applied consistently.
 - [ ] An `E_` enumeration consumed as plain integers uses `enum _:`.
 - [ ] A `T_` tag exported in a shared `.inc` is `T_<System>_<Name>`; an

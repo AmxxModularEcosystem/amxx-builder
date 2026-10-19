@@ -10,7 +10,8 @@ plugin can handle.
   - [One handler per forward](#one-handler-per-forward)
   - [Delegating to child files](#delegating-to-child-files)
   - [Hooks registered inside `_Init`](#hooks-registered-inside-_init)
-  - [The registry-registration exception](#the-registry-registration-exception)
+  - [Calling a registered callback: one-forward, not callfunc](#calling-a-registered-callback-one-forward-not-callfunc)
+  - [The registrar exception](#the-registrar-exception)
   - [Gotchas](#gotchas)
   - [Checklist](#checklist)
 
@@ -82,13 +83,65 @@ by name, so it needs the `.sma`; a registered hook is dispatched through the
 handler the file hands to `RegisterHam` / `RegisterHookChain`, so the file can
 own it.
 
-## The registry-registration exception
+## Calling a registered callback: one-forward, not callfunc
 
-The one exception is the forwards used to register objects into registries.
-Those live in the DefaultObject registrar, which declares one public forward per
-object type, each calling its objects' `_Register()` functions; the `.sma` does
-not trigger them, it only includes the registrar. If some other code needs such
-a forward, the same `.sma` delegation scheme applies, but that is rare.
+A callback registered once and fired many times is a forward handle, not a
+`callfunc` target. Resolve it once with `CreateOneForward(pluginId, name, ...)`,
+store the handle, and invoke it with `ExecuteForward`. This avoids a name lookup
+per event, validates the parameter list against the declared `FP_*` types, and
+gives the subscription an explicit lifecycle.
+
+```pawn
+new KillForward = -1;
+
+SubscribeKill(const pluginId) {
+    KillForward = CreateOneForward(pluginId, "@OnKill", FP_CELL);
+    if (KillForward == -1) {
+        // the handler name did not resolve; fix the string or the declaration
+        return;
+    }
+}
+
+@OnKill(const playerIndex) {
+    // ...
+}
+
+ExecuteKillCallback(const playerIndex) {
+    new result;
+    ExecuteForward(KillForward, result, playerIndex);
+}
+
+UnsubscribeKill() {
+    if (KillForward != -1) {
+        DestroyForward(KillForward);
+        KillForward = -1;
+    }
+}
+```
+
+`CreateOneForward` does not deduplicate: each call creates a handle. Store it,
+and call `DestroyForward` when the subscription is replaced or removed.
+
+Use `callfunc` only for ad-hoc/dynamic calls where the signature is not fixed
+or no persistent handle is wanted. If a name must be called repeatedly, cache
+`get_func_id` and use `callfunc_begin_i` rather than resolving the string each
+time.
+
+Name matching is exact. Because `@` is part of the exported name, a handler
+declared `@OnKill` must be passed as `"@OnKill"`. A bare `"OnKill"` compiles but
+`CreateOneForward` returns `-1`, and `ExecuteForward(-1)` silently returns `0`.
+
+## The registrar exception
+
+The exception is the DefaultObject registrar. It declares the registry-
+registration forwards: one public forward per object type, each calling its
+objects' `_Register()` functions. The `.sma` does not trigger them; it only
+includes the registrar.
+
+The registrar may also own framework/event-bus subscription handlers. Those are
+string-resolved callbacks, not engine multi-forwards; the `.sma` still owns
+every engine multi-forward. If some other code needs a registry-registration
+forward, the same `.sma` delegation scheme applies, but that is rare.
 
 ## Gotchas
 
@@ -99,12 +152,25 @@ a forward, the same `.sma` delegation scheme applies, but that is rare.
   public entry point.
 - **Hooks differ from forwards.** `RegisterHam` / `RegisterHookChain` handlers
   can be registered from a component's `_Init`; multi-forwards cannot.
-- **Registry forwards are the exception.** They live in the DefaultObject
-  registrars, not in the general `.sma` delegation.
+- **Registrar forwards and framework subscriptions are the exception.**
+  Registry-registration forwards and framework/event-bus subscription handlers
+  live in the DefaultObject registrar, not in the general `.sma` delegation.
+  Engine multi-forwards still go through the `.sma`.
+- **Name matching is exact.** `@` is part of the exported name; a handler
+  declared `@OnKill` must be passed as `"@OnKill"`. A bare name resolves to `-1`
+  in `CreateOneForward`, and `ExecuteForward(-1)` silently returns `0`.
+- **`callfunc` is untyped.** A one-forward checks the parameter count against the
+  types declared at creation; `callfunc` checks nothing.
 
 ## Checklist
 
 - [ ] Each multi-forward has exactly one public handler, in the `.sma`.
 - [ ] Child files expose ordinary functions the `.sma` handler calls.
 - [ ] `RegisterHam` / `RegisterHookChain` hooks may register in `_Init`.
-- [ ] Registry-registration forwards stay in the DefaultObject registrars.
+- [ ] Registry-registration forwards and framework/event-bus subscriptions may
+      live in the registrar; engine multi-forwards stay in the `.sma`.
+- [ ] Repeated registered callbacks use `CreateOneForward` + `ExecuteForward`,
+      with `DestroyForward` on re-registration.
+- [ ] Handler names passed as strings match the declaration exactly, including
+      `@`.
+- [ ] `callfunc` is reserved for ad-hoc/dynamic calls with no persistent handle.

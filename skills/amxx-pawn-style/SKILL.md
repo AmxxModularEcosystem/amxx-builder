@@ -1,20 +1,19 @@
 ---
 name: amxx-pawn-style
 description: >-
-  Coding conventions for AMXX Pawn (AMX Mod X / GoldSrc .sma and .inc plugins)
-  that eliminate Hungarian notation. Use when writing, editing, refactoring, or
-  reviewing Pawn code — variables, constants, enums, natives, or metadata.
-  Enforces PascalCase functions, CamelCase globals, camelCase
-  locals/parameters, no type prefixes (g_, i, sz, b, Float:), `playerIndex`
-  over `id`, `const` on non-mutated parameters, `MAX_PLAYERS + 1` arrays,
-  `bool:` tags, and lifecycle-driven cleanup (no reflexive `plugin_end`
-  destructors). No banners. Rarer constructs live in references: enum roles
-  (S_, E_, T_) with a named `Invalid_*` zero value, `@NativeName` handlers
-  registered with style 0, and `PluginName` metadata. Triggers: AMXX, AMX Mod X,
-  Pawn, .sma, .inc, naming convention, native, register_native, plugin
-  metadata, PluginName, type tag, enum, plugin_end, Hungarian notation,
-  венгерская нотация, стиль кода. Do NOT use for building/packaging/deploying
-  servers (use amxb-migration / the amxb CLI), or for non-Pawn languages.
+  Coding conventions for AMXX Pawn (AMX Mod X / GoldSrc .sma and .inc) without
+  Hungarian notation. Use when writing, editing, refactoring, or reviewing Pawn
+  code — variables, constants, enums, natives, metadata, includes, or comments.
+  Enforces PascalCase functions, CamelCase globals, camelCase locals,
+  `playerIndex`, `const` parameters, `MAX_PLAYERS + 1` arrays, `bool:` tags,
+  sparse comments, K&R braces, and self-sufficient guarded `.inc` files. Rarer constructs
+  live in references: enum roles (S_, E_, T_) with `Invalid_*`, `@` handlers
+  resolved by exact string, and `PluginName` metadata. Triggers: AMXX, AMX Mod X,
+  Pawn, .sma, .inc, naming convention, native, register_native, plugin metadata,
+  type tag, enum, plugin_end, Hungarian notation, comment, include guard,
+  #include, string-registered handler, `@` handler, венгерская нотация, стиль
+  кода. Do NOT use for building/packaging/deploying servers (use amxb-migration /
+  the amxb CLI), or for non-Pawn languages.
 ---
 
 # AMXX Pawn code style
@@ -83,10 +82,11 @@ Every function or method name is `PascalCase`, whether it is plain, `static`,
 or `public`: `DealDamage`, `GetEffectiveDamage`, `PrintName`. Two families keep
 their own names: AMXX-reserved callbacks (`plugin_init`, `plugin_precache`,
 `plugin_end`, `client_command`, `client_PreThink`, …) and handlers (rule 9).
+AMXX-reserved callbacks are declared `public Name`, never `@Name`: the engine
+looks them up by the bare name.
 
 ```pawn
-DealDamage(playerIndex, Float:damageAmount)
-{
+DealDamage(playerIndex, Float:damageAmount) {
     // ...
 }
 ```
@@ -139,8 +139,7 @@ Name AMXX player indices `playerIndex`. Never `id`, `pid`, `playerid`, or
 `iPlayer`.
 
 ```pawn
-public client_command(playerIndex)
-{
+public client_command(playerIndex) {
     if (!is_user_alive(playerIndex)) {
         return PLUGIN_HANDLED;
     }
@@ -167,13 +166,11 @@ whether it is an array or a scalar. Legacy code marks only string parameters;
 extend it to all non-mutated parameters.
 
 ```pawn
-PrintName(const name[])
-{
+PrintName(const name[]) {
     server_print("%s", name);
 }
 
-GetEffectiveDamage(const baseDamage, const Float:multiplier)
-{
+GetEffectiveDamage(const baseDamage, const Float:multiplier) {
     return floatround(baseDamage * multiplier);
 }
 ```
@@ -202,8 +199,7 @@ if (!RoundActive) {
 }
 ```
 
-Untagged `0`/`1` works at runtime, but `bool:` states intent, enables compile
-time checking, and removes the need for the legacy `b` prefix.
+Untagged `0`/`1` works, but `bool:` states intent and enables compile-time checking.
 
 ### 9. Handlers
 
@@ -217,29 +213,36 @@ Name a handler after what it handles:
   (`@StyleExample_AddKill`), so one grep finds both ends. That model lives in
   `references/natives.md`.
 
-Declare only the parameters a handler uses and omit them entirely when unused.
-A native handler declares the two parameters `(pluginIndex, paramsCount)` only
-when it reads them, and tags its return (see `references/natives.md`).
+`@Name()` is an alternative spelling of `public Name()`, but the `@` is **not**
+stripped: the exported name is literally `@Name`. Use `@` only when the caller
+resolves that exact string (`register_clcmd`, `RegisterHam`, `register_native`,
+`CreateOneForward`, an event bus, …). For AMXX/engine callbacks and declared
+`forward`s, write `public Name()` with no `@`: the engine calls the bare name,
+so `@Name` is never invoked.
 
 ```pawn
-public plugin_init()
-{
+public plugin_init() {
     register_clcmd("say /stats", "@Cmd_Stats");
-    register_clcmd("say /reset", "@Cmd_Reset");
+    RegisterHam(Ham_Spawn, "player", "@OnPlayerSpawn", true);
 }
 
-@Cmd_Stats(playerIndex)
-{
+@Cmd_Stats(playerIndex) {
     PrintStats(playerIndex);
     return PLUGIN_HANDLED;
 }
 
-@Cmd_Reset()
-{
-    ResetRoundStats();
-    return PLUGIN_HANDLED;
+// AMXX/engine callback: bare public name, no `@`
+public client_putinserver(playerIndex) {
+    // ...
 }
 ```
+
+Check `CreateOneForward` for `-1`: a string that does not match the declaration
+resolves to `-1`, and `ExecuteForward(-1)` silently returns `0`.
+
+Declare only the parameters a handler uses and omit them entirely when unused.
+A native handler declares the two parameters `(pluginIndex, paramsCount)` only
+when it reads them, and tags its return (see `references/natives.md`).
 
 Index handler arguments through a named enum rather than magic numbers — the
 same pattern serves command args and native params. Declare the enum **inside
@@ -247,8 +250,7 @@ the handler body**: its members are then local, so every handler can reuse the
 same `Arg_*` names without colliding in the file's global namespace.
 
 ```pawn
-@Cmd_Unban()
-{
+@Cmd_Unban() {
     enum {
         Arg_Key = 1,
         Arg_Template
@@ -269,14 +271,17 @@ name, not a literal.
 
 ### 10. Braces are mandatory and K&R
 
-Every `if` / `else` / `for` / `while` / `do` body is brace-enclosed, even a
-single statement. Put the opening brace on the same line as the statement:
+Every function definition and every `if` / `else` / `for` / `while` / `do`
+body is brace-enclosed, even a single statement. The opening brace always stays
+on the same line as the signature or statement, never on its own line:
 
 ```pawn
-if (is_user_alive(playerIndex)) {
-    Heal(playerIndex);
-} else {
-    LogDead(playerIndex);
+DealDamage(playerIndex, Float:damageAmount) {
+    if (is_user_alive(playerIndex)) {
+        Heal(playerIndex);
+    } else {
+        LogDead(playerIndex);
+    }
 }
 ```
 
@@ -296,25 +301,29 @@ is a tolerated exception.
 ### 12. No `stock` functions in plugin code
 
 A plugin's own `.sma` uses plain functions: if a function exists it is used,
-otherwise delete it. Reserve `stock` for functions in shared `.inc` files,
-where its purpose is to suppress "symbol is never used" warnings for consumers
-that do not call every function. `stock const` in an `.inc` stays.
+otherwise delete it. Reserve `stock` for shared `.inc` files, where it suppresses
+"symbol is never used" warnings for consumers that do not call every function.
 
 ### 13. `static` functions are file-local
 
-A `static` function is resolved per file: it does not collide with a
-same-named function in another file. Its name still lives in that file's symbol
-table, though, so it cannot share a name with another declaration in the same
-file. Use `static` for file-local encapsulation, not as a namespace.
+A `static` function is file-local: it does not collide with a same-named
+function in another file, but it still cannot share a name with another
+declaration in its own file. Use it for encapsulation, not as a namespace.
 
 ### 14. Section comments: discouraged, not forbidden
 
 Banner/section comments that carve a file into labelled blocks (e.g.
-`// ===== Globals =====`, `// ---- Helpers ----`) are **not recommended**, but
-they are not forbidden. Prefer self-explanatory names, small functions, and
-blank lines to separate concerns; reserve a banner for the rare long file where
-finding a section is otherwise genuinely hard, and keep even then to a minimum.
-A banner never substitutes for structure.
+`// ===== Globals =====`) are **not recommended** but not forbidden. Prefer
+names, small functions, and blank lines; reserve a banner for a rare long file
+where finding a section is genuinely hard, and keep it minimal. A banner never
+substitutes for structure.
+
+### 15. Comments: optional and sparse
+
+Do not add comments by default. A comment is justified only when the code is
+genuinely non-obvious and the names cannot express the reason, contract, or edge
+case; never restate the code. PawnDoc in a shared `.inc` is API documentation,
+not an inline comment. Details: `references/comments.md`.
 
 ## Hungarian → modern conversion
 
@@ -329,46 +338,15 @@ A banner never substitutes for structure.
 | `public client_command(id)` | `public client_command(playerIndex)` |
 | `new g_iData[33]` | `new Data[MAX_PLAYERS + 1]` |
 
-Before (legacy):
-
-```pawn
-new g_iScore[MAX_PLAYERS];
-new g_szName[33][32];
-new bool:g_bConnected[33];
-
-public client_command(id)
-{
-    new szMessage[128];
-    if (g_bConnected[id])
-        formatex(szMessage, charsmax(szMessage), "%s: %d", g_szName[id], g_iScore[id]);
-}
-```
-
-After:
-
-```pawn
-new Score[MAX_PLAYERS + 1];
-new PlayerName[MAX_PLAYERS + 1][32];
-new bool:PlayerConnected[MAX_PLAYERS + 1];
-
-public client_command(playerIndex)
-{
-    new message[128];
-
-    if (PlayerConnected[playerIndex]) {
-        formatex(message, charsmax(message), "%s: %d", PlayerName[playerIndex], Score[playerIndex]);
-    }
-}
-```
+A complete before/after file lives in `references/legacy-conversion.md`.
 
 ## Applying to an existing (legacy) file
 
 - Apply these conventions to the lines you add or change.
 - Do not mass-rename untouched code unless the task is explicitly a
   Hungarian-notation cleanup.
-- Refactor via the language server / editor rename, not a blind text replace —
-  a global `id` → `playerIndex` replacement can corrupt strings, comments, and
-  unrelated identifiers.
+- Refactor via the language server / editor rename, not a blind text replace: a
+  global `id` → `playerIndex` replacement can corrupt strings and comments.
 - Renaming, `const`, and `bool:` additions must not change runtime behavior;
   compile and confirm zero new warnings/errors.
 
@@ -394,8 +372,15 @@ public client_command(playerIndex)
   wrong: keep the tag, drop the `f`/`b` name prefix.
 - **Do not silence a tag mismatch with `_:`.** Casting a tagged value down with
   `_:` discards the type and hides a real mismatch; fix the tag or the
-  declaration instead. (`enum _:E_Name` on a declaration strips the tag at the
-  source by design — that is not a silencing cast.)
+  declaration instead. The only allowed use of `_:` is the declaration form
+  `enum _:S_Name` / `enum _:E_Name`, which strips the enum's own tag at the
+  source by design — that is not a cast. `Float:` members inside a struct need
+  no cast, and `TrieSetCell` / `TrieGetCell` accept a `Float:` variable
+  directly through their `any:` parameters.
+- **`@` is part of the name.** A handler declared `@OnKill` is exported as
+  `@OnKill`, not `OnKill`; a string that omits the `@` does not resolve it.
+  Conversely, AMXX/engine callbacks and declared `forward`s must not carry
+  `@`: the engine looks up the bare name.
 
 ## Must do
 
@@ -412,10 +397,17 @@ public client_command(playerIndex)
 - Mark every non-mutated parameter `const` (scalars included).
 - Size player-indexed arrays `MAX_PLAYERS + 1`.
 - Tag booleans `bool:` and use `true`/`false`.
-- Brace every control-flow body and keep it K&R.
+- Brace every function and control-flow body and keep it K&R (opening brace on
+  the same line).
 - Keep code unaligned; reserve column alignment for the metadata block.
 - Use `stock` only for functions in shared `.inc` files.
 - Prefer self-explanatory names and small functions over banner comments.
+- Leave code uncommented unless a comment is the only way to convey a genuinely
+  non-obvious constraint.
+- Make every `.inc` self-sufficient: a unique include guard plus the headers it
+  uses.
+- Use `@` only for handlers resolved by an exact string; keep AMXX/engine
+  callbacks and declared `forward`s as `public Name`.
 - Compile after any refactor and confirm no new warnings or errors.
 
 ## Must not do
@@ -430,15 +422,21 @@ public client_command(playerIndex)
 - Do not size player-indexed arrays `MAX_PLAYERS`.
 - Do not encode type in the name — put it in the tag.
 - Do not cast a tag away with `_:` to silence a mismatch — fix the tag instead.
+  `enum _:S_Name` / `enum _:E_Name` is a declaration form, not a cast.
+- Do not use `@` on an AMXX/engine callback or a declared `forward`.
 - Do not test `playerIndex < 1 || playerIndex > MAX_PLAYERS` before
   `is_user_connected`/`is_user_alive` — both validate internally.
-- Do not write a control-flow body without braces.
+- Do not write a function or control-flow body without braces, and never put
+  the opening brace on its own line.
 - Do not column-align `=` or values in code (the metadata block excepted).
 - Do not use `stock` functions in a plugin's own `.sma`.
 - Do not treat `static` as a namespace — it is file-local isolation only.
 - Do not blindly text-replace identifiers when refactoring.
 - Do not propagate a legacy file's style into newly added code.
 - Do not use banner comments to stand in for structure.
+- Do not add comments by default, narrate obvious code, or put a comment on
+  every declaration.
+- Do not rely on the `.sma` include order to satisfy an `.inc`'s dependencies.
 
 ## Verification checklist
 
@@ -447,7 +445,10 @@ public client_command(playerIndex)
 - [ ] Functions `PascalCase` (AMXX-reserved callbacks excepted); handlers
   `@Cmd_*` / `@On*`.
 - [ ] Unused handler params are omitted.
-- [ ] No `_:` cast silently strips a tag from a value or return.
+- [ ] No `_:` cast silently strips a tag from a value or return; any `_:` is
+  the declaration form `enum _:S_Name` / `enum _:E_Name`.
+- [ ] `@` appears only on handlers resolved by an exact string; AMXX/engine
+  callbacks and declared `forward`s use bare `public Name`.
 - [ ] Command/native arguments use an `Arg_*` enum declared in the handler body,
   not literals.
 - [ ] Constants are `UPPER_SNAKE_CASE`: scalar constants use bare `const`, array
@@ -457,9 +458,12 @@ public client_command(playerIndex)
 - [ ] Every non-mutated parameter is `const`.
 - [ ] Player-indexed arrays use `MAX_PLAYERS + 1`.
 - [ ] Booleans use `bool:` and `true`/`false`.
-- [ ] Every control-flow body is brace-enclosed (K&R).
+- [ ] Every function and control-flow body is brace-enclosed and K&R (opening
+  brace on the same line).
 - [ ] No column alignment in code (metadata block excepted).
 - [ ] `stock` functions appear only in shared `.inc` files.
+- [ ] Every `.inc` has a unique guard and includes the headers it uses.
+- [ ] Comments are rare; none restates the code or the identifier.
 - [ ] No banner comments where names and structure would do.
 - [ ] Compiles with no new warnings or errors.
 
@@ -476,15 +480,16 @@ touches that topic.
 | String formatting (`format` vs `formatex`, `add`, inline `fmt()`) | `references/strings.md` | Formatting, appending, or building a string |
 | Logging (`log_amx` prefix, severity tags) | `references/logging.md` | Writing or reviewing a `log_amx` line |
 | Resource cleanup (`Array` / `Trie` / `DataPack`, `plugin_end`) | `references/resource-cleanup.md` | Freeing a dynamic structure, or writing `plugin_end` |
+| Include guards, self-sufficient includes, `<...>` vs `"..."`, include cycles, ordering | `references/includes.md` | Authoring or editing an `.inc`, or fixing a dependency that only works in one include order |
 | Authoring a shared `.inc` (PawnDoc on natives/forwards) | `references/shared-includes.md` | Authoring or documenting a shared `.inc` |
+| Inline comments: when one is justified, what not to comment | `references/comments.md` | Deciding whether to add or remove an inline comment |
+| Worked Hungarian → modern before/after file | `references/legacy-conversion.md` | Converting a legacy file, or showing the full mapping |
 
 ## Not yet covered (extend here)
 
-`#include` ordering and the remaining statement formatting are not specified
-yet. Module layout and plugin lifecycle *architecture* (`plugin_precache` as the
-boot hook, custom-forward orchestration, registration and init contracts) are
-intentionally out of scope here: that is architecture, not style, and now lives
-in the separate `amxx-plugin-architecture` skill. Resource cleanup is the one
-lifecycle-adjacent rule this guide owns (see `references/resource-cleanup.md`).
-Rarely-needed construct-specific depth lives in the `references/` files listed
-above.
+Statement formatting beyond brace placement is not specified yet. Include rules
+live in `references/includes.md`. Module layout and plugin lifecycle
+*architecture* are out of scope: they live in `amxx-plugin-architecture`, which
+also carries the review-ready sequence for a multi-file plugin. Resource cleanup
+remains the one lifecycle-adjacent rule this guide owns
+(`references/resource-cleanup.md`).

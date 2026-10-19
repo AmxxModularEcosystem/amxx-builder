@@ -14,15 +14,19 @@ How to expose a native, name its handler, and read the caller's arguments.
 Name the native handler `@` + the native's full name, and register it through
 `plugin_natives()`. `register_native(name, handler, style = 0)` defaults to
 **style 0**, the only style to use; style 1 is broken and deprecated, kept only
-for very old plugins. The `@` prefix *is* the public declaration form, so never
-also write `public` on the handler.
+for very old plugins. `@` is an alternative spelling of `public`, and it stays
+part of the exported name, so never write `public` on the handler as well.
 
 ```pawn
-public plugin_natives()
-{
+public plugin_natives() {
     register_native("StyleExample_AddKill", "@StyleExample_AddKill");
 }
 ```
+
+The first argument is the native's exported name (bare); the second is the
+handler's exact public name. Because `@` is part of the exported name, the
+handler string keeps it: `"@StyleExample_AddKill"` resolves the handler,
+`"StyleExample_AddKill"` does not.
 
 A style-0 handler receives exactly two positional parameters: the calling
 plugin's id and the argument count. Those are its only parameters; the native's
@@ -75,8 +79,7 @@ A handler that needs neither positional parameter omits both and reads the
 native's own arguments with the accessors:
 
 ```pawn
-@StyleExample_AddKill()
-{
+@StyleExample_AddKill() {
     enum {
         Arg_PlayerIndex = 1
     }
@@ -91,8 +94,7 @@ native's own arguments with the accessors:
     return true;
 }
 
-@StyleExample_Announce()
-{
+@StyleExample_Announce() {
     enum {
         Arg_Message = 1
     }
@@ -112,8 +114,7 @@ A handler that needs the argument count declares the pair (`pluginIndex` is
 unused but positional), and writes a by-ref string with `set_string`:
 
 ```pawn
-@StyleExample_GetRankName(pluginIndex, paramsCount)
-{
+@StyleExample_GetRankName(pluginIndex, paramsCount) {
     enum {
         Arg_PlayerIndex = 1,
         Arg_Out,
@@ -139,14 +140,12 @@ value directly. Never cast a tag away with `_:` just to fit an untagged return �
 that discards the type and hides a mismatch:
 
 ```pawn
-bool:@StyleExample_AddKill()
-{
+bool:@StyleExample_AddKill() {
     // ...
     return true;
 }
 
-T_StyleExample_Rank:@StyleExample_GetRank()
-{
+T_StyleExample_Rank:@StyleExample_GetRank() {
     // ...
     return PlayerRank[playerIndex];   // already T_StyleExample_Rank
 }
@@ -193,7 +192,11 @@ the cost of blaming your own plugin instead of the caller.
 ## Gotchas
 
 - **`@` is already public.** Writing `public` on an `@` native handler is a
-  syntax error — the `@` prefix *is* the public declaration form.
+  syntax error — `@` makes the function public.
+- **`@` is part of the symbol.** A handler declared `@X` is not reachable as
+  `X`; a string that omits `@` fails to resolve. Do not put `@` on an
+  AMXX/engine callback or a declared `forward`; those are looked up by their
+  bare names.
 - **Native registration style 1 is legacy.** It survives only for very old
   plugins and has known technical problems; register with the default style.
 - **The native's arguments are not handler parameters.** There is no
@@ -204,8 +207,11 @@ the cost of blaming your own plugin instead of the caller.
 ## Checklist
 
 - [ ] The native handler is `@` + the native's full name (preferred).
+- [ ] The exported native name (first argument) is bare; the handler string is
+  `@` + that name.
 - [ ] No `public` is written on an `@` handler.
 - [ ] Registration uses style 0 (the default), never style 1.
+- [ ] No `@` appears on an AMXX/engine callback or a declared `forward`.
 - [ ] The native's arguments are read/written with `get_param` / `get_string` /
   `set_string` / … (1-based), not declared as handler parameters.
 - [ ] Native arguments are indexed through a named `Arg_*` enum, not literals.

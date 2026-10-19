@@ -16,8 +16,7 @@ All initializations MUST be idempotent, both the plugin itself and each of its
 components. Calling an init twice must be safe and must not leak memory or
 double-initialize a structure.
 
-The simplest form declares a static variable inside the init function, which
-avoids polluting the global scope:
+The guard is always a function-local static variable:
 
 ```pawn
 SomeObject_Init() {
@@ -31,8 +30,13 @@ SomeObject_Init() {
 }
 ```
 
-The static lives in the function's file, so each component owns its own guard
-without adding a global.
+The static lives in the function, so each component owns its own guard without
+adding a global. Do not use a file-scope or global variable as the guard, and
+never read the guard from another file. If other code needs to know whether the
+component is ready, declare a separate status variable in the owner file and set
+it at the end of a successful init; that variable is not the guard and must not
+short-circuit init. Naming and shape of that status variable are not prescribed
+here.
 
 ## The plugin init contract
 
@@ -111,11 +115,18 @@ forward fires exactly once either way.
   preliminary setup is covered, registry or not.
 - **`plugin_precache` is a call site, not the contract.** It is one of two
   entry points into `PluginInit()`; the other is the `_Init` native.
+- **The guard is not a public status flag.** Do not export it or read it from
+  another file. A separate readiness variable is set at the end of a successful
+  init and never replaces the guard.
 
 ## Checklist
 
-- [ ] Every init function is idempotent, with a file-local
+- [ ] Every init function is idempotent, with a function-local
       `static bool:isInited = false` guard.
+- [ ] No file-scope/global variable is used as the guard, and no other file
+      reads the guard.
+- [ ] If readiness is exposed, it is a separate variable set at the end of
+      successful init, not the guard.
 - [ ] A plugin with an API registry registers `_OnInited` and provides `_Init`.
 - [ ] All `.sma` initialization lives in `PluginInit()`.
 - [ ] `PluginInit()` is called from `plugin_precache` or through the `_Init`
