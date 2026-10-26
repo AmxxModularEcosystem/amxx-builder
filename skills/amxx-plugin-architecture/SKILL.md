@@ -81,8 +81,12 @@ reserved, like AMXX callbacks: the framework functions
    even if something else already did, so restructuring never breaks the setup.
 8. **Self-sufficient files.** Every `.inc` includes what it uses; no file
    depends on the `.sma` include order.
-9. **State lives with its owner.** Declarations stay in the file that owns them;
-   do not collect them in a central `State.inc`.
+9. **State lives with its owner.** Declarations stay in the file that owns and
+   uses them; do not collect them in a central `State.inc`. Extracting globals
+   into a shared `State.inc` / `Globals.inc` is an antipattern, not a layout
+   choice: it destroys cohesion by separating each variable from the code that
+   reads and writes it, and it turns one file into a hub the whole plugin
+   depends on.
 
 ## Patterns
 
@@ -137,7 +141,8 @@ Each pattern lives in one reference file. Load only the row you need.
 - Do not let two includable `.sma` files share a folder name.
 - Do not rely on the `.sma` include order to satisfy an `.inc`'s dependencies.
 - Do not create a central `State.inc` / `Globals.inc`; state stays with its
-  owner.
+  owner. A shared global dump loses cohesion: each variable is declared where it
+  is used, not in a file far from every reader.
 - Do not register objects into a plugin's own registry through internal calls
   when a public native exists; use the same native external plugins use.
 - Do not keep the entity store's `Array` / `Trie` in the global scope or read it

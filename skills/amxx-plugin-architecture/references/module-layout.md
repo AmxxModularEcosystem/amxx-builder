@@ -117,6 +117,16 @@ Declare variables and constants in the file that owns them: config in
 central `State.inc` or `Globals.inc` that every file includes; it hides the
 owner and turns one file into a hub.
 
+**A central `State.inc` is an antipattern.** Collecting globals into a
+`State.inc` / `Globals.inc` that every file includes destroys cohesion: a
+variable no longer sits next to the functions that read and write it, the file
+that owns it is no longer visible, and the hub becomes a dependency of the
+whole plugin, so every unrelated file must include it to reach one value. The
+rule is the inverse: a variable is declared in the file where it is used, next
+to its readers and writers. When two files genuinely need the same value, that
+is a shared model `.inc` for a type/constant or an owner file exposing accessor
+functions for state, never a dump of everything global.
+
 For the entity store, expose functions that return or mutate entities instead
 of reading the `Array` / `Trie` directly (see the objects-store pattern). Other
 state is not covered by that rule: a component's readiness flag, for example,
