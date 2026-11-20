@@ -11,9 +11,9 @@ description: >-
   resolved by exact string, and `PluginName` metadata. Triggers: AMXX, AMX Mod X,
   Pawn, .sma, .inc, naming convention, native, register_native, plugin metadata,
   type tag, enum, plugin_end, Hungarian notation, comment, include guard,
-  #include, string-registered handler, `@` handler, венгерская нотация, стиль
-  кода. Do NOT use for building/packaging/deploying servers (use amxb-migration /
-  the amxb CLI), or for non-Pawn languages.
+  include path, #include, string-registered handler, `@` handler, венгерская
+  нотация, стиль кода. Do NOT use for building/packaging/deploying servers (use
+  amxb-migration / the amxb CLI), or for non-Pawn languages.
 ---
 
 # AMXX Pawn code style
@@ -406,6 +406,9 @@ A complete before/after file lives in `references/legacy-conversion.md`.
   non-obvious constraint.
 - Make every `.inc` self-sufficient: a unique include guard plus the headers it
   uses.
+- Write every project-local `#include` from the plugin's include root — the
+  `scripting/` folder amxb puts on the compiler include path — with the same full
+  path in the `.sma` and in every `.inc`, e.g. `#include "SomePlugin/API/General"`.
 - Use `@` only for handlers resolved by an exact string; keep AMXX/engine
   callbacks and declared `forward`s as `public Name`.
 - Compile after any refactor and confirm no new warnings or errors.
@@ -437,6 +440,9 @@ A complete before/after file lives in `references/legacy-conversion.md`.
 - Do not add comments by default, narrate obvious code, or put a comment on
   every declaration.
 - Do not rely on the `.sma` include order to satisfy an `.inc`'s dependencies.
+- Do not write a project-local include relative to the file that contains it
+  (`./`, `../`, `../../`) or as a bare sibling name — anchor it at the include
+  root.
 
 ## Verification checklist
 
@@ -463,6 +469,8 @@ A complete before/after file lives in `references/legacy-conversion.md`.
 - [ ] No column alignment in code (metadata block excepted).
 - [ ] `stock` functions appear only in shared `.inc` files.
 - [ ] Every `.inc` has a unique guard and includes the headers it uses.
+- [ ] Every project-local `#include` is written from the include root with no
+  `./`, `..`, or bare sibling name.
 - [ ] Comments are rare; none restates the code or the identifier.
 - [ ] No banner comments where names and structure would do.
 - [ ] Compiles with no new warnings or errors.
@@ -480,7 +488,7 @@ touches that topic.
 | String formatting (`format` vs `formatex`, `add`, inline `fmt()`) | `references/strings.md` | Formatting, appending, or building a string |
 | Logging (`log_amx` prefix, severity tags) | `references/logging.md` | Writing or reviewing a `log_amx` line |
 | Resource cleanup (`Array` / `Trie` / `DataPack`, `plugin_end`) | `references/resource-cleanup.md` | Freeing a dynamic structure, or writing `plugin_end` |
-| Include guards, self-sufficient includes, `<...>` vs `"..."`, include cycles, ordering | `references/includes.md` | Authoring or editing an `.inc`, or fixing a dependency that only works in one include order |
+| Include guards, self-sufficient includes, include-root paths, `<...>` vs `"..."`, include cycles, ordering | `references/includes.md` | Authoring or editing an `.inc`, writing an `#include` path, or fixing a dependency that only works in one include order |
 | Authoring a shared `.inc` (PawnDoc on natives/forwards) | `references/shared-includes.md` | Authoring or documenting a shared `.inc` |
 | Inline comments: when one is justified, what not to comment | `references/comments.md` | Deciding whether to add or remove an inline comment |
 | Worked Hungarian → modern before/after file | `references/legacy-conversion.md` | Converting a legacy file, or showing the full mapping |

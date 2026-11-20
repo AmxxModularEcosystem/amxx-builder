@@ -22,9 +22,14 @@ There are no strict requirements on the folder name except that it must be
 unique among the plugin's folders. The conventional choice is the `.sma`
 filename: `SomePlugin.sma` keeps its includes in `SomePlugin/`.
 
-The include path is relative to the include root, and the folder name leads it:
+The include path is written from the include root — the folder that contains the
+plugin's include folder and is on the compiler include path (`scripting/` in the
+default layout). The plugin folder is the first segment (or the project wrapper,
+when there is one), and every file repeats the same full path; it is never
+counted from the including file:
 
 ```pawn
+// SomePlugin.sma and every .inc below it
 #include "SomePlugin/API/General"
 #include "SomePlugin/Objects/SomeObject"
 ```
@@ -40,24 +45,35 @@ the project. Each plugin keeps its own `.sma` and its own include folder inside
 that wrapper:
 
 ```text
-SomeProject/
-    SomePlugin.sma
-    SomePlugin/
-        API/
-        DefaultObjects/
-        Objects/
-    OtherPlugin.sma
-    OtherPlugin/
-        API/
-        Objects/
+scripting/
+    SomeProject/
+        SomePlugin.sma
+        SomePlugin/
+            API/
+            DefaultObjects/
+            Objects/
+        OtherPlugin.sma
+        OtherPlugin/
+            API/
+            Objects/
 ```
 
 The wrapper is for organization only; each plugin is still a standalone `.sma`
-with its own include folder.
+with its own include folder. The include root stays `scripting/`, so the wrapper
+is part of every project-local include path:
+
+```pawn
+// scripting/SomeProject/SomePlugin.sma
+#include "SomeProject/SomePlugin/API/General"
+
+// scripting/SomeProject/SomePlugin/API/General.inc
+#include "SomeProject/SomePlugin/Core/EventModel"
+```
 
 ## Layout example
 
-A single multi-file plugin with every pattern folder in place:
+A single multi-file plugin with every pattern folder in place (paths are relative
+to the include root):
 
 ```text
 SomePlugin.sma
@@ -94,8 +110,9 @@ included a dependency first.
 
 The full include conventions (guard naming, ordering, `<...>` vs `"..."`,
 cycle breaking) are part of the style skill. This section fixes the layout
-consequence: a local include path starts with the plugin folder
-(`SomePlugin/API/General`), and a shared model file such as
+consequence: a local include path starts at the include root with the folder
+path (`SomePlugin/API/General`, or `SomeProject/SomePlugin/API/General` under a
+wrapper), never with `./` or `../`. A shared model file such as
 `Core/EventModel.inc` is the place for types that two folders both need.
 
 ```pawn
@@ -141,8 +158,12 @@ variable is not the guard and must not short-circuit init.
 ## Gotchas
 
 - **The folder is not inside the `.sma`.** The folder sits next to
-  `SomePlugin.sma` and holds its includes; the include path starts with the
-  folder name (`SomePlugin/API/General`).
+  `SomePlugin.sma` and holds its includes; the include path starts at the include
+  root with the folder name (`SomePlugin/API/General`, or
+  `SomeProject/SomePlugin/API/General` under a wrapper).
+- **The include root is not the including file.** A `../` path is not how a
+  sibling folder is reached: it ties the include to that file's depth and breaks
+  when the file moves or a second file includes it.
 - **One folder per `.sma`, not per project.** Two plugins in the same project do
   not share an include folder even when they appear related.
 - **The project wrapper changes nothing about compilation.** It groups the
@@ -158,7 +179,8 @@ variable is not the guard and must not short-circuit init.
 
 - [ ] Every `.sma` that includes other files has its own include folder.
 - [ ] The include folder name is unique and, by convention, matches the `.sma`.
-- [ ] Every `#include` path starts with the folder name.
+- [ ] Every project-local `#include` starts at the include root with the plugin
+      folder path (plus the wrapper, if any); none uses `./` or `../`.
 - [ ] Several plugins in one project sit inside a project wrapper folder.
 - [ ] Every `.inc` has a unique include guard and includes its own dependencies.
 - [ ] No central `State.inc` / `Globals.inc`; state lives in its owner file.

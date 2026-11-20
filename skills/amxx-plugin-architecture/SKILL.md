@@ -110,6 +110,9 @@ Each pattern lives in one reference file. Load only the row you need.
 - Treat every pattern as optional; adopt it only when the plugin is large enough
   to pay for the extra files and indirection.
 - Give each includable `.sma` its own uniquely named include folder.
+- Write project-local includes from the include root (`scripting/`), repeating
+  the plugin folder (and project wrapper) path; never resolve them from the
+  including file.
 - Make every `.inc` self-sufficient: a unique include guard plus explicit
   includes for every header it uses.
 - Keep state declarations in the file that owns them; do not create a central
@@ -140,6 +143,8 @@ Each pattern lives in one reference file. Load only the row you need.
 - Do not apply these patterns to a small single-file plugin.
 - Do not let two includable `.sma` files share a folder name.
 - Do not rely on the `.sma` include order to satisfy an `.inc`'s dependencies.
+- Do not write project-local includes as `./` or `../` paths; the same path must
+  resolve from the `.sma` and from every `.inc`.
 - Do not create a central `State.inc` / `Globals.inc`; state stays with its
   owner. A shared global dump loses cohesion: each variable is declared where it
   is used, not in a file far from every reader.
@@ -167,6 +172,8 @@ Each pattern lives in one reference file. Load only the row you need.
 ## Verification checklist
 
 - [ ] Every `.inc` has a unique include guard and includes the headers it uses.
+- [ ] Project-local `#include` paths start at the include root; none uses `./`
+      or `../`.
 - [ ] Each include folder is unique and matches its `.sma` name (or the project
       wrapper convention).
 - [ ] No central `State.inc`; declarations live in their owner file.

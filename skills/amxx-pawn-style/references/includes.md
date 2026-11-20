@@ -8,6 +8,7 @@ alone or as part of a larger plugin.
 - [Include guard](#include-guard)
 - [Include what you use](#include-what-you-use)
 - [Where dependencies come from](#where-dependencies-come-from)
+- [Anchor local paths at the include root](#anchor-local-paths-at-the-include-root)
 - [Recommended order](#recommended-order)
 - [Breaking include cycles](#breaking-include-cycles)
 - [Gotchas](#gotchas)
@@ -58,8 +59,47 @@ self-sufficient.
 | A project-local file under the plugin folder | `"..."` | `#include "SomePlugin/API/General"` |
 | A shared model used by several folders | `"..."` | `#include "SomePlugin/Core/EventModel"` |
 
-The local path starts with the plugin's include folder, so the include root does
-not need to change per file.
+## Anchor local paths at the include root
+
+A project-local path is written from the plugin's **include root** — the folder
+that contains the plugin's include folder and is on the compiler include path.
+In the default layout that is `scripting/` (amxb passes it to the compiler as
+`-i`), so the first segment is the plugin folder or the project wrapper — and
+every file writes the same full path, never one counted from the file that
+contains the `#include`:
+
+```pawn
+// SomePlugin/API/General.inc — identical to the path used by the .sma
+#include "SomePlugin/Objects/Reward/Model"
+```
+
+Never count folder levels from the current file:
+
+```pawn
+// SomePlugin/API/General.inc — never this:
+#include "../../Objects/Reward/Model"   // wrong: counted from this file
+```
+
+A `../` path is wrong even when it happens to land on the intended file: it
+encodes the current file's depth, so it breaks the moment the file moves or a
+second file includes it.
+
+The same line must resolve from the `.sma` and from every `.inc` that uses it, at
+any depth. That is what keeps a file movable: moving an `.inc`, or including it
+from a different file, must not change the paths inside it.
+
+- Never start a project-local include with `./` or `..`. A path that needs `..`
+  is anchored in the wrong place.
+- Never use a bare sibling name (`#include "Model"`): it collides across folders
+  and stops resolving as soon as the including file moves.
+- With a project wrapper folder, the wrapper is part of the path:
+  `#include "SomeProject/SomePlugin/API/General"`; the include root stays
+  `scripting/`.
+
+AMXX's compiler also tries the including file's own directory as a fallback.
+Treat that as a trap, not a contract: a `../` path can compile by accident and
+silently point at a different file when the includer moves, and IDE include
+analysis resolves against the include paths, not the current file.
 
 ## Recommended order
 
@@ -114,6 +154,10 @@ state.
 - **A file that needs a prior include is not self-sufficient.** If it compiles
   only after the `.sma` included something first, add the missing include to the
   file itself.
+- **Never derive an include path from the current file's location.** `../` paths
+  are tied to the includer's depth: they break when the file moves, when a second
+  file includes it, or when it is reached through a different include path. Use
+  the path from the include root.
 - **A guard collision silently skips a file.** Two files with the same
   `_..._included` macro compile as one; derive the guard from the full path.
 - **Repeated `<amxmodx>` is safe.** The AMXX headers are guarded, so later
@@ -129,8 +173,9 @@ state.
 
 - [ ] Every `.inc` starts with a unique include guard; the `.sma` has none.
 - [ ] Every `.inc` includes every header whose symbols it uses.
-- [ ] Local files use `"..."` with the plugin folder path; AMXX, module, and
-  third-party headers use `<...>`.
+- [ ] Local files use `"..."` with the full path from the include root; AMXX,
+  module, and third-party headers use `<...>`.
+- [ ] No project-local include uses `./`, `..`, or a bare sibling name.
 - [ ] No file depends on the `.sma` or another `.inc` having included a header
   first.
 - [ ] Shared types and constants live in a shared model `.inc`, not in a mutual
