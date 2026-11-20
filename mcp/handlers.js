@@ -46,7 +46,8 @@ function depBaseDir(args) {
  * @param {string} pattern  - Substring to match (case-insensitive).
  * @param {number} [before=0] - Lines of context before each match.
  * @param {number} [after=0]  - Lines of context after each match.
- * @returns {string} Formatted grep result or "No matches found." message.
+ * @returns {string|null} Formatted grep result, or null when nothing matches
+ *   (multi-file callers drop those files, single-file callers render the notice).
  */
 function grepContent(content, pattern, before = 0, after = 0) {
   if (!pattern) return content;
@@ -61,7 +62,7 @@ function grepContent(content, pattern, before = 0, after = 0) {
     }
   }
 
-  if (matches.length === 0) return `[grep: no matches for "${pattern}"]`;
+  if (matches.length === 0) return null;
 
   // Merge overlapping ranges
   const merged = [];
@@ -84,6 +85,26 @@ function grepContent(content, pattern, before = 0, after = 0) {
   });
 
   return parts.join('\n');
+}
+
+// grepContent returns null on no match so multi-file callers can drop the file.
+function grepNoMatch(pattern) {
+  return `[grep: no matches for "${pattern}"]`;
+}
+
+/**
+ * Grep entries by their `content`, keeping only entries that match.
+ *
+ * @param {Array<{content: string}>} entries
+ * @returns {Array} Matching entries with `content` replaced by the grep output.
+ */
+function grepFiles(entries, pattern, before = 0, after = 0) {
+  const matched = [];
+  for (const entry of entries) {
+    const content = grepContent(entry.content, pattern, before, after);
+    if (content !== null) matched.push({ ...entry, content });
+  }
+  return matched;
 }
 
 // ─── Tool handlers ─────────────────────────────────────────────────────────────
@@ -112,13 +133,23 @@ async function handleGetDepInterface(args, token, noFetch) {
 
   const files = incFiles.map((f) => ({
     path: f.rel,
-    content: grep ? grepContent(readFileSafe(f.abs), grep, before, after) : readFileSafe(f.abs),
+    content: readFileSafe(f.abs),
   }));
 
-  const shown    = limitFiles(files, args);
-  const skipped  = files.length - shown.length;
+  const matched = grep ? grepFiles(files, grep, before, after) : files;
+  if (grep && matched.length === 0) {
+    return textResult(
+      `No .inc file in ${depLabel(dep)} matches "${grep}" (searched ${files.length}).`
+    );
+  }
+
+  const shown    = limitFiles(matched, args);
+  const skipped  = matched.length - shown.length;
+  const header   = grep
+    ? `Found ${matched.length} of ${files.length} .inc file(s) in ${depLabel(dep)} matching "${grep}":`
+    : `Found ${files.length} .inc file(s) in ${depLabel(dep)}:`;
   let out =
-    `Found ${files.length} .inc file(s) in ${depLabel(dep)}:\n\n` +
+    `${header}\n\n` +
     shown
       .map(
         (f) =>
@@ -316,19 +347,33 @@ async function handleGetAmxmodxInclude(args, token, noFetch) {
     );
   }
 
-  const shown    = limitFiles(files, args);
-  const skipped  = files.length - shown.length;
+  const entries = files.map((rel) => ({
+    path: rel,
+    content: readFileSafe(path.join(state.includeDir, rel)),
+  }));
+
+  // Grep before the file cap: a match in file 60 of 66 must not be dropped just
+  // because only the first DEFAULT_MAX_FILES files would be shown.
+  const matched = grep ? grepFiles(entries, grep, before, after) : entries;
+  if (grep && matched.length === 0) {
+    return textResult(
+      `No standard include file matches "${grep}" in AMX Mod X ${state.version} (searched ${entries.length}).`
+    );
+  }
+
+  const shown    = limitFiles(matched, args);
+  const skipped  = matched.length - shown.length;
   const contents = shown
-    .map((rel) => {
-      const raw = readFileSafe(path.join(state.includeDir, rel));
-      const processed = grep ? grepContent(raw, grep, before, after) : raw;
-      return `──── ${rel} ────\n${processed}${processed.endsWith('\n') ? '' : '\n'}`;
-    })
+    .map((e) => `──── ${e.path} ────\n${e.content}${e.content.endsWith('\n') ? '' : '\n'}`)
     .join('\n')
     + (skipped > 0 ? `\n… [${skipped} more file(s); pass full_output=true to list them]` : '');
 
+  const header = grep
+    ? `AMX Mod X ${state.version} — ${matched.length} of ${entries.length} standard include file(s) matching "${grep}":`
+    : `AMX Mod X ${state.version} — ${entries.length} standard include file(s):`;
+
   return textResult(
-    applyOutputLimit(`AMX Mod X ${state.version} — ${files.length} standard include file(s):\n\n${contents}`, args)
+    applyOutputLimit(`${header}\n\n${contents}`, args)
   );
 }
 
@@ -399,7 +444,7 @@ async function handleResolveInclude(args, token, noFetch) {
   const grep   = args?.grep;
   const before = args?.before || 0;
   const after  = args?.after || 0;
-  const displayed = grep ? grepContent(content, grep, before, after) : content;
+  const displayed = grep ? (grepContent(content, grep, before, after) ?? grepNoMatch(grep)) : content;
 
   let out =
     `Include "${parsed.filename}" resolved to:\n` +
@@ -489,7 +534,7 @@ async function handleReadRepoFile(args, token, noFetch) {
   const grep   = args?.grep;
   const before = args?.before || 0;
   const after  = args?.after || 0;
-  const displayed = grep ? grepContent(content, grep, before, after) : content;
+  const displayed = grep ? (grepContent(content, grep, before, after) ?? grepNoMatch(grep)) : content;
 
   return textResult(
     applyOutputLimit(
@@ -643,15 +688,17 @@ async function handleGetAgentDocs(args, token, noFetch) {
   const before = args?.before || 0;
   const after  = args?.after || 0;
 
-  const shown   = limitFiles(docs, args);
-  const skipped = docs.length - shown.length;
+  const matched = grep ? grepFiles(docs, grep, before, after) : docs;
+  if (grep && matched.length === 0) {
+    return textResult(`No agent doc matches "${grep}" (searched ${docs.length}).`);
+  }
+
+  const shown   = limitFiles(matched, args);
+  const skipped = matched.length - shown.length;
 
   let out = isDepMode(args) ? agentTrustHeader(result.label) + '\n\n' : '';
   out += shown
-    .map((d) => {
-      const processed = grep ? grepContent(d.content, grep, before, after) : d.content;
-      return `──── ${d.name} (${d.file}) ────\n${processed}${processed.endsWith('\n') ? '' : '\n'}`;
-    })
+    .map((d) => `──── ${d.name} (${d.file}) ────\n${d.content}${d.content.endsWith('\n') ? '' : '\n'}`)
     .join('\n');
   if (skipped > 0) out += `\n… [${skipped} more doc(s); pass full_output=true to list them]`;
   return textResult(applyOutputLimit(out, args));
