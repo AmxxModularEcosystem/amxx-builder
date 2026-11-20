@@ -111,7 +111,7 @@ const TOOLS = [
                 type: 'string',
                 description:
                   'Optional substring (case-insensitive) to search for within include files. ' +
-                  'When set, only matching lines with surrounding context are returned. ' +
+                  'When set, only files with matches are listed, showing matching lines with surrounding context. ' +
                   'Use with `before` and `after` to control how many context lines to show.',
               },
               before: {
@@ -428,7 +428,7 @@ const TOOLS = [
                 type: 'string',
                 description:
                   'Optional substring (case-insensitive) to search for within include files. ' +
-                  'When set, only matching lines with surrounding context are returned. ' +
+                  'When set, only files with matches are listed, showing matching lines with surrounding context. ' +
                   'Use with `before` and `after` to control how many context lines to show.',
               },
               before: {
@@ -961,7 +961,7 @@ const TOOLS = [
                 type: 'string',
                 description:
                   'Optional substring (case-insensitive) to search for within doc files. ' +
-                  'When set, only matching lines with surrounding context are returned. ' +
+                  'When set, only docs with matches are listed, showing matching lines with surrounding context. ' +
                   'Use with `before` and `after` to control how many context lines to show.',
               },
               before: {
